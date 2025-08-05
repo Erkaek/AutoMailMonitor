@@ -1,0 +1,929 @@
+/* Mail Monitor - Styles modernes */
+
+:root {
+  --primary: #0d6efd;
+  --primary-dark: #0a58ca;
+  --success: #198754;
+  --warning: #ffc107;
+  --danger: #dc3545;
+  --info: #0dcaf0;
+  --light: #f8f9fa;
+  --dark: #212529;
+  --gray-100: #f8f9fa;
+  --gray-200: #e9ecef;
+  --gray-300: #dee2e6;
+  --gray-400: #ced4da;
+  --gray-500: #adb5bd;
+  --gray-600: #6c757d;
+  --gray-700: #495057;
+  --gray-800: #343a40;
+  --gray-900: #212529;
+  
+  /* Nouvelles variables personnalisées */
+  --sidebar-width: 280px;
+  --header-height: 60px;
+  --border-radius: 0.75rem;
+  --border-radius-sm: 0.5rem;
+  --border-radius-lg: 1rem;
+  --shadow-sm: 0 0.125rem 0.25rem rgba(0, 0, 0, 0.075);
+  --shadow: 0 0.5rem 1rem rgba(0, 0, 0, 0.15);
+  --shadow-lg: 0 1rem 3rem rgba(0, 0, 0, 0.175);
+  --transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Reset et base */
+* {
+  box-sizing: border-box;
+}
+
+body {
+  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--gray-700);
+  background-color: var(--gray-100);
+  margin: 0;
+  padding: 0;
+  overflow-x: hidden;
+}
+
+/* Layout principal */
+
+/* Styles pour la gestion des dossiers */
+.folder-tree-list {
+  max-height: 400px;
+  overflow-y: auto;
+  border: 1px solid var(--gray-300);
+  border-radius: var(--border-radius-sm);
+  padding: 0.5rem;
+  background-color: #fff;
+}
+
+.folder-item {
+  border-radius: var(--border-radius-sm);
+  transition: var(--transition);
+  cursor: default;
+}
+
+.folder-item.selectable {
+  cursor: pointer;
+}
+
+.folder-item.selectable:hover {
+  background-color: var(--gray-100);
+}
+
+.folder-checkbox {
+  cursor: pointer;
+}
+
+.category-select {
+  min-width: 150px;
+}
+
+#mailbox-list .list-group-item {
+  transition: var(--transition);
+}
+
+#mailbox-list .list-group-item:hover {
+  background-color: var(--gray-100);
+  transform: translateX(2px);
+}
+
+#mailbox-list .list-group-item.active {
+  background-color: var(--primary);
+  border-color: var(--primary);
+  color: white;
+}
+
+#mailbox-list .list-group-item.active .text-muted {
+  color: rgba(255, 255, 255, 0.75) !important;
+}
+
+.folder-structure-container {
+  animation: fadeIn 0.3s ease-in-out;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Amélioration des badges de catégorie */
+.badge {
+  font-size: 0.75rem;
+  padding: 0.4em 0.6em;
+  border-radius: var(--border-radius-sm);
+}
+
+/* Indicateurs visuels pour les dossiers */
+.folder-item .bi-folder {
+  color: var(--warning);
+}
+
+.folder-item .bi-file-earmark {
+  color: var(--info);
+}
+
+/* Responsive pour les dossiers */
+@media (max-width: 768px) {
+  .folder-tree-list {
+    max-height: 300px;
+  }
+  
+  #monitoring-config .row {
+    flex-direction: column;
+  }
+  
+  .category-select {
+    min-width: 120px;
+  }
+}
+
+/* Styles pour la vue hiérarchique des dossiers */
+.folders-tree {
+  max-height: 500px;
+  overflow-y: auto;
+}
+
+.folder-node {
+  margin: 2px 0;
+  border-radius: 6px;
+  transition: all 0.2s ease;
+}
+
+.folder-node:hover {
+  background-color: rgba(13, 110, 253, 0.05);
+}
+
+.folder-item {
+  display: flex;
+  align-items: center;
+  padding: 8px 12px;
+  cursor: pointer;
+  border-radius: 4px;
+  transition: all 0.2s ease;
+  position: relative;
+}
+
+.folder-item:hover {
+  background-color: rgba(13, 110, 253, 0.1);
+}
+
+.folder-item.selected {
+  background-color: rgba(13, 110, 253, 0.15);
+  border-left: 3px solid var(--bs-primary);
+}
+
+.folder-icon {
+  width: 20px;
+  display: flex;
+  justify-content: center;
+  margin-right: 8px;
+  color: #6c757d;
+  font-size: 14px;
+}
+
+.folder-icon.expandable {
+  cursor: pointer;
+  color: var(--bs-primary);
+}
+
+.folder-icon.expanded {
+  transform: rotate(90deg);
+}
+
+.folder-name {
+  flex: 1;
+  font-size: 14px;
+  color: #495057;
+  margin-right: 8px;
+}
+
+.folder-name.root {
+  font-weight: 600;
+  color: #212529;
+}
+
+.folder-category {
+  margin-right: 8px;
+}
+
+.folder-actions {
+  display: flex;
+  gap: 4px;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+
+.folder-item:hover .folder-actions {
+  opacity: 1;
+}
+
+.folder-actions .btn {
+  padding: 2px 6px;
+  font-size: 11px;
+  border-radius: 3px;
+}
+
+.folder-children {
+  margin-left: 24px;
+  border-left: 1px dashed #dee2e6;
+  padding-left: 8px;
+}
+
+.folder-children.collapsed {
+  display: none;
+}
+
+/* Badges de catégorie */
+.category-badge {
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 10px;
+  font-weight: 500;
+}
+
+.category-declarations {
+  background-color: #e7f3ff;
+  color: #0056b3;
+  border: 1px solid #b3d9ff;
+}
+
+.category-reglements {
+  background-color: #fff3cd;
+  color: #856404;
+  border: 1px solid #ffeaa7;
+}
+
+.category-simples {
+  background-color: #f8f9fa;
+  color: #6c757d;
+  border: 1px solid #dee2e6;
+}
+
+/* Indicateur de monitoring actif */
+.monitoring-indicator {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-left: 4px;
+}
+
+.monitoring-indicator.active {
+  background-color: #28a745;
+  box-shadow: 0 0 4px rgba(40, 167, 69, 0.5);
+}
+
+.monitoring-indicator.inactive {
+  background-color: #dc3545;
+}
+
+/* Formulaire d'édition en ligne */
+.folder-edit-form {
+  background-color: #f8f9fa;
+  border: 1px solid #dee2e6;
+  border-radius: 4px;
+  padding: 8px;
+  margin: 4px 0;
+}
+
+.folder-edit-form .form-control,
+.folder-edit-form .form-select {
+  font-size: 12px;
+  padding: 4px 8px;
+  height: auto;
+}
+
+/* Animation pour les changements */
+.folder-item.updating {
+  background-color: rgba(255, 193, 7, 0.1);
+  border-left: 3px solid #ffc107;
+}
+
+.folder-item.success {
+  background-color: rgba(40, 167, 69, 0.1);
+  border-left: 3px solid #28a745;
+}
+
+.folder-item.error {
+  background-color: rgba(220, 53, 69, 0.1);
+  border-left: 3px solid #dc3545;
+}
+
+/* Recherche et filtres */
+.folder-search-highlight {
+  background-color: yellow;
+  padding: 1px 2px;
+  border-radius: 2px;
+}
+
+.folder-filtered {
+  opacity: 0.3;
+}
+
+.app-container {
+  display: flex;
+  min-height: 100vh;
+}
+
+/* Sidebar */
+.sidebar {
+  width: var(--sidebar-width);
+  background: linear-gradient(135deg, var(--primary) 0%, var(--primary-dark) 100%);
+  color: white;
+  padding: 1.5rem 0;
+  box-shadow: var(--shadow);
+  position: fixed;
+  height: 100vh;
+  overflow-y: auto;
+  z-index: 1000;
+  transition: var(--transition);
+}
+
+.sidebar .logo {
+  padding: 0 1.5rem 2rem;
+  text-align: center;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  margin-bottom: 2rem;
+}
+
+.sidebar .logo h1 {
+  font-size: 1.5rem;
+  font-weight: 700;
+  margin: 0;
+  background: linear-gradient(45deg, #fff, #e3f2fd);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.sidebar .logo p {
+  font-size: 0.85rem;
+  opacity: 0.8;
+  margin: 0.5rem 0 0;
+}
+
+/* Navigation */
+.nav {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.nav-item {
+  margin-bottom: 0.25rem;
+}
+
+.nav-link {
+  display: flex;
+  align-items: center;
+  padding: 0.875rem 1.5rem;
+  color: rgba(255, 255, 255, 0.85);
+  text-decoration: none;
+  transition: var(--transition);
+  border-left: 3px solid transparent;
+  position: relative;
+  overflow: hidden;
+}
+
+.nav-link::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 0;
+  height: 100%;
+  background: rgba(255, 255, 255, 0.1);
+  transition: var(--transition);
+  z-index: -1;
+}
+
+.nav-link:hover::before,
+.nav-link.active::before {
+  width: 100%;
+}
+
+.nav-link:hover,
+.nav-link.active {
+  color: white;
+  border-left-color: rgba(255, 255, 255, 0.5);
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.nav-link i {
+  width: 20px;
+  text-align: center;
+  margin-right: 0.75rem;
+  font-size: 1.1rem;
+}
+
+/* Contenu principal */
+.main-content {
+  flex: 1;
+  margin-left: var(--sidebar-width);
+  padding: 2rem;
+  transition: var(--transition);
+}
+
+/* Header */
+.header {
+  background: white;
+  padding: 1rem 2rem;
+  margin: -2rem -2rem 2rem -2rem;
+  box-shadow: var(--shadow-sm);
+  border-radius: 0 0 var(--border-radius) var(--border-radius);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.header h2 {
+  margin: 0;
+  color: var(--gray-800);
+  font-weight: 600;
+}
+
+.header .actions {
+  display: flex;
+  gap: 1rem;
+  align-items: center;
+}
+
+/* Cartes de statistiques */
+.stats-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  gap: 1.5rem;
+  margin-bottom: 2rem;
+}
+
+.stat-card {
+  background: white;
+  border-radius: var(--border-radius);
+  padding: 1.5rem;
+  box-shadow: var(--shadow-sm);
+  border: 1px solid var(--gray-200);
+  transition: var(--transition);
+  position: relative;
+  overflow: hidden;
+}
+
+.stat-card::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 4px;
+  background: linear-gradient(90deg, var(--primary), var(--info));
+}
+
+.stat-card:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow);
+}
+
+.stat-card .icon {
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.5rem;
+  margin-bottom: 1rem;
+}
+
+.stat-card .icon.primary {
+  background: rgba(13, 110, 253, 0.1);
+  color: var(--primary);
+}
+
+.stat-card .icon.success {
+  background: rgba(25, 135, 84, 0.1);
+  color: var(--success);
+}
+
+.stat-card .icon.warning {
+  background: rgba(255, 193, 7, 0.1);
+  color: var(--warning);
+}
+
+.stat-card .icon.info {
+  background: rgba(13, 202, 240, 0.1);
+  color: var(--info);
+}
+
+.stat-card .value {
+  font-size: 2.5rem;
+  font-weight: 700;
+  color: var(--gray-800);
+  line-height: 1;
+  margin-bottom: 0.25rem;
+}
+
+.stat-card .label {
+  color: var(--gray-600);
+  font-size: 0.875rem;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+/* Contenu des onglets */
+.tab-content {
+  background: white;
+  border-radius: var(--border-radius);
+  box-shadow: var(--shadow-sm);
+  border: 1px solid var(--gray-200);
+  overflow: hidden;
+}
+
+.tab-pane {
+  padding: 2rem;
+}
+
+/* Graphiques */
+.chart-container {
+  position: relative;
+  height: 400px;
+  margin: 1rem 0;
+}
+
+.chart-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 1.5rem;
+  padding-bottom: 1rem;
+  border-bottom: 1px solid var(--gray-200);
+}
+
+.chart-header h5 {
+  margin: 0;
+  color: var(--gray-800);
+  font-weight: 600;
+}
+
+/* Listes */
+.list-group-item {
+  border: none;
+  border-bottom: 1px solid var(--gray-200);
+  padding: 1rem;
+  transition: var(--transition);
+}
+
+.list-group-item:last-child {
+  border-bottom: none;
+}
+
+.list-group-item:hover {
+  background: var(--gray-50);
+}
+
+/* Formulaires */
+.form-control {
+  border: 1px solid var(--gray-300);
+  border-radius: var(--border-radius-sm);
+  padding: 0.75rem;
+  transition: var(--transition);
+  font-size: 0.875rem;
+}
+
+.form-control:focus {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 0.2rem rgba(13, 110, 253, 0.25);
+  outline: none;
+}
+
+.form-label {
+  font-weight: 500;
+  color: var(--gray-700);
+  margin-bottom: 0.5rem;
+}
+
+/* Boutons */
+.btn {
+  padding: 0.75rem 1.5rem;
+  border-radius: var(--border-radius-sm);
+  font-weight: 500;
+  font-size: 0.875rem;
+  border: none;
+  cursor: pointer;
+  transition: var(--transition);
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  text-decoration: none;
+}
+
+.btn:hover {
+  transform: translateY(-1px);
+}
+
+.btn-primary {
+  background: var(--primary);
+  color: white;
+}
+
+.btn-primary:hover {
+  background: var(--primary-dark);
+}
+
+.btn-outline-primary {
+  background: transparent;
+  color: var(--primary);
+  border: 1px solid var(--primary);
+}
+
+.btn-outline-primary:hover {
+  background: var(--primary);
+  color: white;
+}
+
+/* Badges */
+.badge {
+  padding: 0.375rem 0.75rem;
+  border-radius: var(--border-radius-sm);
+  font-size: 0.75rem;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.badge.bg-success {
+  background: var(--success) !important;
+}
+
+.badge.bg-danger {
+  background: var(--danger) !important;
+}
+
+.badge.bg-primary {
+  background: var(--primary) !important;
+}
+
+/* Animations */
+@keyframes fadeInUp {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-fadeInUp {
+  animation: fadeInUp 0.5s ease-out;
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+  .sidebar {
+    transform: translateX(-100%);
+    position: fixed;
+  }
+  
+  .sidebar.open {
+    transform: translateX(0);
+  }
+  
+  .main-content {
+    margin-left: 0;
+    padding: 1rem;
+  }
+  
+  .header {
+    margin: -1rem -1rem 1rem -1rem;
+    padding: 1rem;
+  }
+  
+  .stats-cards {
+    grid-template-columns: 1fr;
+    gap: 1rem;
+  }
+  
+  .chart-container {
+    height: 300px;
+  }
+}
+
+/* === STYLES POUR L'ARBRE DE DOSSIERS === */
+.folder-tree {
+  font-family: 'Segoe UI', system-ui, sans-serif;
+  font-size: 14px;
+  user-select: none;
+  max-height: 500px;
+  overflow-y: auto;
+}
+
+.folder-node {
+  margin: 2px 0;
+}
+
+.folder-item {
+  display: flex;
+  align-items: center;
+  padding: 8px 12px;
+  margin: 2px 0;
+  border-radius: 6px;
+  transition: all 0.2s ease;
+  cursor: pointer;
+  border: 1px solid transparent;
+}
+
+.folder-item:hover {
+  background-color: #f8f9fa;
+  border-color: #e9ecef;
+}
+
+.folder-item.monitored {
+  background-color: #e8f5e8;
+  border-color: #b8e6b8;
+}
+
+.folder-item.monitored:hover {
+  background-color: #d1f0d1;
+}
+
+.folder-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  margin-right: 8px;
+  color: #6c757d;
+  cursor: pointer;
+}
+
+.folder-icon.expandable {
+  cursor: pointer;
+}
+
+.folder-icon.expandable:hover {
+  color: #495057;
+}
+
+.folder-icon i.expanded {
+  transform: rotate(90deg);
+}
+
+.folder-name {
+  flex: 1;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: #495057;
+}
+
+.folder-name.root {
+  font-weight: 600;
+  color: #212529;
+}
+
+.folder-children {
+  margin-left: 20px;
+  border-left: 2px solid #e9ecef;
+  padding-left: 12px;
+  transition: all 0.3s ease;
+}
+
+.folder-children.collapsed {
+  display: none;
+}
+
+.category-badge {
+  padding: 2px 8px;
+  border-radius: 12px;
+  font-size: 11px;
+  font-weight: 500;
+  margin-left: 8px;
+}
+
+.category-badge.category-declarations {
+  background-color: #fff3cd;
+  color: #856404;
+}
+
+.category-badge.category-reglements {
+  background-color: #d1ecf1;
+  color: #0c5460;
+}
+
+.category-badge.category-mails-simples {
+  background-color: #d4edda;
+  color: #155724;
+}
+
+.monitoring-indicator {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-left: 8px;
+}
+
+.monitoring-indicator.active {
+  background-color: #28a745;
+  box-shadow: 0 0 4px rgba(40, 167, 69, 0.5);
+}
+
+.folder-actions {
+  display: flex;
+  gap: 4px;
+  margin-left: 8px;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+
+.folder-item:hover .folder-actions {
+  opacity: 1;
+}
+
+.folder-actions .btn {
+  padding: 2px 6px;
+  font-size: 12px;
+  border: none;
+  border-radius: 4px;
+}
+
+.folder-actions .btn:hover {
+  transform: scale(1.05);
+}
+
+/* Styles pour les niveaux d'indentation */
+.folder-node[data-level="0"] .folder-name {
+  font-size: 15px;
+}
+
+.folder-node[data-level="1"] .folder-name {
+  font-size: 14px;
+}
+
+.folder-node[data-level="2"] .folder-name {
+  font-size: 13px;
+}
+
+.folder-node[data-level="3"] .folder-name {
+  font-size: 12px;
+}
+
+/* Highlight pour la recherche */
+.search-highlight {
+  background-color: #fff3cd;
+  padding: 1px 2px;
+  border-radius: 2px;
+}
+
+.folder-selectable.bg-primary .folder-toggle {
+  color: rgba(255, 255, 255, 0.8);
+}
+
+.folder-selectable.bg-primary .folder-name {
+  color: white;
+}
+
+/* Animation pour les icônes de chevron */
+.folder-toggle.bi-chevron-down {
+  transform: rotate(0deg);
+}
+
+.folder-toggle.bi-chevron-right {
+  transform: rotate(0deg);
+}
+
+/* Badge pour le nombre d'emails non lus */
+.folder-line .badge {
+  font-size: 10px;
+  padding: 2px 6px;
+  margin-left: auto;
+}
+
+/* Amélioration de la scrollbar */
+.folder-tree::-webkit-scrollbar {
+  width: 6px;
+}
+
+.folder-tree::-webkit-scrollbar-track {
+  background: #f1f1f1;
+  border-radius: 3px;
+}
+
+.folder-tree::-webkit-scrollbar-thumb {
+  background: #c1c1c1;
+  border-radius: 3px;
+}
+
+.folder-tree::-webkit-scrollbar-thumb:hover {
+  background: #a8a8a8;
+}

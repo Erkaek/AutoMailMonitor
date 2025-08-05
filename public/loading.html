@@ -1,0 +1,786 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mail Monitor - Chargement</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: transparent; /* Fond transparent au lieu du gradient */
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            color: white;
+            overflow: hidden;
+            margin: 0;
+            padding: 20px; /* Ajouter un peu de padding pour éviter les bords */
+        }
+
+        .loading-container {
+            text-align: center;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); /* Le gradient va ici maintenant */
+            padding: 25px 35px;
+            border-radius: 20px;
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3); /* Ombre plus prononcée pour se détacher */
+            max-width: 650px;
+            width: 90%;
+            height: auto;
+            min-height: 200px; /* Hauteur minimale pour éviter un conteneur trop petit */
+        }
+
+        .logo {
+            width: 75px; /* Taille optimisée */
+            height: 75px;
+            margin: 0 auto 12px; /* Marge réduite */
+            animation: pulse 2s infinite;
+        }
+
+        .logo svg {
+            width: 100%;
+            height: 100%;
+        }
+
+        .app-title {
+            font-size: 24px; /* Taille optimisée */
+            font-weight: 600;
+            margin-bottom: 6px; /* Marge minimale */
+            color: #fff;
+            line-height: 1.2;
+        }
+
+        .app-subtitle {
+            font-size: 14px; /* Taille réduite */
+            margin-bottom: 20px; /* Marge réduite */
+            color: rgba(255, 255, 255, 0.8);
+            line-height: 1.3;
+        }
+
+        .loading-spinner {
+            width: 45px; /* Plus petit */
+            height: 45px;
+            border: 3px solid rgba(255, 255, 255, 0.3);
+            border-top: 3px solid #fff;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 12px; /* Marge réduite */
+        }
+
+        .loading-text {
+            font-size: 16px; /* Taille réduite */
+            margin-bottom: 10px; /* Marge réduite */
+            font-weight: 500;
+            line-height: 1.3;
+            color: #fff;
+        }
+
+        .loading-details {
+            font-size: 12px; /* Taille réduite */
+            color: rgba(255, 255, 255, 0.7);
+            margin-bottom: 15px; /* Marge réduite */
+            min-height: 16px; /* Hauteur minimale réduite */
+            line-height: 1.4;
+        }
+
+        .progress-container {
+            margin-bottom: 8px;
+            transition: all 0.5s ease;
+        }
+
+        .progress-container.completed {
+            transform: scale(0.9);
+            opacity: 0.8;
+        }
+
+        .progress-label {
+            font-size: 12px;
+            color: rgba(255, 255, 255, 0.9);
+            margin-bottom: 4px;
+            text-align: left;
+            font-weight: 500;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .progress-label .status-icon {
+            font-size: 14px;
+            margin-left: 8px;
+            opacity: 0;
+            transition: opacity 0.3s ease;
+        }
+
+        .progress-label.completed .status-icon {
+            opacity: 1;
+        }
+
+        .progress-bar {
+            width: 100%;
+            height: 4px;
+            background: rgba(255, 255, 255, 0.2);
+            border-radius: 2px;
+            overflow: hidden;
+            margin-bottom: 4px;
+            transition: all 0.5s ease;
+        }
+
+        .progress-bar.completed {
+            height: 2px;
+            background: rgba(76, 175, 80, 0.3);
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #4facfe 0%, #00f2fe 100%);
+            border-radius: 2px;
+            transition: all 0.5s ease;
+            width: 0%;
+        }
+
+        .progress-fill.completed {
+            background: linear-gradient(90deg, #4caf50 0%, #8bc34a 100%);
+        }
+
+        .progress-percent {
+            font-size: 10px;
+            color: rgba(255, 255, 255, 0.7);
+            text-align: right;
+            margin-bottom: 2px;
+            transition: opacity 0.5s ease;
+        }
+
+        .progress-percent.completed {
+            opacity: 0;
+        }
+
+        .status-list {
+            text-align: left;
+            margin-top: 12px; /* Marge réduite */
+        }
+
+        .status-item {
+            display: flex;
+            align-items: center;
+            margin-bottom: 4px; /* Marge très réduite */
+            font-size: 12px; /* Plus petit */
+            opacity: 0.6;
+            transition: opacity 0.3s ease;
+            line-height: 1.3;
+        }
+
+        .status-item.active {
+            opacity: 1;
+        }
+
+        .status-item.completed {
+            opacity: 0.8;
+            color: #4ade80;
+        }
+
+        .status-icon {
+            margin-right: 6px; /* Marge réduite */
+            width: 16px; /* Plus petit */
+            font-size: 12px; /* Plus petit */
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        @keyframes pulse {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.1); }
+        }
+
+        .fade-out {
+            opacity: 0;
+            transform: scale(0.95);
+            transition: all 0.5s ease;
+        }
+
+        .error-state {
+            background: rgba(239, 68, 68, 0.1);
+            border-color: rgba(239, 68, 68, 0.3);
+        }
+
+        .error-text {
+            color: #fca5a5;
+        }
+
+        .retry-button {
+            background: rgba(255, 255, 255, 0.2);
+            color: white;
+            border: 1px solid rgba(255, 255, 255, 0.3);
+            padding: 10px 20px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 14px;
+            margin-top: 15px;
+            transition: all 0.3s ease;
+        }
+
+        .retry-button:hover {
+            background: rgba(255, 255, 255, 0.3);
+            transform: translateY(-2px);
+        }
+        
+        /* Styles pour le copyright dans la page de chargement */
+        .copyright-footer {
+            position: absolute;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            color: rgba(255, 255, 255, 0.7);
+            font-size: 12px;
+            text-align: center;
+            opacity: 0.8;
+        }
+    </style>
+</head>
+<body>
+    <div class="loading-container" id="loadingContainer">
+        <div class="logo">
+            <svg width="80" height="80" viewBox="0 0 128 128" xmlns="http://www.w3.org/2000/svg">
+                <defs>
+                    <linearGradient id="mainGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+                        <stop offset="0%" style="stop-color:#667eea;stop-opacity:1" />
+                        <stop offset="100%" style="stop-color:#764ba2;stop-opacity:1" />
+                    </linearGradient>
+                    <linearGradient id="accentGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+                        <stop offset="0%" style="stop-color:#4facfe;stop-opacity:1" />
+                        <stop offset="100%" style="stop-color:#00f2fe;stop-opacity:1" />
+                    </linearGradient>
+                    <filter id="shadow" x="-50%" y="-50%" width="200%" height="200%">
+                        <feDropShadow dx="2" dy="4" stdDeviation="4" flood-color="#000000" flood-opacity="0.25"/>
+                    </filter>
+                </defs>
+                
+                <circle cx="64" cy="64" r="60" fill="url(#mainGradient)" filter="url(#shadow)"/>
+                
+                <g transform="translate(24, 32)">
+                    <rect x="0" y="16" width="80" height="48" rx="4" ry="4" fill="#ffffff" opacity="0.95"/>
+                    <path d="M 0 16 L 40 36 L 80 16 L 80 20 L 40 40 L 0 20 Z" fill="#f8f9fa" opacity="0.8"/>
+                    <path d="M 0 16 L 40 36 L 80 16" stroke="url(#accentGradient)" stroke-width="2" fill="none"/>
+                    
+                    <g transform="translate(32, 24)">
+                        <ellipse cx="8" cy="8" rx="12" ry="6" fill="url(#accentGradient)" opacity="0.3"/>
+                        <circle cx="8" cy="8" r="6" fill="url(#accentGradient)"/>
+                        <circle cx="8" cy="8" r="3" fill="#ffffff"/>
+                        <circle cx="9" cy="7" r="1" fill="url(#accentGradient)"/>
+                    </g>
+                </g>
+                
+                <circle cx="88" cy="40" r="6" fill="#ff4757"/>
+                <text x="88" y="44" text-anchor="middle" fill="white" font-family="Arial, sans-serif" font-size="8" font-weight="bold">3</text>
+                
+                <circle cx="96" cy="56" r="4" fill="#ffa502"/>
+                
+                <g opacity="0.6">
+                    <circle cx="100" cy="72" r="2" fill="url(#accentGradient)">
+                        <animate attributeName="r" values="2;6;2" dur="2s" repeatCount="indefinite"/>
+                        <animate attributeName="opacity" values="1;0;1" dur="2s" repeatCount="indefinite"/>
+                    </circle>
+                </g>
+            </svg>
+        </div>
+        <div class="app-title">Mail Monitor</div>
+        <div class="app-subtitle">Surveillance intelligente d'Outlook</div>
+        
+        <div class="loading-spinner" id="loadingSpinner"></div>
+        
+        <div class="loading-text" id="loadingText">Initialisation en cours...</div>
+        <div class="loading-details" id="loadingDetails">Preparation de l'environnement</div>
+        
+        <!-- Copyright footer pour la page de chargement -->
+        <div class="copyright-footer">
+            <small>© 2025 Tanguy Raingeard - Mail Monitor v1.0.0</small>
+        </div>
+        
+        <!-- Barres de progression intégrées avec validation -->
+        <div id="progressBars">
+            <div class="progress-container" id="progress-environment" style="display: none;">
+                <div class="progress-label" id="label-environment">
+                    <span>Vérification système</span>
+                    <span class="status-icon">✅</span>
+                </div>
+                <div class="progress-bar" id="bar-environment">
+                    <div class="progress-fill" id="progressFill-environment"></div>
+                </div>
+                <div class="progress-percent" id="progressPercent-environment">0%</div>
+            </div>
+            
+            <div class="progress-container" id="progress-outlook" style="display: none;">
+                <div class="progress-label" id="label-outlook">
+                    <span>Connexion Outlook</span>
+                    <span class="status-icon">✅</span>
+                </div>
+                <div class="progress-bar" id="bar-outlook">
+                    <div class="progress-fill" id="progressFill-outlook"></div>
+                </div>
+                <div class="progress-percent" id="progressPercent-outlook">0%</div>
+            </div>
+            
+            <div class="progress-container" id="progress-mailboxes" style="display: none;">
+                <div class="progress-label" id="label-mailboxes">
+                    <span>Boîtes mail</span>
+                    <span class="status-icon">✅</span>
+                </div>
+                <div class="progress-bar" id="bar-mailboxes">
+                    <div class="progress-fill" id="progressFill-mailboxes"></div>
+                </div>
+                <div class="progress-percent" id="progressPercent-mailboxes">0%</div>
+            </div>
+            
+            <div class="progress-container" id="progress-folders" style="display: none;">
+                <div class="progress-label" id="label-folders">
+                    <span>Structure dossiers</span>
+                    <span class="status-icon">✅</span>
+                </div>
+                <div class="progress-bar" id="bar-folders">
+                    <div class="progress-fill" id="progressFill-folders"></div>
+                </div>
+                <div class="progress-percent" id="progressPercent-folders">0%</div>
+            </div>
+            
+            <div class="progress-container" id="progress-monitoring" style="display: none;">
+                <div class="progress-label" id="label-monitoring">
+                    <span>Monitoring automatique</span>
+                    <span class="status-icon">✅</span>
+                </div>
+                <div class="progress-bar" id="bar-monitoring">
+                    <div class="progress-fill" id="progressFill-monitoring"></div>
+                </div>
+                <div class="progress-percent" id="progressPercent-monitoring">0%</div>
+            </div>
+            
+            <div class="progress-container" id="progress-analysis" style="display: none;">
+                <div class="progress-label" id="label-analysis">
+                    <span>Analyse des emails</span>
+                    <span class="status-icon">✅</span>
+                </div>
+                <div class="progress-bar" id="bar-analysis">
+                    <div class="progress-fill" id="progressFill-analysis"></div>
+                </div>
+                <div class="progress-percent" id="progressPercent-analysis">0%</div>
+            </div>
+        </div>        <button class="retry-button" id="retryButton" style="display: none;">
+            Reessayer
+        </button>
+    </div>
+
+    <script>
+        class LoadingManager {
+            constructor() {
+                this.currentStep = 0;
+                this.steps = [
+                    'status-environment',
+                    'status-outlook', 
+                    'status-mailboxes',
+                    'status-folders',
+                    'status-monitoring',
+                    'status-ready'
+                ];
+                this.stepMessages = [
+                    'Verification de l\'environnement Windows...',
+                    'Etablissement de la connexion Outlook...',
+                    'Detection des boites mail disponibles...',
+                    'Chargement de la structure des dossiers...',
+                    'Configuration du monitoring automatique...',
+                    'Finalisation de l\'initialisation...'
+                ];
+                this.isError = false;
+                this.init();
+            }
+
+            init() {
+                // Ecouter les messages du processus principal
+                if (window.electronAPI) {
+                    window.electronAPI.onLoadingProgress((data) => {
+                        this.updateProgress(data);
+                    });
+
+                    window.electronAPI.onLoadingComplete(() => {
+                        this.complete();
+                    });
+
+                    window.electronAPI.onLoadingError((error) => {
+                        this.showError(error);
+                    });
+                    
+                    // Écouter les événements de progression de l'analyse PowerShell
+                    window.electronAPI.onPowerShellAnalysisProgress((progressData) => {
+                        this.updateAnalysisProgress(progressData);
+                    });
+                }
+
+                // Simuler le progres automatique si pas de retour
+                this.startAutoProgress();
+
+                // Bouton de retry
+                document.getElementById('retryButton').addEventListener('click', () => {
+                    this.retry();
+                });
+            }
+
+            startAutoProgress() {
+                // Demarrer le premier step
+                setTimeout(() => this.nextStep(), 500);
+            }
+
+            nextStep() {
+                if (this.isError || this.currentStep >= this.steps.length) return;
+
+                // Marquer l'etape precedente comme completee
+                if (this.currentStep > 0) {
+                    const prevStep = document.getElementById(this.steps[this.currentStep - 1]);
+                    if (prevStep) {
+                        prevStep.classList.remove('active');
+                        prevStep.classList.add('completed');
+                        prevStep.querySelector('.status-icon').textContent = '✅';
+                    }
+                }
+
+                // Activer l'etape actuelle
+                if (this.currentStep < this.steps.length) {
+                    const currentStepEl = document.getElementById(this.steps[this.currentStep]);
+                    if (currentStepEl) {
+                        currentStepEl.classList.add('active');
+                    }
+
+                    // Mettre a jour le texte et la progression
+                    document.getElementById('loadingDetails').textContent = this.stepMessages[this.currentStep];
+                    
+                    const progress = ((this.currentStep + 1) / this.steps.length) * 100;
+                    document.getElementById('progressFill').style.width = progress + '%';
+
+                    this.currentStep++;
+
+                    // Passer a l'etape suivante
+                    if (this.currentStep < this.steps.length) {
+                        setTimeout(() => this.nextStep(), 2000 + Math.random() * 2000);
+                    } else {
+                        setTimeout(() => this.complete(), 1000);
+                    }
+                }
+            }
+
+            updateProgress(data) {
+                console.log('Update progress:', data);
+                
+                // Mettre à jour le message principal
+                if (data.message) {
+                    document.getElementById('loadingDetails').textContent = data.message;
+                }
+
+                // Gérer les étapes spécifiques avec barres multiples
+                if (data.step !== undefined && data.progress !== undefined) {
+                    const taskNames = ['environment', 'outlook', 'mailboxes', 'folders', 'monitoring'];
+                    const currentTask = taskNames[data.step];
+                    
+                    if (currentTask) {
+                        // Afficher et mettre à jour la barre de progression de cette tâche
+                        const progressContainer = document.getElementById(`progress-${currentTask}`);
+                        if (progressContainer) {
+                            // Si la barre était cachée, la rendre visible
+                            if (progressContainer.style.display === 'none' || progressContainer.style.display === '') {
+                                progressContainer.style.display = 'block';
+                                console.log(`Barre ${currentTask} maintenant visible`);
+                            }
+                        }
+
+                        const progressFill = document.getElementById(`progressFill-${currentTask}`);
+                        const progressPercent = document.getElementById(`progressPercent-${currentTask}`);
+                        
+                        if (progressFill) {
+                            progressFill.style.width = data.progress + '%';
+                        }
+                        if (progressPercent) {
+                            progressPercent.textContent = Math.round(data.progress) + '%';
+                        }
+                        
+                        console.log(`${currentTask} mis à jour: ${data.progress}%`);
+
+                        // Si la tâche est terminée (100%), la transformer en validation
+                        if (data.progress >= 100) {
+                            this.completeTask(currentTask);
+                        }
+                    }
+                }
+            }
+            
+            updateAnalysisProgress(progressData) {
+                console.log('PowerShell Analysis progress:', progressData);
+                
+                // VÉRIFIER d'abord si la tâche monitoring est déjà complétée
+                const monitoringContainer = document.getElementById('progress-monitoring');
+                if (monitoringContainer && monitoringContainer.classList.contains('completed')) {
+                    console.log('Tâche monitoring déjà complétée, ignorer les mises à jour supplémentaires');
+                    return; // Ignorer toutes les mises à jour après complétion
+                }
+                
+                // UTILISER la barre "monitoring" au lieu d'une barre séparée "analysis"
+                // car l'analyse PowerShell fait partie du monitoring automatique
+                if (monitoringContainer) {
+                    // Si c'est la première fois qu'on affiche cette barre, l'initialiser à 0%
+                    if (monitoringContainer.style.display === 'none' || monitoringContainer.style.display === '') {
+                        monitoringContainer.style.display = 'block';
+                        
+                        const progressFill = document.getElementById('progressFill-monitoring');
+                        const progressPercent = document.getElementById('progressPercent-monitoring');
+                        
+                        if (progressFill) {
+                            progressFill.style.width = '0%';
+                        }
+                        if (progressPercent) {
+                            progressPercent.textContent = '0%';
+                        }
+                        
+                        console.log('Barre monitoring initialisée à 0% pour analyse PowerShell');
+                    }
+                }
+                
+                // Mettre à jour le message principal avec les détails de l'analyse
+                const loadingDetails = document.getElementById('loadingDetails');
+                if (loadingDetails && progressData.message) {
+                    // Extraire les informations importantes du message PowerShell
+                    let cleanMessage = progressData.message
+                        .replace(/.*: /, '') // Enlever le préfixe timestamp
+                        .replace(/\[PROGRESS\]/, '')
+                        .replace(/\[GLOBAL\]/, '')
+                        .replace(/\[BATCH\]/, '')
+                        .replace(/\[PERIODE\]/, '')
+                        .replace(/\[ADAPTIVE\]/, '')
+                        .replace(/\[STATS\]/, '')
+                        .replace(/\[TERMINE\]/, '')
+                        .trim();
+                    
+                    // Nettoyer les caractères d'échappement PowerShell
+                    cleanMessage = cleanMessage
+                        .replace(/´┐¢/g, 'é')
+                        .replace(/├®/g, 'è')
+                        .replace(/├á/g, 'à')
+                        .replace(/├®/g, 'è');
+                    
+                    // Messages spéciaux pour l'adaptation
+                    if (progressData.message.includes('[ADAPTIVE]')) {
+                        if (progressData.message.includes('Extension')) {
+                            cleanMessage = '🔄 Adaptation: Extension de période (volume faible)';
+                        } else if (progressData.message.includes('Réduction')) {
+                            cleanMessage = '⚡ Adaptation: Réduction de période (volume élevé)';
+                        } else if (progressData.message.includes('optimal')) {
+                            cleanMessage = '✅ Adaptation: Période optimale maintenue';
+                        }
+                    }
+                    
+                    loadingDetails.textContent = `${progressData.folder}: ${cleanMessage}`;
+                }
+                
+                // Extraire le pourcentage de progression si disponible
+                if (progressData.message.includes('[') && progressData.message.includes('%]')) {
+                    const percentMatch = progressData.message.match(/\[([0-9.]+)%\]/);
+                    if (percentMatch) {
+                        const percent = parseFloat(percentMatch[1]);
+                        
+                        // Vérifier encore une fois que la tâche n'est pas déjà complétée
+                        const monitoringContainer = document.getElementById('progress-monitoring');
+                        if (monitoringContainer && monitoringContainer.classList.contains('completed')) {
+                            console.log('Tâche monitoring déjà complétée, ignorer mise à jour progression');
+                            return;
+                        }
+                        
+                        // Mettre à jour la barre MONITORING avec le pourcentage PowerShell
+                        const progressFill = document.getElementById('progressFill-monitoring');
+                        const progressPercent = document.getElementById('progressPercent-monitoring');
+                        
+                        if (progressFill) {
+                            progressFill.style.width = percent + '%';
+                        }
+                        if (progressPercent) {
+                            progressPercent.textContent = percent + '%';
+                        }
+                        
+                        console.log(`Barre monitoring mise à jour: ${percent}%`);
+                        
+                        // Si terminé (proche de 100% ou message de fin), compléter UNE SEULE FOIS
+                        if (percent >= 95 || progressData.message.includes('[TERMINE]')) {
+                            console.log('Complétion de la tâche monitoring...');
+                            this.completeTask('monitoring');
+                        }
+                    }
+                }
+                
+                // Détecter les messages de fin ou d'optimisation
+                if (progressData.message.includes('[TERMINE]') || progressData.message.includes('TOTAL:')) {
+                    // Vérifier encore une fois que la tâche n'est pas déjà complétée
+                    const monitoringContainer = document.getElementById('progress-monitoring');
+                    if (monitoringContainer && !monitoringContainer.classList.contains('completed')) {
+                        console.log('Message TERMINE détecté, complétion de la tâche monitoring...');
+                        this.completeTask('monitoring');
+                    }
+                }
+                
+                // Détecter les messages d'adaptation pour montrer l'optimisation en cours
+                if (progressData.message.includes('[ADAPTIVE]')) {
+                    const monitoringLabel = document.getElementById('label-monitoring');
+                    if (monitoringLabel) {
+                        const span = monitoringLabel.querySelector('span');
+                        if (span) {
+                            if (progressData.message.includes('Extension')) {
+                                span.textContent = 'Monitoring automatique (extension période)';
+                            } else if (progressData.message.includes('Réduction')) {
+                                span.textContent = 'Monitoring automatique (optimisation volume)';
+                            } else if (progressData.message.includes('optimal')) {
+                                span.textContent = 'Monitoring automatique (période optimale)';
+                            }
+                        }
+                    }
+                }
+            }
+
+            completeTask(taskName) {
+                const progressContainer = document.getElementById(`progress-${taskName}`);
+                const progressFill = document.getElementById(`progressFill-${taskName}`);
+                const progressPercent = document.getElementById(`progressPercent-${taskName}`);
+                const progressBar = document.getElementById(`bar-${taskName}`);
+                const progressLabel = document.getElementById(`label-${taskName}`);
+                
+                if (!progressContainer) return;
+
+                // Marquer comme complété visuellement
+                progressContainer.classList.add('completed');
+                
+                if (progressFill) {
+                    progressFill.style.width = '100%';
+                    progressFill.classList.add('completed');
+                }
+                
+                if (progressPercent) {
+                    progressPercent.classList.add('completed');
+                }
+                
+                if (progressBar) {
+                    progressBar.classList.add('completed');
+                }
+                
+                if (progressLabel) {
+                    progressLabel.classList.add('completed');
+                }
+
+                // Animation de transformation
+                setTimeout(() => {
+                    if (progressPercent) {
+                        progressPercent.style.display = 'none';
+                    }
+                }, 500);
+            }
+
+            complete() {
+                // NE PAS compléter toutes les tâches automatiquement
+                // Chaque tâche doit être complétée individuellement
+                document.getElementById('loadingText').textContent = 'Chargement terminé !';
+                document.getElementById('loadingDetails').textContent = 'Redirection vers l\'application...';
+
+                // Animation de fermeture
+                setTimeout(() => {
+                    document.getElementById('loadingContainer').classList.add('fade-out');
+                    
+                    // Signaler au processus principal qu'on peut changer de page
+                    setTimeout(() => {
+                        if (window.electronAPI && window.electronAPI.loadingComplete) {
+                            window.electronAPI.loadingComplete();
+                        }
+                    }, 500);
+                }, 1000);
+            }
+
+            showError(error) {
+                this.isError = true;
+                
+                document.getElementById('loadingContainer').classList.add('error-state');
+                document.getElementById('loadingSpinner').style.display = 'none';
+                document.getElementById('loadingText').textContent = 'Erreur de chargement';
+                document.getElementById('loadingText').classList.add('error-text');
+                document.getElementById('loadingDetails').textContent = error.message || 'Une erreur est survenue lors de l\'initialisation';
+                document.getElementById('loadingDetails').classList.add('error-text');
+                document.getElementById('retryButton').style.display = 'block';
+
+                // Marquer l'etape actuelle comme en erreur
+                if (this.currentStep < this.steps.length) {
+                    const currentStepEl = document.getElementById(this.steps[this.currentStep]);
+                    if (currentStepEl) {
+                        currentStepEl.classList.add('active');
+                        currentStepEl.querySelector('.status-icon').textContent = '❌';
+                    }
+                }
+            }
+
+            retry() {
+                // Réinitialiser l'interface
+                this.isError = false;
+                
+                document.getElementById('loadingContainer').classList.remove('error-state');
+                document.getElementById('loadingSpinner').style.display = 'block';
+                document.getElementById('loadingText').textContent = 'Initialisation en cours...';
+                document.getElementById('loadingText').classList.remove('error-text');
+                document.getElementById('loadingDetails').textContent = 'Préparation de l\'environnement';
+                document.getElementById('loadingDetails').classList.remove('error-text');
+                document.getElementById('retryButton').style.display = 'none';
+
+                // Réinitialiser toutes les barres de progression
+                const taskNames = ['environment', 'outlook', 'mailboxes', 'folders', 'monitoring', 'analysis'];
+                taskNames.forEach(taskName => {
+                    const progressContainer = document.getElementById(`progress-${taskName}`);
+                    const progressFill = document.getElementById(`progressFill-${taskName}`);
+                    const progressPercent = document.getElementById(`progressPercent-${taskName}`);
+                    const progressBar = document.getElementById(`bar-${taskName}`);
+                    const progressLabel = document.getElementById(`label-${taskName}`);
+
+                    if (progressContainer) {
+                        progressContainer.style.display = 'none';
+                        progressContainer.classList.remove('completed');
+                    }
+                    
+                    if (progressFill) {
+                        progressFill.style.width = '0%';
+                        progressFill.classList.remove('completed');
+                    }
+                    
+                    if (progressPercent) {
+                        progressPercent.textContent = '0%';
+                        progressPercent.classList.remove('completed');
+                        progressPercent.style.display = 'block';
+                    }
+                    
+                    if (progressBar) {
+                        progressBar.classList.remove('completed');
+                    }
+                    
+                    if (progressLabel) {
+                        progressLabel.classList.remove('completed');
+                    }
+                });
+
+                // Signaler au processus principal de réessayer
+                if (window.electronAPI && window.electronAPI.retryLoading) {
+                    window.electronAPI.retryLoading();
+                }
+            }
+        }
+
+        // Initialiser le gestionnaire de chargement
+        document.addEventListener('DOMContentLoaded', () => {
+            new LoadingManager();
+        });
+    </script>
+</body>
+</html>

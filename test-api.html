@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Test API Folders Tree</title>
+</head>
+<body>
+    <h1>Test API Folders Tree</h1>
+    <button id="test-api">Test API</button>
+    <div id="result"></div>
+
+    <script>
+        document.getElementById('test-api').addEventListener('click', async () => {
+            console.log('🧪 Test de l\'API api-folders-tree depuis le renderer...');
+            const resultDiv = document.getElementById('result');
+            
+            try {
+                // Test si electronAPI est disponible
+                if (!window.electronAPI) {
+                    console.error('❌ electronAPI non disponible');
+                    resultDiv.innerHTML = '❌ electronAPI non disponible';
+                    return;
+                }
+                
+                console.log('✅ electronAPI disponible');
+                
+                // Appeler l'API
+                console.log('📞 Appel de api-folders-tree...');
+                const data = await window.electronAPI.invoke('api-folders-tree');
+                console.log('📁 Données reçues:', data);
+                
+                // Afficher le résultat
+                resultDiv.innerHTML = `
+                    <h3>Résultat:</h3>
+                    <p>Dossiers trouvés: ${data.folders?.length || 0}</p>
+                    <pre>${JSON.stringify(data, null, 2)}</pre>
+                `;
+                
+            } catch (error) {
+                console.error('❌ Erreur:', error);
+                resultDiv.innerHTML = `❌ Erreur: ${error.message}`;
+            }
+        });
+    </script>
+</body>
+</html>
