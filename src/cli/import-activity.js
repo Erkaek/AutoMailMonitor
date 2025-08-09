@@ -81,7 +81,11 @@ async function main() {
   a.manual_adjustments += (r.traite_adg || 0);
   }
   if (agg.size > 0 && optimizedDatabaseService.upsertWeeklyStatsBatch) {
-    optimizedDatabaseService.upsertWeeklyStatsBatch(Array.from(agg.values()));
+    const payload = Array.from(agg.values()).map(x => ({
+      ...x,
+      created_at: null
+    }));
+    optimizedDatabaseService.upsertWeeklyStatsBatch(payload);
   }
 
   // CSV optionnel

@@ -1565,10 +1565,11 @@ ipcMain.handle('api-activity-import-run', async (event, { filePath, weeks, outCs
       a.manual_adjustments = (a.manual_adjustments || 0) + (r.traite_adg || 0);
     }
     if (agg.size > 0 && databaseService.upsertWeeklyStatsBatch) {
-      // S'assurer que manual_adjustments est présent
+      // S'assurer que manual_adjustments et created_at sont présents
       const payload = Array.from(agg.values()).map(x => ({
         ...x,
-        manual_adjustments: x.manual_adjustments || 0
+        manual_adjustments: x.manual_adjustments || 0,
+        created_at: null
       }));
       databaseService.upsertWeeklyStatsBatch(payload);
     }
