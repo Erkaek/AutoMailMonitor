@@ -1524,7 +1524,7 @@ ipcMain.handle('api-activity-import-run', async (event, { filePath, weeks, outCs
       if (cat === 'Declarations') return 'Déclarations';
       return 'Mails simples';
     };
-    const getISOWeekInfo = (y, w) => {
+  const getISOWeekInfo = (y, w) => {
       // Semaine ISO lundi->dimanche
       const simple = new Date(Date.UTC(y, 0, 1 + (w - 1) * 7));
       const day = simple.getUTCDay();
@@ -1536,8 +1536,9 @@ ipcMain.handle('api-activity-import-run', async (event, { filePath, weeks, outCs
       end.setUTCDate(start.getUTCDate() + 6);
       const startStr = start.toISOString().slice(0,10);
       const endStr = end.toISOString().slice(0,10);
-      const weekId = `${y}-W${String(w).padStart(2,'0')}`;
-      return { startStr, endStr, weekId };
+  // Respecter le format attendu par l'appli: S{semaine}-{annee} (ex: S32-2025)
+  const weekId = `S${w}-${y}`;
+  return { startStr, endStr, weekId };
     };
 
     // Agrégation

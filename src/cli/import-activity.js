@@ -54,8 +54,8 @@ async function main() {
     end.setUTCDate(start.getUTCDate() + 6);
     const startStr = start.toISOString().slice(0,10);
     const endStr = end.toISOString().slice(0,10);
-    const weekId = `${y}-W${String(w).padStart(2,'0')}`;
-    return { startStr, endStr, weekId };
+  const weekId = `S${w}-${y}`; // format attendu S{semaine}-{annee}
+  return { startStr, endStr, weekId };
   };
   const agg = new Map();
   for (const r of rows) {
