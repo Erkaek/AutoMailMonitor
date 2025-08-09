@@ -91,6 +91,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   
   // Gestion des fichiers
   saveFile: (data, defaultPath) => ipcRenderer.invoke('dialog-save-file', { data, defaultPath }),
+  openXlsbFile: () => ipcRenderer.invoke('dialog-open-xlsb'),
+  importActivityPreview: (filePath, weeks) => ipcRenderer.invoke('api-activity-import-preview', { filePath, weeks }),
+  importActivityRun: (filePath, weeks, outCsv) => ipcRenderer.invoke('api-activity-import-run', { filePath, weeks, outCsv }),
   
   // Contrôles de fenêtre
   minimize: () => ipcRenderer.invoke('window-minimize'),

@@ -9,6 +9,9 @@ const path = require('path');
 const outlookConnector = require('../server/outlookConnector');
 // OPTIMIZED: Utiliser le service de base de données optimisé
 const databaseService = require('../services/optimizedDatabaseService');
+// Importeur XLSB
+const { dialog } = require('electron');
+const activityImporter = require('../importers/activityXlsbImporter');
 const cacheService = require('../services/cacheService');
 
 // Rendre les services disponibles globalement
@@ -571,8 +574,8 @@ ipcMain.on('resize-loading-window', (event, { width, height }) => {
     // Ajouter une marge de sécurité et limites min/max
     const finalWidth = Math.max(400, Math.min(800, width + 40));
     const finalHeight = Math.max(300, Math.min(900, height + 40));
-    
-    console.log(`🔧 [IPC] Redimensionnement fenêtre de chargement: ${finalWidth}x${finalHeight}`);
+
+    // Réduire le bruit de logs: ne pas logger chaque redimensionnement
     loadingWindow.setSize(finalWidth, finalHeight);
     loadingWindow.center(); // Recentrer après redimensionnement
   }
@@ -1466,6 +1469,116 @@ ipcMain.handle('api-weekly-history', async (event, { limit = 20 } = {}) => {
       success: false,
       error: error.message
     };
+  }
+});
+
+// === Import Activité (.xlsb) ===
+ipcMain.handle('dialog-open-xlsb', async () => {
+  const { canceled, filePaths } = await dialog.showOpenDialog({
+    title: 'Choisir un fichier .xlsb',
+    properties: ['openFile'],
+    filters: [ { name: 'Excel Binary', extensions: ['xlsb'] } ]
+  });
+  if (canceled || !filePaths?.length) return null;
+  return filePaths[0];
+});
+
+ipcMain.handle('api-activity-import-preview', async (event, { filePath, weeks }) => {
+  try {
+    await databaseService.initialize();
+  const { rows, skippedWeeks, year } = activityImporter.importActivityFromXlsb(filePath, { weeks });
+    // Aperçu: S1 et 2-3 autres semaines non vides
+    const nonEmpty = rows.filter(r => (r.recu || r.traite || r.traite_adg));
+    const byWeek = new Map();
+    for (const r of nonEmpty) {
+      const key = r.week_number;
+      if (!byWeek.has(key)) byWeek.set(key, []);
+      byWeek.get(key).push(r);
+    }
+    const weeksSorted = Array.from(byWeek.keys()).sort((a,b)=>a-b);
+    const sampleWeeks = [];
+    if (weeksSorted.includes(1)) sampleWeeks.push(1);
+    for (const w of weeksSorted) if (sampleWeeks.length < 3 && !sampleWeeks.includes(w)) sampleWeeks.push(w);
+    const preview = rows.filter(r => sampleWeeks.includes(r.week_number));
+    return { year, skippedWeeks, preview, count: rows.length };
+  } catch (e) {
+    return { error: e.message };
+  }
+});
+
+ipcMain.handle('api-activity-import-run', async (event, { filePath, weeks, outCsv }) => {
+  try {
+    await databaseService.initialize();
+    const { rows, skippedWeeks, year } = activityImporter.importActivityFromXlsb(filePath, { weeks });
+    // Si filtre démarre après 1, récupérer stock_debut depuis DB
+    const { parseWeeksFilter } = activityImporter;
+    const filter = parseWeeksFilter(weeks);
+  // Plus de recalcul de stock via activity_weekly (supprimé)
+
+  // Mettre à jour la table existante weekly_stats pour compatibilité UI existante
+    //    - Agréger par semaine et "folder_type" équivalent
+  const mapCategoryToFolderType = (cat) => {
+      if (!cat) return 'Mails simples';
+      if (cat === 'MailSimple') return 'Mails simples';
+      if (cat === 'Reglements') return 'Règlements';
+      if (cat === 'Declarations') return 'Déclarations';
+      return 'Mails simples';
+    };
+    const getISOWeekInfo = (y, w) => {
+      // Semaine ISO lundi->dimanche
+      const simple = new Date(Date.UTC(y, 0, 1 + (w - 1) * 7));
+      const day = simple.getUTCDay();
+      const diff = (day <= 4 ? day : day - 7) - 1; // Monday=1
+      const start = new Date(simple);
+      start.setUTCDate(simple.getUTCDate() - diff);
+      start.setUTCHours(0,0,0,0);
+      const end = new Date(start);
+      end.setUTCDate(start.getUTCDate() + 6);
+      const startStr = start.toISOString().slice(0,10);
+      const endStr = end.toISOString().slice(0,10);
+      const weekId = `${y}-W${String(w).padStart(2,'0')}`;
+      return { startStr, endStr, weekId };
+    };
+
+    // Agrégation
+    const agg = new Map(); // key: year-week-folderType
+    for (const r of rows) {
+      const folderType = mapCategoryToFolderType(r.category);
+      const key = `${r.year}-${r.week_number}-${folderType}`;
+      const { startStr, endStr, weekId } = getISOWeekInfo(r.year, r.week_number);
+      if (!agg.has(key)) {
+        agg.set(key, {
+          week_identifier: weekId,
+          week_number: r.week_number,
+          week_year: r.year,
+          week_start_date: startStr,
+          week_end_date: endStr,
+          folder_type: folderType,
+          emails_received: 0,
+          emails_treated: 0
+        });
+      }
+      const a = agg.get(key);
+      a.emails_received += (r.recu || 0);
+      // Règle métier: treated = traité, manual_adjustments = traité_adg
+      a.emails_treated += (r.traite || 0);
+      a.manual_adjustments = (a.manual_adjustments || 0) + (r.traite_adg || 0);
+    }
+    if (agg.size > 0 && databaseService.upsertWeeklyStatsBatch) {
+      // S'assurer que manual_adjustments est présent
+      const payload = Array.from(agg.values()).map(x => ({
+        ...x,
+        manual_adjustments: x.manual_adjustments || 0
+      }));
+      databaseService.upsertWeeklyStatsBatch(payload);
+    }
+    let csvPath = null;
+    if (outCsv) {
+      csvPath = activityImporter.writeCsv(rows, year, path.join(process.cwd(), 'build'));
+    }
+    return { inserted: rows.length, skippedWeeks, csvPath, year };
+  } catch (e) {
+    return { error: e.message };
   }
 });
 

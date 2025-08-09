@@ -32,8 +32,7 @@ AutoMailMonitor/
 │   │   └── preload.js             # Script de sécurité Electron
 │   ├── server/                    # 🔗 Interface Outlook
 │   │   ├── outlookConnector.js    # Connecteur PowerShell/COM
-│   │   ├── server.js              # Serveur Express local
-│   │   └── htmlTemplate.js        # Templates HTML
+│   │   └── outlookConnector.js    # Connecteur Outlook (PowerShell/COM wrappers & checks)
 │   ├── services/                  # ⚙️ Services métier
 │   │   ├── monitoringService.js   # Service principal de monitoring
 │   │   ├── vbaMetricsService.js   # Métriques et analytics
@@ -177,7 +176,7 @@ Exemple de configuration :
 ### Architecture Technique
 
 - **Frontend** : HTML5, Bootstrap 5, JavaScript ES6+
-- **Backend** : Electron, Node.js, Express
+- **Backend** : Electron, Node.js (IPC, pas d'Express)
 - **Base de données** : SQLite3 avec optimisations
 - **Interface Outlook** : PowerShell + COM Automation
 - **Communication** : IPC Electron pour sécurité

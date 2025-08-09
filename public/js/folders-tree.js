@@ -401,39 +401,12 @@ class FoldersTreeManager {
   }
 
   async addToMonitoring(node) {
-    const category = prompt('Choisir une catégorie:\n1. Déclarations\n2. Règlements\n3. Mails simples', '1');
-    
-    const categories = {
-      '1': 'Déclarations',
-      '2': 'Règlements', 
-      '3': 'Mails simples'
-    };
-
-    const selectedCategory = categories[category];
-    if (!selectedCategory) return;
-
-    try {
-      const response = await fetch('/api/folders/add', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          folderPath: node.fullPath,
-          category: selectedCategory
-        })
-      });
-
-      if (!response.ok) throw new Error(`Erreur ${response.status}`);
-
-      node.isMonitored = true;
-      node.category = selectedCategory;
-      
-      this.renderTree();
-      this.showSuccess(`Dossier ajouté au monitoring`);
-
-    } catch (error) {
-      console.error('❌ Erreur ajout:', error);
-      this.showError('Erreur lors de l\'ajout');
-    }
+  const category = prompt('Choisir une catégorie:\n1. Déclarations\n2. Règlements\n3. Mails simples', '1');
+  const categories = { '1': 'Déclarations', '2': 'Règlements', '3': 'Mails simples' };
+  const selectedCategory = categories[category];
+  if (!selectedCategory) return;
+  // Utiliser l'IPC Electron (serveur Express supprimé)
+  await this.addFolderToMonitoring(node.fullPath, selectedCategory);
   }
 
   filterFolders() {

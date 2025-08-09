@@ -17,10 +17,6 @@ const corrections = [
     {
         file: 'src/services/databaseService.js',
         description: 'Supprimer les références à sender_name'
-    },
-    {
-        file: 'src/server/graphOutlookConnector.js',
-        description: 'Utiliser sender_email au lieu de sender_name'
     }
 ];
 

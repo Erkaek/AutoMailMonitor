@@ -43,7 +43,7 @@ class UnifiedMonitoringService extends EventEmitter {
         // Configuration
         this.config = {
             syncBatchSize: 50, // Réduction pour plus de réactivité
-            enableDetailedLogging: true,
+            enableDetailedLogging: process.env.NODE_ENV !== 'production',
             autoStartMonitoring: true, // Démarrage automatique du monitoring
             skipInitialSync: false, // CRITIQUE: Sync PowerShell complète au démarrage
             useComEvents: true, // Utiliser les événements COM au lieu du polling
@@ -192,19 +192,24 @@ class UnifiedMonitoringService extends EventEmitter {
                     (folder.folder_name !== 'folderCategories') &&
                     folder.category // S'assurer qu'une catégorie est définie
                 ).map(folder => {
-                    console.log(`🔍 DEBUG MAP - Raw folder:`, folder);
-                    console.log(`  folder_path: "${folder.folder_path}"`);
-                    console.log(`  folder_name: "${folder.folder_name}"`);
-                    console.log(`  path: "${folder.path}"`);
+                    // Debug réduit: afficher seulement l'essentiel et éviter undefined
+                    if (this.config.enableDetailedLogging) {
+                        const dbgFolderPath = folder.folder_path || folder.path || folder.folder_name || '';
+                        const dbgFolderName = folder.folder_name || folder.name || '';
+                        console.log('🔍 DEBUG MAP - Raw folder:', { folder_path: dbgFolderPath, folder_name: dbgFolderName });
+                    }
                     
+                    const resolvedPath = (folder.folder_path || folder.path || folder.folder_name || '').replace(/\\/g, '\\');
                     const mapped = {
-                        path: folder.folder_path || folder.folder_name || folder.path,
+                        path: resolvedPath,
                         category: folder.category,
-                        name: folder.folder_name || folder.name,
+                        name: folder.folder_name || folder.name || resolvedPath.split('\\').pop() || '',
                         enabled: true
                     };
-                    
-                    console.log(`🎯 DEBUG MAP - Mapped:`, mapped);
+                    // Debug réduit
+                    if (this.config.enableDetailedLogging) {
+                        console.log('🎯 DEBUG MAP - Mapped:', { path: mapped.path, category: mapped.category, name: mapped.name });
+                    }
                     return mapped;
                 });
             } else {

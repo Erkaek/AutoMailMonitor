@@ -538,6 +538,114 @@ class MailMonitor {
     // Paramètres
     document.getElementById('settings-form')?.addEventListener('submit', (e) => this.saveSettings(e));
     document.getElementById('reset-settings')?.addEventListener('click', () => this.resetSettings());
+
+    // Import Activité (.xlsb)
+    const pickBtn = document.getElementById('btn-pick-xlsb');
+    const previewBtn = document.getElementById('btn-preview-xlsb');
+    const importBtn = document.getElementById('btn-import-xlsb');
+    const pathInput = document.getElementById('xlsb-path');
+    const previewSection = document.getElementById('preview-section');
+    const previewBody = document.getElementById('preview-body');
+    const previewSummary = document.getElementById('preview-summary');
+    const importProgress = document.getElementById('import-progress');
+    const importStatus = document.getElementById('import-status');
+    const importLogs = document.getElementById('import-logs');
+
+    // Helper: enable/disable buttons
+    const setButtonsDisabled = (disabled) => {
+      if (previewBtn) previewBtn.disabled = disabled;
+      if (importBtn) importBtn.disabled = disabled;
+      if (pickBtn) pickBtn.disabled = disabled;
+    };
+
+    // Helper: render preview rows
+    const renderPreview = (rows) => {
+      if (!previewBody) return;
+      if (!rows || rows.length === 0) {
+        previewBody.innerHTML = `<tr><td colspan="9" class="text-center text-muted">Aucune donnée détectée</td></tr>`;
+        return;
+      }
+      const fmt = new Intl.NumberFormat('fr-FR');
+      const html = rows.map(r => {
+        const d = r.week_start_date ? new Date(r.week_start_date) : null;
+        const dStr = d ? d.toLocaleDateString('fr-FR') : '';
+        return `<tr>
+          <td>${r.year}</td>
+          <td>${r.week_number}</td>
+          <td>${dStr}</td>
+          <td>${r.category}</td>
+          <td class="text-end">${fmt.format(r.recu || 0)}</td>
+          <td class="text-end">${fmt.format(r.traite || 0)}</td>
+          <td class="text-end">${fmt.format(r.traite_adg || 0)}</td>
+          <td class="text-end">${fmt.format(r.stock_debut || 0)}</td>
+          <td class="text-end">${fmt.format(r.stock_fin || 0)}</td>
+        </tr>`;
+      }).join('');
+      previewBody.innerHTML = html;
+    };
+
+    pickBtn?.addEventListener('click', async () => {
+      try {
+        const filePath = await window.electronAPI.openXlsbFile();
+        if (filePath && pathInput) {
+          pathInput.value = filePath;
+          previewSection?.classList.add('d-none');
+          importProgress?.classList.add('d-none');
+        }
+      } catch (error) {
+        this.showNotification('Erreur', `Sélection du fichier: ${error.message}`, 'danger');
+      }
+    });
+
+    previewBtn?.addEventListener('click', async () => {
+      try {
+        const filePath = pathInput?.value?.trim();
+        if (!filePath) {
+          this.showNotification('Fichier requis', 'Choisissez un fichier .xlsb', 'warning');
+          return;
+        }
+        setButtonsDisabled(true);
+        previewSection?.classList.remove('d-none');
+        previewSummary && (previewSummary.textContent = 'Analyse en cours...');
+        renderPreview([]);
+        const res = await window.electronAPI.importActivityPreview(filePath, undefined);
+        if (res?.error) throw new Error(res.error);
+        renderPreview(res.preview || []);
+        if (previewSummary) {
+          const count = res?.count || 0;
+          const skipped = (res?.skippedWeeks && res.skippedWeeks.length) ? res.skippedWeeks.length : 0;
+          previewSummary.textContent = `Année ${res?.year || ''} • ${count} lignes pré-calculées • ${skipped} semaine(s) ignorée(s)`;
+        }
+      } catch (error) {
+        this.showNotification('Erreur', `Aperçu import: ${error.message}`, 'danger');
+      } finally {
+        setButtonsDisabled(false);
+      }
+    });
+
+    importBtn?.addEventListener('click', async () => {
+      try {
+        const filePath = pathInput?.value?.trim();
+        if (!filePath) {
+          this.showNotification('Fichier requis', 'Choisissez un fichier .xlsb', 'warning');
+          return;
+        }
+        setButtonsDisabled(true);
+        importProgress?.classList.remove('d-none');
+        if (importStatus) importStatus.textContent = 'Import en cours...';
+        if (importLogs) importLogs.textContent = '';
+        const res = await window.electronAPI.importActivityRun(filePath, undefined, false);
+        if (res?.error) throw new Error(res.error);
+        if (importStatus) importStatus.textContent = `Import terminé: ${res.inserted || 0} ligne(s) insérées • ${res.skippedWeeks?.length || 0} semaine(s) ignorée(s)`;
+        if (importLogs) importLogs.textContent = `Année: ${res.year || ''}${res.csvPath ? ` • CSV: ${res.csvPath}` : ''}`;
+        this.showNotification('Import terminé', 'Les données hebdomadaires ont été enregistrées', 'success');
+      } catch (error) {
+        if (importStatus) importStatus.textContent = 'Erreur lors de l\'import';
+        this.showNotification('Erreur', `Import: ${error.message}`, 'danger');
+      } finally {
+        setButtonsDisabled(false);
+      }
+    });
   }
 
   // === CHARGEMENT DES DONNÉES ===

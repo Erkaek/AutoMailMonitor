@@ -121,6 +121,8 @@ class OptimizedDatabaseService {
             )
         `);
 
+    // (activity_weekly supprimé)
+
         // Index optimisés pour les requêtes fréquentes
         this.db.exec(`
             CREATE INDEX IF NOT EXISTS idx_emails_outlook_id ON emails(outlook_id);
@@ -197,6 +199,28 @@ class OptimizedDatabaseService {
             `)
         };
 
+    // (activity_weekly statements supprimés)
+
+        // Statements weekly_stats (upsert direct)
+        this.statements.upsertWeeklyStats = this.db.prepare(`
+            INSERT INTO weekly_stats (
+                week_identifier, week_number, week_year, week_start_date, week_end_date,
+                folder_type, emails_received, emails_treated, manual_adjustments, updated_at, created_at
+            ) VALUES (
+                @week_identifier, @week_number, @week_year, @week_start_date, @week_end_date,
+                @folder_type, @emails_received, @emails_treated, @manual_adjustments, CURRENT_TIMESTAMP, COALESCE(@created_at, CURRENT_TIMESTAMP)
+            )
+            ON CONFLICT(week_identifier, folder_type) DO UPDATE SET
+                week_number=excluded.week_number,
+                week_year=excluded.week_year,
+                week_start_date=excluded.week_start_date,
+                week_end_date=excluded.week_end_date,
+                emails_received=excluded.emails_received,
+                emails_treated=excluded.emails_treated,
+                manual_adjustments=excluded.manual_adjustments,
+                updated_at=CURRENT_TIMESTAMP
+        `);
+
         console.log('⚡ Prepared statements créés pour performance maximale (compatible)');
     }
 
@@ -226,6 +250,25 @@ class OptimizedDatabaseService {
         this.stats.avgQueryTime = (this.stats.avgQueryTime + queryTime) / 2;
         
         return result;
+    }
+
+    // (méthodes activity_weekly supprimées)
+
+    // ==================== WEEKLY_STATS (Import XLSB) ====================
+    upsertWeeklyStats(row) {
+        try {
+            return this.statements.upsertWeeklyStats.run(row);
+        } catch (error) {
+            console.error('❌ [DB] Erreur upsert weekly_stats:', error);
+            throw error;
+        }
+    }
+
+    upsertWeeklyStatsBatch(rows) {
+        const tx = this.db.transaction((items) => {
+            for (const r of items) this.statements.upsertWeeklyStats.run(r);
+        });
+        return tx(rows);
     }
 
     /**
@@ -591,6 +634,7 @@ class OptimizedDatabaseService {
                     emails_received INTEGER DEFAULT 0,
                     emails_treated INTEGER DEFAULT 0,
                     manual_adjustments INTEGER DEFAULT 0,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                     UNIQUE(week_identifier, folder_type)
                 )
@@ -1462,11 +1506,11 @@ class OptimizedDatabaseService {
             } else if (folderName.toLowerCase().includes('regel') || folderName.toLowerCase().includes('reglement')) {
                 return 'Règlements';
             } else {
-                return 'Mail simple';
+                return 'Mails simples';
             }
         } catch (error) {
             console.error(`❌ [MAP] Erreur mapping dossier ${folderPath}:`, error.message);
-            return 'Mail simple'; // Valeur par défaut
+            return 'Mails simples'; // Valeur par défaut
         }
     }
 
