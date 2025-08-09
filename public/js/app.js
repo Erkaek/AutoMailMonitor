@@ -309,6 +309,8 @@ class MailMonitor {
         try {
           await this.loadCurrentWeekStats();
           await this.loadWeeklyHistory();
+          // Mettre à jour aussi l'onglet Performances personnelles si utilisé
+          await this.loadPersonalPerformance();
           this.updateLastRefreshTime();
         } catch (e) {
           console.warn('⚠️ Erreur refresh weekly après event:', e);
@@ -564,6 +566,18 @@ class MailMonitor {
   // Boutons start/stop retirés: la surveillance est automatique
     document.getElementById('add-folder')?.addEventListener('click', () => this.showAddFolderModal());
     document.getElementById('refresh-folders')?.addEventListener('click', () => this.refreshFoldersDisplay());
+    // Filtres Monitoring (recherche + catégorie)
+  document.getElementById('folder-search')?.addEventListener('input', () => this.updateFolderConfigDisplay());
+  document.getElementById('category-filter')?.addEventListener('change', () => this.updateFolderConfigDisplay());
+    // Raccourcis chips
+    document.querySelectorAll('[data-filter]')?.forEach(chip => {
+      chip.addEventListener('click', () => {
+        const val = chip.getAttribute('data-filter') || '';
+        const select = document.getElementById('category-filter');
+        if (select) select.value = val;
+        this.updateFolderConfigDisplay();
+      });
+    });
     
     // Paramètres
     document.getElementById('settings-form')?.addEventListener('submit', (e) => this.saveSettings(e));
@@ -848,26 +862,27 @@ class MailMonitor {
       return;
     }
     
-    // Générer les cartes pour chaque dossier
+    // Générer les cartes pour chaque dossier avec attributs stables pour MAJ ciblées
     const foldersHtml = folders.map(folder => {
       const categoryColor = this.getCategoryColor(folder.category);
       const categoryIcon = this.getCategoryIcon(folder.category);
       const readEmails = folder.emailCount || 0;  // Tous les emails pour ce dossier
+      const domId = `folderStat-${(folder.path || folder.name || Math.random()).toString().replace(/[^a-zA-Z0-9_-]/g, '')}`;
       
       return `
         <div class="col-xl-3 col-lg-4 col-md-6">
-          <div class="folder-stat-card p-3 h-100">
+          <div class="folder-stat-card p-3 h-100" data-folder-key="${this.escapeHtml(folder.path || folder.name || '')}" id="${domId}">
             <div class="d-flex align-items-center mb-2">
               <i class="bi ${categoryIcon} ${categoryColor} fs-4 me-2"></i>
               <h6 class="mb-0 fw-semibold">${this.escapeHtml(folder.name)}</h6>
             </div>
             <div class="row g-2 text-center">
               <div class="col-6">
-                <div class="fs-4 fw-bold text-primary">${readEmails}</div>
+                <div class="fs-4 fw-bold text-primary" data-field="total">${readEmails}</div>
                 <small class="text-muted">Total</small>
               </div>
               <div class="col-6">
-                <div class="fs-4 fw-bold text-warning">0</div>
+                <div class="fs-4 fw-bold text-warning" data-field="unread">0</div>
                 <small class="text-muted">Non lus</small>
               </div>
             </div>
@@ -1308,14 +1323,20 @@ class MailMonitor {
     const stats = this.state.stats;
     
     // Mise à jour des compteurs principaux avec animation
-  this.animateCounterUpdate('total-emails', stats.totalEmails || 0);
+  if (typeof stats.totalEmails === 'number') {
+    this.animateCounterUpdate('total-emails', stats.totalEmails);
+  }
   // Aligner le comportement de "Non lus" sur "Total mails" (ajustement fluide, sans disparition)
-  this.animateCounterUpdate('emails-unread', stats.unreadTotal || 0);
-  this.animateCounterUpdate('emails-today', stats.emailsToday || 0);
+  if (typeof stats.unreadTotal === 'number') {
+    this.animateCounterUpdate('emails-unread', stats.unreadTotal);
+  }
+  if (typeof stats.emailsToday === 'number') {
+    this.animateCounterUpdate('emails-today', stats.emailsToday);
+  }
     
     // Calcul et affichage des pourcentages
-    const totalEmails = stats.totalEmails || 0;
-    const unreadEmails = stats.unreadTotal || 0;
+  const totalEmails = typeof stats.totalEmails === 'number' ? stats.totalEmails : 0;
+  const unreadEmails = typeof stats.unreadTotal === 'number' ? stats.unreadTotal : 0;
     
     if (totalEmails > 0) {
       const unreadPercentage = Math.round((unreadEmails / totalEmails) * 100);
@@ -1445,46 +1466,16 @@ class MailMonitor {
     }
   }
 
-  // Nouvelle méthode pour mettre à jour le statut de monitoring
+  // Unifié: indicateur minimal de statut (affiché seulement si actif)
   updateMonitoringStatus() {
     const statusEl = document.getElementById('monitoring-status');
-    const progressEl = document.getElementById('monitoring-progress');
-    const performanceEl = document.getElementById('monitoring-performance');
-    
     if (!statusEl) return;
-    
-    const folderCount = Object.keys(this.state.folderCategories).length;
-    
-    if (folderCount > 0 && this.state.isMonitoring) {
+    if (this.state.isMonitoring) {
+      statusEl.style.display = 'inline-flex';
       statusEl.innerHTML = `<span class="status-indicator status-connected me-1"></span>Actif`;
-      if (progressEl) {
-        progressEl.style.width = '100%';
-        progressEl.className = 'progress-bar bg-success';
-      }
-      if (performanceEl) {
-        performanceEl.textContent = 'Excellent';
-        performanceEl.className = 'fw-bold text-success';
-      }
-    } else if (folderCount > 0) {
-      statusEl.innerHTML = `<span class="status-indicator status-connecting me-1"></span>Initialisation...`;
-      if (progressEl) {
-        progressEl.style.width = '60%';
-        progressEl.className = 'progress-bar bg-warning';
-      }
-      if (performanceEl) {
-        performanceEl.textContent = 'En cours';
-        performanceEl.className = 'fw-bold text-warning';
-      }
     } else {
-      statusEl.innerHTML = `<span class="status-indicator status-disconnected me-1"></span>Arrêté`;
-      if (progressEl) {
-        progressEl.style.width = '0%';
-        progressEl.className = 'progress-bar bg-danger';
-      }
-      if (performanceEl) {
-        performanceEl.textContent = 'Arrêté';
-        performanceEl.className = 'fw-bold text-danger';
-      }
+      statusEl.style.display = 'none';
+      statusEl.innerHTML = '';
     }
   }
 
@@ -1529,14 +1520,25 @@ class MailMonitor {
     if (!container) return;
 
     const folders = Object.entries(this.state.folderCategories);
+    // Appliquer les filtres UI
+    const search = (document.getElementById('folder-search')?.value || '').toLowerCase().trim();
+    const categoryFilter = document.getElementById('category-filter')?.value || '';
+    const filtered = folders.filter(([path, config]) => {
+      const name = (config?.name || '').toLowerCase();
+      const cat = (config?.category || '').toLowerCase();
+      const pathLc = (path || '').toLowerCase();
+      const searchOk = !search || name.includes(search) || pathLc.includes(search) || cat.includes(search);
+      const categoryOk = !categoryFilter || (config?.category === categoryFilter);
+      return searchOk && categoryOk;
+    });
     
     // Mettre à jour le compteur dans l'en-tête
     const countBadge = document.getElementById('monitored-folders-count');
     if (countBadge) {
-      countBadge.textContent = folders.length;
+      countBadge.textContent = filtered.length;
     }
     
-    if (folders.length === 0) {
+  if (filtered.length === 0) {
       container.innerHTML = `
         <div class="empty-state">
           <i class="bi bi-folder-plus"></i>
@@ -1550,17 +1552,31 @@ class MailMonitor {
       return;
     }
 
-    // Générer les cartes modernes pour chaque dossier
-    const foldersHtml = folders.map(([path, config]) => {
+    // Générer les cartes modernes pour chaque dossier (structure stable)
+    const foldersHtml = filtered.map(([path, config]) => {
       const categoryClass = this.getCategoryClass(config.category);
       const categoryIcon = this.getCategoryIcon(config.category);
+      // Compteurs par dossier basés sur les emails récents (robuste)
+      const emails = Array.isArray(this.state.recentEmails) ? this.state.recentEmails : [];
+      const cfgNameLc = (config.name || '').toLowerCase();
+      const pathLc = (path || '').toLowerCase();
+      const byFolder = emails.filter(e => {
+        const eName = (e.folder_name || e.Folder || '').toLowerCase();
+        const ePath = (e.folder_path || e.FolderPath || '').toLowerCase();
+        return (eName && eName === cfgNameLc) || (ePath && (ePath === pathLc || ePath.endsWith(pathLc)));
+      });
+      const total = byFolder.length;
+      const treated = byFolder.filter(e => (e.is_treated === true) || (e.is_read === true) || e.IsRead === true).length;
+      const pending = Math.max(0, total - treated);
+      const activityPct = total > 0 ? Math.round((treated / total) * 100) : 0;
+      const safeKey = path.replace(/[^a-zA-Z0-9_-]/g, '_');
       
       return `
-        <div class="folder-card mb-3 animate-slide-up">
-          <div class="folder-header p-3">
+        <div class="folder-card mb-2 animate-slide-up" data-folder-key="${this.escapeHtml(path)}" id="monCard-${safeKey}">
+          <div class="folder-header p-2">
             <div class="d-flex justify-content-between align-items-start">
               <div class="flex-grow-1">
-                <div class="d-flex align-items-center mb-2">
+                <div class="d-flex align-items-center mb-1">
                   <i class="bi bi-folder-fill text-warning me-2 fs-5"></i>
                   <h6 class="mb-0 fw-semibold">${this.escapeHtml(config.name || 'Dossier sans nom')}</h6>
                   <span class="badge ${categoryClass} modern ms-2">
@@ -1594,34 +1610,34 @@ class MailMonitor {
               </div>
             </div>
           </div>
-          <div class="p-3 pt-0">
-            <div class="row g-3">
+          <div class="p-2 pt-0">
+            <div class="row g-2">
               <div class="col-4">
                 <div class="text-center">
-                  <div class="h6 mb-1 text-primary">0</div>
+                  <div class="h6 mb-0 text-primary" data-field="total">${total}</div>
                   <small class="text-muted">Emails</small>
                 </div>
               </div>
               <div class="col-4">
                 <div class="text-center">
-                  <div class="h6 mb-1 text-success">0</div>
+                  <div class="h6 mb-0 text-success" data-field="treated">${treated}</div>
                   <small class="text-muted">Traités</small>
                 </div>
               </div>
               <div class="col-4">
                 <div class="text-center">
-                  <div class="h6 mb-1 text-warning">0</div>
+                  <div class="h6 mb-0 text-warning" data-field="pending">${pending}</div>
                   <small class="text-muted">En attente</small>
                 </div>
               </div>
             </div>
-            <div class="mt-3">
+            <div class="mt-2">
               <div class="d-flex justify-content-between align-items-center mb-1">
                 <small class="text-muted">Activité</small>
-                <small class="text-muted">Faible</small>
+                <small class="text-muted" data-field="activity-label">${activityPct}%</small>
               </div>
-              <div class="progress" style="height: 6px;">
-                <div class="progress-bar bg-success" role="progressbar" style="width: 25%"></div>
+              <div class="progress" style="height: 4px;">
+                <div class="progress-bar bg-success" role="progressbar" data-field="activity-bar" style="width: ${activityPct}%"></div>
               </div>
             </div>
           </div>
@@ -1629,9 +1645,131 @@ class MailMonitor {
       `;
     }).join('');
 
-    container.innerHTML = `
-      <div class="folders-list">
-        ${foldersHtml}
+    // Si le conteneur est vide ou structure absente, injecter tout. Sinon, patcher in-place.
+    const hadList = container.querySelector('.folders-list');
+    if (!hadList) {
+      container.innerHTML = `<div class="folders-list">${foldersHtml}</div>`;
+    } else {
+      // Mettre à jour/ajouter/retirer cartes sans tout reconstruire pour éviter le flicker
+      const list = container.querySelector('.folders-list');
+      const existing = new Map(Array.from(list.querySelectorAll('[data-folder-key]')).map(el => [el.getAttribute('data-folder-key'), el]));
+      const currentKeys = new Set();
+
+      filtered.forEach(([path, config]) => {
+        currentKeys.add(path);
+        const el = existing.get(path);
+        // Recalcule des chiffres
+        const emails = Array.isArray(this.state.recentEmails) ? this.state.recentEmails : [];
+        const cfgNameLc = (config.name || '').toLowerCase();
+        const pathLc = (path || '').toLowerCase();
+        const byFolder = emails.filter(e => {
+          const eName = (e.folder_name || e.Folder || '').toLowerCase();
+          const ePath = (e.folder_path || e.FolderPath || '').toLowerCase();
+          return (eName && eName === cfgNameLc) || (ePath && (ePath === pathLc || ePath.endsWith(pathLc)));
+        });
+        const total = byFolder.length;
+        const treated = byFolder.filter(e => (e.is_treated === true) || (e.is_read === true) || e.IsRead === true).length;
+        const pending = Math.max(0, total - treated);
+        const activityPct = total > 0 ? Math.round((treated / total) * 100) : 0;
+
+        if (!el) {
+          // Ajouter nouvelle carte
+          list.insertAdjacentHTML('beforeend', this._renderFolderCard(path, config, { total, treated, pending, activityPct }));
+        } else {
+          // Patch in-place
+          el.querySelector('[data-field="total"]').textContent = total;
+          el.querySelector('[data-field="treated"]').textContent = treated;
+          el.querySelector('[data-field="pending"]').textContent = pending;
+          const bar = el.querySelector('[data-field="activity-bar"]');
+          if (bar) bar.style.width = `${activityPct}%`;
+          const label = el.querySelector('[data-field="activity-label"]');
+          if (label) label.textContent = `${activityPct}%`;
+        }
+      });
+
+      // Supprimer les cartes qui ne sont plus dans le filtre
+      existing.forEach((el, key) => {
+        if (!currentKeys.has(key)) el.remove();
+      });
+    }
+  }
+
+  // Helper pour générer une carte dossier (utilisé lors d'ajouts)
+  _renderFolderCard(path, config, nums) {
+    const categoryClass = this.getCategoryClass(config.category);
+    const categoryIcon = this.getCategoryIcon(config.category);
+    const safeKey = path.replace(/[^a-zA-Z0-9_-]/g, '_');
+    const { total = 0, treated = 0, pending = 0, activityPct = 0 } = nums || {};
+    return `
+      <div class="folder-card mb-2 animate-slide-up" data-folder-key="${this.escapeHtml(path)}" id="monCard-${safeKey}">
+        <div class="folder-header p-2">
+          <div class="d-flex justify-content-between align-items-start">
+            <div class="flex-grow-1">
+              <div class="d-flex align-items-center mb-1">
+                <i class="bi bi-folder-fill text-warning me-2 fs-5"></i>
+                <h6 class="mb-0 fw-semibold">${this.escapeHtml(config.name || 'Dossier sans nom')}</h6>
+                <span class="badge ${categoryClass} modern ms-2">
+                  ${categoryIcon} ${this.escapeHtml(config.category)}
+                </span>
+              </div>
+              <div class="folder-path">${this.escapeHtml(this.truncatePath(path))}</div>
+            </div>
+            <div class="dropdown">
+              <button class="btn btn-sm btn-outline-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown">
+                <i class="bi bi-three-dots"></i>
+              </button>
+              <ul class="dropdown-menu dropdown-menu-end">
+                <li>
+                  <button class="dropdown-item" onclick="app.editFolderCategory('${this.escapeHtml(path)}')">
+                    <i class="bi bi-pencil me-2"></i>Modifier la catégorie
+                  </button>
+                </li>
+                <li>
+                  <button class="dropdown-item" onclick="app.viewFolderStats('${this.escapeHtml(path)}')">
+                    <i class="bi bi-graph-up me-2"></i>Voir les statistiques
+                  </button>
+                </li>
+                <li><hr class="dropdown-divider"></li>
+                <li>
+                  <button class="dropdown-item text-danger" onclick="app.removeFolderConfig('${this.escapeHtml(path)}')">
+                    <i class="bi bi-trash me-2"></i>Supprimer
+                  </button>
+                </li>
+              </ul>
+            </div>
+          </div>
+        </div>
+        <div class="p-2 pt-0">
+          <div class="row g-2">
+            <div class="col-4">
+              <div class="text-center">
+                <div class="h6 mb-0 text-primary" data-field="total">${total}</div>
+                <small class="text-muted">Emails</small>
+              </div>
+            </div>
+            <div class="col-4">
+              <div class="text-center">
+                <div class="h6 mb-0 text-success" data-field="treated">${treated}</div>
+                <small class="text-muted">Traités</small>
+              </div>
+            </div>
+            <div class="col-4">
+              <div class="text-center">
+                <div class="h6 mb-0 text-warning" data-field="pending">${pending}</div>
+                <small class="text-muted">En attente</small>
+              </div>
+            </div>
+          </div>
+          <div class="mt-2">
+            <div class="d-flex justify-content-between align-items-center mb-1">
+              <small class="text-muted">Activité</small>
+              <small class="text-muted" data-field="activity-label">${activityPct}%</small>
+            </div>
+            <div class="progress" style="height: 4px;">
+              <div class="progress-bar bg-success" role="progressbar" data-field="activity-bar" style="width: ${activityPct}%"></div>
+            </div>
+          </div>
+        </div>
       </div>
     `;
   }
@@ -1687,6 +1825,8 @@ class MailMonitor {
         
         // Afficher les emails dans le tableau
         this.displayEmailsTable();
+  // Rafraîchir les cartes dossiers (compteurs)
+  this.updateFolderConfigDisplay();
         
         // Mettre à jour les filtres
         this.updateEmailFilters();
@@ -1696,6 +1836,7 @@ class MailMonitor {
         console.warn('⚠️ Pas d\'emails trouvés');
         this.state.recentEmails = [];
         this.showEmptyEmailsState();
+  this.updateFolderConfigDisplay();
       }
     } catch (error) {
       console.error('❌ Erreur lors du chargement des emails:', error);
@@ -2196,33 +2337,7 @@ class MailMonitor {
     }
   }
 
-  animateCounterUpdate(elementId, newValue) {
-    const element = document.getElementById(elementId);
-    if (!element) return;
-
-    const currentValue = parseInt(element.textContent) || 0;
-    if (currentValue === newValue) return;
-
-    // Animation simple de compteur
-    const duration = 500;
-    const start = performance.now();
-    const startValue = currentValue;
-    const difference = newValue - startValue;
-
-    const animate = (currentTime) => {
-      const elapsed = currentTime - start;
-      const progress = Math.min(elapsed / duration, 1);
-      const value = Math.round(startValue + (difference * progress));
-      
-      element.textContent = value;
-      
-      if (progress < 1) {
-        requestAnimationFrame(animate);
-      }
-    };
-
-    requestAnimationFrame(animate);
-  }
+  // (supprimé) animateCounterUpdate dupliqué — on utilise la version unique définie plus haut
 
   getUsageColorClass(usage) {
     if (usage >= 80) return 'bg-danger';
@@ -2233,72 +2348,16 @@ class MailMonitor {
 
   updateMonitoringStatus(isRunning) {
     const statusContainer = document.getElementById('monitoring-status');
-  // Boutons retirés
-    
-    if (statusContainer) {
-      const foldersCount = typeof this.state.foldersMonitoredCount === 'number'
-        ? this.state.foldersMonitoredCount
-        : Object.keys(this.state.folderCategories || {}).length;
-      const currentTime = new Date().toLocaleTimeString('fr-FR', { 
-        hour: '2-digit', 
-        minute: '2-digit',
-        second: '2-digit'
-      });
-      
-      if (isRunning) {
-        statusContainer.innerHTML = `
-          <div class="d-flex align-items-center justify-content-between mb-3">
-            <div class="d-flex align-items-center">
-              <div class="status-indicator status-connected me-3"></div>
-              <div>
-                <div class="fw-bold text-success">Surveillance active</div>
-                <small class="text-muted">${foldersCount} dossier(s) surveillé(s)</small>
-              </div>
-            </div>
-            <i class="bi bi-play-circle-fill fs-3 text-success"></i>
-          </div>
-          <div class="bg-success bg-opacity-10 p-2 rounded-3 mb-3">
-            <div class="d-flex justify-content-between align-items-center">
-              <small class="text-success fw-medium">
-                <i class="bi bi-clock me-1"></i>Synchronisation active
-              </small>
-              <small class="text-success">${currentTime}</small>
-            </div>
-          </div>
-        `;
-        
-        // Mettre à jour les métriques de performance
-        this.updatePerformanceMetrics(true);
-      } else {
-        statusContainer.innerHTML = `
-          <div class="d-flex align-items-center justify-content-between mb-3">
-            <div class="d-flex align-items-center">
-              <div class="status-indicator status-disconnected me-3"></div>
-              <div>
-                <div class="fw-bold text-muted">Surveillance arrêtée</div>
-                <small class="text-muted">${foldersCount} dossier(s) configuré(s)</small>
-              </div>
-            </div>
-            <i class="bi bi-pause-circle fs-3 text-muted"></i>
-          </div>
-          <div class="bg-light p-2 rounded-3 mb-3">
-            <div class="text-center">
-              <small class="text-muted">
-                <i class="bi bi-info-circle me-1"></i>La surveillance démarre automatiquement lorsque des dossiers sont configurés
-              </small>
-            </div>
-          </div>
-        `;
-        
-        // Réinitialiser les métriques de performance
-        this.updatePerformanceMetrics(false);
-      }
+    if (!statusContainer) return;
+    // Minimal inline indicator only; hide when inactive
+    if (isRunning) {
+      statusContainer.style.display = 'inline-flex';
+      statusContainer.innerHTML = `<span class="status-indicator status-connected me-1"></span><span>Actif</span>`;
+    } else {
+      statusContainer.style.display = 'none';
+      statusContainer.innerHTML = '';
     }
-    
-  // Rien à faire pour des boutons inexistants
-    
-    // Mettre à jour l'état global
-    this.state.isMonitoring = isRunning;
+    this.state.isMonitoring = !!isRunning;
   }
 
   updatePerformanceMetrics(isActive) {
@@ -2355,19 +2414,20 @@ class MailMonitor {
     // Mise à jour sécurisée des éléments (vérifier qu'ils existent)
     const safeSetContent = (id, value) => {
       const element = document.getElementById(id);
-      if (element) {
-        element.textContent = value || '--';
-      } else {
-        // Log uniquement en mode debug pour éléments manquants
-        // console.warn(`⚠️ Élément DOM manquant: ${id}`);
-      }
+      if (!element) return;
+      // Préserver les compteurs: ne jamais remplacer 0 par "--" et ne pas écraser si valeur absente
+      if (value === null || value === undefined) return;
+      element.textContent = value;
     };
     
     // Métriques quotidiennes (utiliser les vrais ID du HTML)
     const daily = vbaMetrics.daily || {};
-    safeSetContent('emails-today', daily.emailsReceived);
-  // Ne pas écraser le compteur "Non lus" du tableau de bord qui est mis à jour en temps réel
-  // safeSetContent('emails-unread', daily.emailsUnread);
+    // Mettre à jour sans réinitialiser: seulement si on a un nombre, et sans placeholder
+    if (typeof daily.emailsReceived === 'number') {
+      this.setCounterImmediate('emails-today', daily.emailsReceived);
+    }
+    // Ne pas écraser le compteur "Non lus" du tableau de bord qui est mis à jour en temps réel
+    // if (typeof daily.emailsUnread === 'number') this.setCounterImmediate('emails-unread', daily.emailsUnread);
     
     // Note: emails-sent, stock-start, stock-end n'existent pas dans le DOM
     // Utiliser les éléments existants ou ignorer ces mises à jour
@@ -2582,6 +2642,16 @@ class MailMonitor {
     e.preventDefault();
     
     try {
+      // Visibilité des onglets
+      const tabVisibility = {
+        dashboard: !!document.getElementById('tab-dashboard')?.checked,
+        emails: !!document.getElementById('tab-emails')?.checked,
+        weekly: !!document.getElementById('tab-weekly')?.checked,
+        personalPerformance: !!document.getElementById('tab-personal-performance')?.checked,
+        importActivity: !!document.getElementById('tab-import-activity')?.checked,
+        monitoring: !!document.getElementById('tab-monitoring')?.checked,
+      };
+
       // Récupérer les valeurs du formulaire
       const settings = {
         monitoring: {
@@ -2593,7 +2663,8 @@ class MailMonitor {
         ui: {
           theme: "default",
           language: "fr",
-          emailsLimit: parseInt(document.getElementById('emails-limit')?.value) || 20
+          emailsLimit: parseInt(document.getElementById('emails-limit')?.value) || 20,
+          tabs: tabVisibility
         },
         database: {
           purgeOldDataAfterDays: 365,
@@ -2610,8 +2681,10 @@ class MailMonitor {
       const result = await window.electronAPI.saveAppSettings(settings);
       
       if (result.success) {
-        this.showNotification('Paramètres sauvegardés', 'Vos préférences ont été enregistrées avec succès', 'success');
+        this.showNotification('Paramètres sauvegardés', 'Redémarrage de l’interface pour appliquer les onglets…', 'success');
         console.log('✅ Paramètres sauvegardés:', settings);
+        // Recharger l'UI pour appliquer immédiatement la nouvelle visibilité des onglets
+        setTimeout(() => { window.location.reload(); }, 400);
       } else {
         throw new Error(result.error || 'Erreur de sauvegarde');
       }
@@ -2634,7 +2707,16 @@ class MailMonitor {
           ui: {
             theme: "default",
             language: "fr",
-            emailsLimit: 20
+            emailsLimit: 20,
+            // Rétablir la visibilité par défaut: tous les onglets visibles
+            tabs: {
+              dashboard: true,
+              emails: true,
+              weekly: true,
+              personalPerformance: true,
+              importActivity: true,
+              monitoring: true
+            }
           },
           database: {
             purgeOldDataAfterDays: 365,
@@ -2651,9 +2733,10 @@ class MailMonitor {
         const result = await window.electronAPI.saveAppSettings(defaultSettings);
         
         if (result.success) {
-          // Mettre à jour le formulaire
+          // Mettre à jour le formulaire puis recharger l'UI pour appliquer immédiatement
           this.loadSettingsIntoForm(defaultSettings);
-          this.showNotification('Paramètres réinitialisés', 'Les paramètres par défaut ont été restaurés', 'info');
+          this.showNotification('Paramètres réinitialisés', 'Redémarrage de l’interface pour appliquer les valeurs par défaut…', 'info');
+          setTimeout(() => { window.location.reload(); }, 400);
         } else {
           throw new Error(result.error || 'Erreur de réinitialisation');
         }
@@ -2671,8 +2754,19 @@ class MailMonitor {
       if (result.success) {
         this.loadSettingsIntoForm(result.settings);
         console.log('📄 Paramètres chargés:', result.settings);
+        // Appliquer la visibilité des onglets au chargement
+        this.applyTabVisibility(result.settings?.ui?.tabs);
       } else {
         console.warn('⚠️ Erreur chargement paramètres, utilisation des valeurs par défaut');
+        // Valeurs par défaut: tous les onglets visibles
+        this.applyTabVisibility({
+          dashboard: true,
+          emails: true,
+          weekly: true,
+          personalPerformance: true,
+          importActivity: true,
+          monitoring: true
+        });
       }
     } catch (error) {
       console.error('❌ Erreur chargement paramètres:', error);
@@ -2698,6 +2792,22 @@ class MailMonitor {
       if (emailsLimit) {
         emailsLimit.value = settings.ui.emailsLimit || 20;
       }
+      // Visibilité des onglets
+      const tabs = settings.ui.tabs || {};
+      const setCk = (id, def=true) => { const el = document.getElementById(id); if (el) el.checked = (tabs?.[id.replace('tab-','').replace('-','')] ?? def); };
+      // Set explicit per key to avoid mapping confusion
+      const map = [
+        ['tab-dashboard','dashboard'],
+        ['tab-emails','emails'],
+        ['tab-weekly','weekly'],
+        ['tab-personal-performance','personalPerformance'],
+        ['tab-import-activity','importActivity'],
+        ['tab-monitoring','monitoring']
+      ];
+      for (const [domId, key] of map) {
+        const el = document.getElementById(domId);
+        if (el) el.checked = (tabs?.[key] !== undefined ? !!tabs[key] : true);
+      }
     }
     
     // Notifications
@@ -2707,6 +2817,40 @@ class MailMonitor {
         notificationsCheckbox.checked = settings.notifications.enableDesktopNotifications || false;
       }
     }
+  }
+
+  // Applique la visibilité des onglets (sidebar + contenu)
+  applyTabVisibility(tabs) {
+    // Defaults: show all if undefined
+    const conf = Object.assign({
+      dashboard: true,
+      emails: true,
+      weekly: true,
+      personalPerformance: true,
+      importActivity: true,
+      monitoring: true,
+    }, tabs || {});
+
+    const setVisible = (navSelector, paneSelector, visible) => {
+      const nav = document.querySelector(`.nav-pills a[data-bs-target="${navSelector}"]`);
+      if (nav) nav.parentElement.style.display = visible ? '' : 'none';
+      const pane = document.querySelector(paneSelector);
+      if (pane) pane.style.display = visible ? '' : 'none';
+      // If the active tab is hidden, switch to the first visible tab
+      const activeNav = document.querySelector('.nav-pills .nav-link.active');
+      if (activeNav && activeNav.getAttribute('data-bs-target') === navSelector && !visible) {
+        const firstVisible = Array.from(document.querySelectorAll('.nav-pills .nav-link'))
+          .find(a => a.parentElement.style.display !== 'none');
+        if (firstVisible) firstVisible.click();
+      }
+    };
+
+    setVisible('#dashboard', '#dashboard', conf.dashboard);
+    setVisible('#emails', '#emails', conf.emails);
+    setVisible('#weekly', '#weekly', conf.weekly);
+    setVisible('#personal-performance', '#personal-performance', conf.personalPerformance);
+    setVisible('#import-activity', '#import-activity', conf.importActivity);
+    setVisible('#monitoring', '#monitoring', conf.monitoring);
   }
 
   handleTabChange(target) {
@@ -2722,6 +2866,9 @@ class MailMonitor {
         break;
       case '#emails':
         this.loadRecentEmails();
+        break;
+      case '#personal-performance':
+        this.loadPersonalPerformance();
         break;
       case '#monitoring':
         // Configuration déjà chargée
@@ -3209,6 +3356,88 @@ class MailMonitor {
       }
     } catch (error) {
       console.error('Erreur lors du chargement de l\'historique:', error);
+    }
+  }
+
+  /**
+   * Charge et met à jour l'onglet "Performances personnelles"
+   */
+  async loadPersonalPerformance() {
+    try {
+      // Récupérer les 6 dernières semaines (page 1, pageSize 6)
+      const response = await window.electronAPI.invoke('api-weekly-history', { page: 1, pageSize: 6, limit: 6 });
+      if (!response?.success) return;
+
+      const weeks = Array.isArray(response.data) ? response.data : [];
+      const tableBody = document.getElementById('personal-history-body');
+      const weekTitleEl = document.getElementById('personal-week-title');
+      const arrivalsEl = document.getElementById('personal-arrivals');
+      const treatedEl = document.getElementById('personal-treated');
+      const stockEl = document.getElementById('personal-stock');
+      const trendEl = document.getElementById('personal-trend');
+
+      if (!tableBody) return;
+
+      if (weeks.length === 0) {
+        tableBody.innerHTML = '<tr><td colspan="4" class="text-center text-muted py-3">Aucune donnée</td></tr>';
+        if (trendEl) { trendEl.className = 'badge bg-secondary'; trendEl.textContent = '--'; }
+        return;
+      }
+
+      // Construire lignes et extraire S0/S-1
+      const rowsHtml = weeks.map(w => {
+        const sums = (w.categories || []).reduce((acc, c) => {
+          acc.received += Number(c.received || 0);
+          acc.treated += Number(c.treated || 0);
+          acc.stockEnd += Number(c.stockEndWeek || 0);
+          return acc;
+        }, { received: 0, treated: 0, stockEnd: 0 });
+        return {
+          display: w.weekDisplay,
+          received: sums.received,
+          treated: sums.treated,
+          stockEnd: sums.stockEnd,
+          dateRange: w.dateRange
+        };
+      });
+
+      // Rendre le tableau
+      tableBody.innerHTML = rowsHtml.map(r => `
+        <tr>
+          <td>${this.escapeHtml(r.display)}</td>
+          <td class="text-center"><span class="badge bg-primary rounded-pill">${r.received}</span></td>
+          <td class="text-center"><span class="badge bg-success rounded-pill">${r.treated}</span></td>
+          <td class="text-center"><span class="badge bg-warning rounded-pill">${r.stockEnd}</span></td>
+        </tr>
+      `).join('');
+
+      // Semaine courante = première ligne de l'historique (plus récente)
+      const current = rowsHtml[0];
+      const previous = rowsHtml[1];
+      if (weekTitleEl && current) weekTitleEl.textContent = current.display;
+      if (arrivalsEl && current) arrivalsEl.textContent = current.received;
+      if (treatedEl && current) treatedEl.textContent = current.treated;
+      if (stockEl && current) stockEl.textContent = current.stockEnd;
+
+      // Tendance vs S-1 sur le stock fin de semaine
+      if (trendEl && current && previous) {
+        const delta = current.stockEnd - previous.stockEnd;
+        if (delta > 0) {
+          trendEl.className = 'badge bg-danger';
+          trendEl.textContent = `En hausse (+${delta})`;
+        } else if (delta < 0) {
+          trendEl.className = 'badge bg-success';
+          trendEl.textContent = `En baisse (${delta})`;
+        } else {
+          trendEl.className = 'badge bg-secondary';
+          trendEl.textContent = 'Stable';
+        }
+      } else if (trendEl) {
+        trendEl.className = 'badge bg-secondary';
+        trendEl.textContent = '--';
+      }
+    } catch (e) {
+      console.warn('Erreur chargement Performances personnelles:', e);
     }
   }
 

@@ -1,0 +1,49 @@
+name: Build and Release (Windows)
+
+on:
+  push:
+    branches: [ main ]
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-release:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Prepare native deps for Electron
+        run: npx electron-builder install-app-deps
+
+      - name: Build Windows installer (NSIS)
+        run: npx electron-builder -w --publish never
+
+      - name: Create/Update GitHub Release (latest)
+        uses: ncipollo/release-action@v1
+        with:
+          tag: latest
+          name: Latest
+          makeLatest: true
+          allowUpdates: true
+          removeArtifacts: true
+          prerelease: false
+          generateReleaseNotes: true
+          artifacts: |
+            dist/*.exe
+            dist/*.yml
+            dist/*.blockmap
+          token: ${{ secrets.GITHUB_TOKEN }}

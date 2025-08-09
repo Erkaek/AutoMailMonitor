@@ -210,6 +210,104 @@
         margin-left: 0;
       }
     }
+
+    /* Scrollbars modernes (2025) */
+    :root {
+      --scrollbar-bg: #eff2f6; /* piste */
+      --scrollbar-thumb: rgba(var(--bs-primary-rgb), 0.55); /* pouce */
+      --scrollbar-thumb-hover: rgba(var(--bs-primary-rgb), 0.75);
+      --scrollbar-thumb-active: rgba(var(--bs-primary-rgb), 0.95);
+      --scrollbar-corner: transparent;
+    }
+
+    /* Éviter les décalages quand la barre apparaît (sans bande à gauche) */
+    html, body, .main-content {
+      scrollbar-gutter: stable; /* retirer both-edges qui réservait une gouttière à gauche */
+    }
+
+    /* WebKit (Chromium/Electron) */
+    *::-webkit-scrollbar {
+      width: 12px;
+      height: 12px;
+    }
+    *::-webkit-scrollbar-track {
+      background: var(--scrollbar-bg);
+      border-radius: 10px;
+    }
+    *::-webkit-scrollbar-thumb {
+      background: linear-gradient(180deg, var(--scrollbar-thumb), rgba(var(--bs-primary-rgb), 0.45));
+      border-radius: 10px;
+      border: 3px solid var(--scrollbar-bg); /* espace intérieur pour un look fin */
+      box-shadow: inset 0 0 0 1px rgba(255,255,255,0.3);
+    }
+    *::-webkit-scrollbar-thumb:hover {
+      background: linear-gradient(180deg, var(--scrollbar-thumb-hover), rgba(var(--bs-primary-rgb), 0.6));
+    }
+    *::-webkit-scrollbar-thumb:active {
+      background: linear-gradient(180deg, var(--scrollbar-thumb-active), var(--scrollbar-thumb-hover));
+    }
+    *::-webkit-scrollbar-corner {
+      background: var(--scrollbar-corner);
+    }
+
+    /* Firefox (au cas où) */
+    * {
+      scrollbar-width: thin;
+      scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-bg);
+    }
+
+    /* ---- Monitoring UI refresh (2025) ---- */
+    .card-modern {
+      border: 1px solid #e9ecef;
+      border-radius: 14px;
+      box-shadow: 0 6px 20px rgba(0,0,0,0.06);
+      overflow: hidden;
+    }
+    .btn-modern {
+      border-radius: 10px;
+      padding: 0.45rem 0.8rem;
+    }
+    .chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 10px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 600;
+      background: #f1f3f5;
+      color: #495057;
+    }
+    .chip i { font-size: 14px; }
+    .chip-success { background: #e6f4ea; color: #0f5132; }
+    .chip-info { background: #e7f1ff; color: #084298; }
+    .sticky-filter { position: sticky; top: 0; z-index: 10; }
+    #folders-tree { max-height: 60vh; overflow: auto; }
+    .category-dot { width: 10px; height: 10px; border-radius: 50%; }
+    .bg-glass { background: rgba(255,255,255,0.7); backdrop-filter: blur(10px); }
+
+    /* Cartes de dossiers modernes */
+    .folders-list { display: grid; grid-template-columns: 1fr; gap: 12px; }
+    @media (min-width: 992px) { .folders-list { grid-template-columns: 1fr; } }
+    .folder-card {
+      background: #fff;
+      border: 1px solid #e9ecef;
+      border-radius: 12px;
+      box-shadow: 0 4px 14px rgba(0,0,0,0.05);
+      overflow: hidden;
+      transition: transform 0.2s ease, box-shadow 0.2s ease;
+    }
+    .folder-card:hover { transform: translateY(-2px); box-shadow: 0 8px 24px rgba(0,0,0,0.08); }
+    .folder-header { background: linear-gradient(180deg, #ffffff 0%, #fafbfc 100%); border-bottom: 1px solid #eef1f4; }
+    .folder-path { font-size: 12px; color: #6c757d; }
+    .badge.modern { border-radius: 999px; padding: 0.25rem 0.5rem; font-weight: 600; }
+    .category-declarations { background: #e7f1ff !important; color: #084298 !important; }
+    .category-reglements { background: #fff3cd !important; color: #664d03 !important; }
+    .category-simples { background: #e9ecef !important; color: #495057 !important; }
+    .empty-state { text-align: center; padding: 2rem 1rem; color: #6c757d; }
+    .empty-state i { font-size: 2rem; color: var(--bs-primary); display:block; margin-bottom: .5rem; }
+    .animate-slide-up { animation: slideUp .25s ease; }
+    @keyframes slideUp { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
   </style>
 </head>
 <body class="bg-light">
@@ -250,33 +348,38 @@
     <hr class="border-white border-opacity-25">
     
     <ul class="nav nav-pills flex-column">
-      <li class="nav-item mb-2">
-        <a class="nav-link text-white active" href="#" data-bs-toggle="pill" data-bs-target="#dashboard">
+      <li class="nav-item mb-2" id="nav-item-dashboard">
+        <a class="nav-link text-white active" href="#" id="nav-dashboard" data-bs-toggle="pill" data-bs-target="#dashboard">
           <i class="bi bi-speedometer2 me-2"></i>Tableau de bord
         </a>
       </li>
-      <li class="nav-item mb-2">
-        <a class="nav-link text-white" href="#" data-bs-toggle="pill" data-bs-target="#emails">
+      <li class="nav-item mb-2" id="nav-item-emails">
+        <a class="nav-link text-white" href="#" id="nav-emails" data-bs-toggle="pill" data-bs-target="#emails">
           <i class="bi bi-envelope me-2"></i>Emails récents
         </a>
       </li>
-      <li class="nav-item mb-2">
-        <a class="nav-link text-white" href="#" data-bs-toggle="pill" data-bs-target="#weekly">
+      <li class="nav-item mb-2" id="nav-item-weekly">
+        <a class="nav-link text-white" href="#" id="nav-weekly" data-bs-toggle="pill" data-bs-target="#weekly">
           <i class="bi bi-calendar-week me-2"></i>Suivi hebdomadaire
         </a>
       </li>
-      <li class="nav-item mb-2">
-        <a class="nav-link text-white" href="#" data-bs-toggle="pill" data-bs-target="#import-activity">
+      <li class="nav-item mb-2" id="nav-item-personal">
+        <a class="nav-link text-white" href="#" id="nav-personal" data-bs-toggle="pill" data-bs-target="#personal-performance">
+          <i class="bi bi-person-lines-fill me-2"></i>Performances personnelles
+        </a>
+      </li>
+      <li class="nav-item mb-2" id="nav-item-import">
+        <a class="nav-link text-white" href="#" id="nav-import" data-bs-toggle="pill" data-bs-target="#import-activity">
           <i class="bi bi-file-earmark-spreadsheet me-2"></i>Import Activité (.xlsb)
         </a>
       </li>
-      <li class="nav-item mb-2">
-        <a class="nav-link text-white" href="#" data-bs-toggle="pill" data-bs-target="#monitoring">
+      <li class="nav-item mb-2" id="nav-item-monitoring">
+        <a class="nav-link text-white" href="#" id="nav-monitoring" data-bs-toggle="pill" data-bs-target="#monitoring">
           <i class="bi bi-eye me-2"></i>Monitoring
         </a>
       </li>
-      <li class="nav-item mb-2">
-        <a class="nav-link text-white" href="#" data-bs-toggle="pill" data-bs-target="#settings">
+      <li class="nav-item mb-2" id="nav-item-settings">
+        <a class="nav-link text-white" href="#" id="nav-settings" data-bs-toggle="pill" data-bs-target="#settings">
           <i class="bi bi-gear me-2"></i>Paramètres
         </a>
       </li>
@@ -310,9 +413,8 @@
         </div>
       </div>
 
-      <!-- Tab Content -->
-      <div class="tab-content">
-        
+  <!-- Tab Content -->
+  <div class="tab-content">
         <!-- Dashboard Tab -->
         <div class="tab-pane fade show active" id="dashboard">
           <!-- Métriques principales temps réel -->
@@ -848,13 +950,25 @@
                     <i class="bi bi-eye-fill me-2 text-primary"></i>
                     Surveillance des dossiers
                   </h2>
-                  <p class="text-muted mb-0">Gérez et surveillez vos dossiers Outlook en temps réel</p>
+                  <div class="d-flex align-items-center gap-2">
+                    <p class="text-muted mb-0">Gérez et surveillez vos dossiers Outlook en temps réel</p>
+                    <span class="chip chip-success" title="Le monitoring démarre automatiquement">
+                      <i class="bi bi-lightning-charge-fill"></i> Auto
+                    </span>
+                    <span class="chip chip-info" title="Flux d'événements en direct">
+                      <i class="bi bi-broadcast"></i> Temps réel
+                    </span>
+                    <span id="monitoring-status" class="d-inline-flex align-items-center small ms-1">
+                      <span class="status-indicator status-connecting me-1"></span>
+                      <span>Initialisation…</span>
+                    </span>
+                  </div>
                 </div>
                 <div class="d-flex gap-2">
-                  <button class="btn btn-outline-primary btn-sm" id="refresh-folders">
+                  <button class="btn btn-outline-primary btn-sm btn-modern" id="refresh-folders">
                     <i class="bi bi-arrow-clockwise me-1"></i>Actualiser
                   </button>
-                  <button class="btn btn-primary btn-sm" id="add-folder">
+                  <button class="btn btn-primary btn-sm btn-modern" id="add-folder">
                     <i class="bi bi-plus-circle me-1"></i>Ajouter un dossier
                   </button>
                 </div>
@@ -863,7 +977,7 @@
 
             <!-- Gestion des dossiers monitorés -->
             <div class="col-lg-8">
-              <div class="card border-0 shadow-sm">
+              <div class="card border-0 shadow-sm card-modern">
                 <div class="card-header bg-gradient" style="background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);">
                   <div class="row align-items-center">
                     <div class="col">
@@ -879,7 +993,7 @@
                 </div>
                 <div class="card-body p-0">
                   <!-- Barre de filtres moderne -->
-                  <div class="p-3 border-bottom bg-light">
+                  <div class="p-3 border-bottom bg-light sticky-filter">
                     <div class="row g-3">
                       <div class="col-md-6">
                         <div class="input-group">
@@ -889,6 +1003,7 @@
                           <input type="text" class="form-control border-start-0" id="folder-search" 
                                  placeholder="Rechercher un dossier..." style="border-left: none !important;">
                         </div>
+                        <small class="text-muted">Recherche par nom, chemin ou alias</small>
                       </div>
                       <div class="col-md-6">
                         <select class="form-select" id="category-filter">
@@ -898,6 +1013,13 @@
                           <option value="Mails simples">📧 Mails simples</option>
                         </select>
                       </div>
+                    </div>
+                    <!-- Raccourcis de filtres (non bloquants) -->
+                    <div class="mt-2 d-flex flex-wrap gap-2">
+                      <span class="chip" data-filter=""><i class="bi bi-ui-checks"></i> Tous</span>
+                      <span class="chip" data-filter="Déclarations">📋 Déclarations</span>
+                      <span class="chip" data-filter="Règlements">💰 Règlements</span>
+                      <span class="chip" data-filter="Mails simples">📧 Simples</span>
                     </div>
                   </div>
                   
@@ -918,9 +1040,8 @@
 
             <!-- Panneau de contrôle retiré -->
             <div class="col-lg-4">
-              
               <!-- Statistiques modernes -->
-              <div class="card border-0 shadow-sm">
+              <div class="card border-0 shadow-sm card-modern">
                 <div class="card-header bg-gradient" style="background: linear-gradient(135deg, #6f42c1 0%, #8b5cf6 100%); color: white;">
                   <h5 class="mb-0 fw-semibold">
                     <i class="bi bi-graph-up me-2"></i>Statistiques en temps réel
@@ -982,6 +1103,80 @@
                         <div class="progress-bar bg-gradient" role="progressbar" style="width: 0%; background: linear-gradient(90deg, #0d6efd, #6610f2);" id="system-progress"></div>
                       </div>
                     </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Performances personnelles Tab -->
+        <div class="tab-pane fade" id="personal-performance">
+          <div class="row g-4 mb-3">
+            <div class="col-12 d-flex justify-content-between align-items-center">
+              <div>
+                <h2 class="h4 mb-1 fw-bold"><i class="bi bi-person-check me-2 text-primary"></i>Performances personnelles</h2>
+                <p class="text-muted mb-0">KPIs basés sur vos statistiques hebdomadaires (ISO 8601)</p>
+              </div>
+              <div class="text-end">
+                <small class="text-muted">Semaine</small>
+                <div class="fw-bold" id="personal-week-title">S-- - ----</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- KPIs principaux -->
+          <div class="row g-3 mb-4">
+            <div class="col-md-4">
+              <div class="card border-0 shadow-sm h-100">
+                <div class="card-body text-center">
+                  <div class="text-muted mb-1">Reçus (totaux)</div>
+                  <div class="display-6 text-primary fw-bold" id="personal-arrivals">--</div>
+                </div>
+              </div>
+            </div>
+            <div class="col-md-4">
+              <div class="card border-0 shadow-sm h-100">
+                <div class="card-body text-center">
+                  <div class="text-muted mb-1">Traités</div>
+                  <div class="display-6 text-success fw-bold" id="personal-treated">--</div>
+                </div>
+              </div>
+            </div>
+            <div class="col-md-4">
+              <div class="card border-0 shadow-sm h-100">
+                <div class="card-body text-center">
+                  <div class="text-muted mb-1">Stock fin de semaine</div>
+                  <div class="display-6 text-warning fw-bold" id="personal-stock">--</div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Tendance vs S-1 -->
+          <div class="row g-3 mb-4">
+            <div class="col-12">
+              <div class="card border-0 shadow-sm">
+                <div class="card-header bg-light d-flex justify-content-between align-items-center">
+                  <h6 class="mb-0 fw-semibold"><i class="bi bi-graph-up me-2"></i>Tendance vs S-1</h6>
+                  <span id="personal-trend" class="badge bg-secondary">--</span>
+                </div>
+                <div class="card-body">
+                  <div class="small text-muted mb-2">Synthèse des 6 dernières semaines</div>
+                  <div class="table-responsive">
+                    <table class="table table-sm align-middle mb-0">
+                      <thead class="table-light">
+                        <tr>
+                          <th>Semaine</th>
+                          <th class="text-center">Reçus</th>
+                          <th class="text-center">Traités</th>
+                          <th class="text-center">Stock fin</th>
+                        </tr>
+                      </thead>
+                      <tbody id="personal-history-body">
+                        <tr><td colspan="4" class="text-center text-muted py-3">Chargement...</td></tr>
+                      </tbody>
+                    </table>
                   </div>
                 </div>
               </div>
@@ -1067,6 +1262,51 @@
                   </div>
                   <!-- Contrôle auto-start retiré: le monitoring est automatique par conception -->
                   <!-- Option avancée masquée: le moteur gère les statuts automatiquement -->
+                </div>
+                <hr>
+                <div class="row g-3">
+                  <div class="col-12">
+                    <label class="form-label fw-semibold">Visibilité des onglets</label>
+                    <div class="row">
+                      <div class="col-md-4">
+                        <div class="form-check">
+                          <input class="form-check-input" type="checkbox" id="tab-dashboard" checked>
+                          <label class="form-check-label" for="tab-dashboard">Tableau de bord</label>
+                        </div>
+                      </div>
+                      <div class="col-md-4">
+                        <div class="form-check">
+                          <input class="form-check-input" type="checkbox" id="tab-emails" checked>
+                          <label class="form-check-label" for="tab-emails">Emails récents</label>
+                        </div>
+                      </div>
+                      <div class="col-md-4">
+                        <div class="form-check">
+                          <input class="form-check-input" type="checkbox" id="tab-weekly" checked>
+                          <label class="form-check-label" for="tab-weekly">Suivi hebdomadaire</label>
+                        </div>
+                      </div>
+                      <div class="col-md-4">
+                        <div class="form-check">
+                          <input class="form-check-input" type="checkbox" id="tab-personal-performance" checked>
+                          <label class="form-check-label" for="tab-personal-performance">Performances personnelles</label>
+                        </div>
+                      </div>
+                      <div class="col-md-4">
+                        <div class="form-check">
+                          <input class="form-check-input" type="checkbox" id="tab-import-activity" checked>
+                          <label class="form-check-label" for="tab-import-activity">Import Activité</label>
+                        </div>
+                      </div>
+                      <div class="col-md-4">
+                        <div class="form-check">
+                          <input class="form-check-input" type="checkbox" id="tab-monitoring" checked>
+                          <label class="form-check-label" for="tab-monitoring">Monitoring</label>
+                        </div>
+                      </div>
+                    </div>
+                    <small class="text-muted d-block mt-1">Astuce: l'onglet Paramètres reste toujours visible.</small>
+                  </div>
                 </div>
                 <hr>
                 <div class="d-flex gap-2">

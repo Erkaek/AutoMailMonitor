@@ -552,30 +552,47 @@ class OptimizedDatabaseService {
      */
     loadAppSettings() {
         const cacheKey = 'app_settings';
-        let settings = this.cache.get(cacheKey);
-        
-        if (!settings) {
-            try {
-                const rows = this.db.prepare('SELECT key, value FROM app_settings').all();
-                settings = {};
-                rows.forEach(row => {
-                    try {
-                        settings[row.key] = JSON.parse(row.value);
-                    } catch {
-                        settings[row.key] = row.value;
-                    }
-                });
-                this.cache.set(cacheKey, settings, 300); // Cache 5 minutes
-                this.stats.cacheMisses++;
-            } catch (error) {
-                console.error('❌ Erreur loadAppSettings:', error);
-                return {};
-            }
-        } else {
+        let cached = this.cache.get(cacheKey);
+
+        if (cached) {
             this.stats.cacheHits++;
+            return cached;
         }
-        
-        return settings;
+
+        try {
+            const rows = this.db.prepare('SELECT key, value FROM app_settings').all();
+            // Construire un objet à partir des clés plates "section.sousCle"
+            const flat = {};
+            rows.forEach(row => {
+                try {
+                    flat[row.key] = JSON.parse(row.value);
+                } catch {
+                    flat[row.key] = row.value;
+                }
+            });
+
+            const nested = {};
+            for (const [key, value] of Object.entries(flat)) {
+                const parts = key.split('.');
+                let cur = nested;
+                for (let i = 0; i < parts.length; i++) {
+                    const p = parts[i];
+                    if (i === parts.length - 1) {
+                        cur[p] = value;
+                    } else {
+                        cur[p] = cur[p] || {};
+                        cur = cur[p];
+                    }
+                }
+            }
+
+            this.cache.set(cacheKey, nested, 300); // Cache 5 minutes
+            this.stats.cacheMisses++;
+            return nested;
+        } catch (error) {
+            console.error('❌ Erreur loadAppSettings:', error);
+            return {};
+        }
     }
 
     /**
@@ -1812,15 +1829,39 @@ class OptimizedDatabaseService {
 
     setAppSetting(key, value) {
         try {
+            const storedValue = (value !== null && typeof value === 'object') ? JSON.stringify(value) : value;
             const stmt = this.db.prepare(`
                 INSERT OR REPLACE INTO app_settings (key, value, updated_at) 
                 VALUES (?, ?, CURRENT_TIMESTAMP)
             `);
-            const result = stmt.run(key, value);
+            const result = stmt.run(key, storedValue);
+            // Invalider le cache des paramètres après écriture
+            this.cache.del && this.cache.del('app_settings');
             console.log(`⚙️ [SETTINGS] Paramètre sauvegardé: ${key} = ${value}`);
             return result.changes > 0;
         } catch (error) {
             console.error(`❌ [SETTINGS] Erreur sauvegarde paramètre ${key}:`, error);
+            return false;
+        }
+    }
+
+    /**
+     * Compat: utilisé par l'IPC 'api-app-settings-save'
+     */
+    saveAppConfig(key, value) {
+        try {
+            const storedValue = (value !== null && typeof value === 'object') ? JSON.stringify(value) : value;
+            const stmt = this.db.prepare(`
+                INSERT OR REPLACE INTO app_settings (key, value, updated_at)
+                VALUES (?, ?, CURRENT_TIMESTAMP)
+            `);
+            stmt.run(key, storedValue);
+            // Invalider le cache pour refléter immédiatement les changements
+            this.cache.del && this.cache.del('app_settings');
+            console.log(`📝 [SETTINGS] Config sauvegardée: ${key}`);
+            return true;
+        } catch (error) {
+            console.error(`❌ [SETTINGS] Erreur saveAppConfig(${key}):`, error);
             return false;
         }
     }
