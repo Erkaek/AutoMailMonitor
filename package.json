@@ -5,14 +5,7 @@
   "main": "src/main/index.js",
   "scripts": {
   "start": "npx electron .",
-    "dev": "set NODE_ENV=development && npx electron .",
-    "build": "electron-builder",
-    "build-win": "electron-builder --win",
-    "build-exe": "node scripts/build-exe.js",
-  "rebuild": "node scripts/build-native.js",
-  "fix-sqlite": "node scripts/build-native.js",
-  "import-activity": "node src/cli/import-activity.js",
-  "db:weekly": "node scripts/show-weekly-stats.js"
+  "import-activity": "node src/cli/import-activity.js"
   },
   "keywords": [
     "electron",
