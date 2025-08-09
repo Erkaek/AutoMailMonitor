@@ -776,7 +776,7 @@ ipcMain.handle('api-folders-update-category', async (event, { folderPath, catego
       throw new Error('Chemin du dossier et catégorie requis');
     }
 
-    const databaseService = require('../services/databaseService');
+    const databaseService = require('../services/optimizedDatabaseService');
     await databaseService.initialize();
 
     // Mettre à jour directement en base de données
@@ -821,7 +821,7 @@ ipcMain.handle('api-folders-remove', async (event, { folderPath }) => {
       throw new Error('Chemin du dossier requis');
     }
 
-    const databaseService = require('../services/databaseService');
+  const databaseService = require('../services/optimizedDatabaseService');
     await databaseService.initialize();
 
     // Supprimer le dossier de la configuration en base de données
