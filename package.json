@@ -6,7 +6,8 @@
   "scripts": {
   "start": "npx electron .",
   "import-activity": "node src/cli/import-activity.js",
-  "test:carry": "set ELECTRON_RUN_AS_NODE=1&& npx electron scripts/test-carry-over.js"
+  "test:carry": "set ELECTRON_RUN_AS_NODE=1&& npx electron scripts/test-carry-over.js",
+  "postinstall": "electron-builder install-app-deps"
   },
   "keywords": [
     "electron",
@@ -23,13 +24,12 @@
   "copyright": "Copyright (c) 2025 Tanguy Raingeard. Tous droits réservés.",
   "dependencies": {
     "better-sqlite3": "^12.2.0",
-    "electron": "^37.2.5",
   "xlsx": "^0.18.5",
     "node-cache": "^5.1.2"
   },
   "devDependencies": {
-  "electron-builder": "^25.1.8",
-  "electron-rebuild": "^3.2.9"
+  "electron": "^37.2.5",
+  "electron-builder": "^25.1.8"
   },
   "build": {
     "appId": "com.tanguy.mailmonitor",
