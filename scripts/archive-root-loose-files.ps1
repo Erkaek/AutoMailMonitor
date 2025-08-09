@@ -6,7 +6,9 @@ Param(
 $ErrorActionPreference = "Stop"
 
 $ts = Get-Date -Format "yyyyMMdd-HHmmss"
-$dest = Join-Path -Path (Resolve-Path ".") -ChildPath "archives/loose-$ts"
+$scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+$repoRoot = Split-Path -Parent $scriptDir
+$dest = Join-Path -Path $repoRoot -ChildPath "archives/loose-$ts"
 New-Item -ItemType Directory -Path $dest -Force | Out-Null
 
 # Allowlist of files to keep at root
@@ -17,8 +19,7 @@ $keep = @(
 )
 
 # Only consider files in root
-$root = Resolve-Path "."
-$files = Get-ChildItem -Path $root -File
+$files = Get-ChildItem -Path $repoRoot -File
 
 $moved = 0
 foreach ($f in $files) {

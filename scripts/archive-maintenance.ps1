@@ -54,7 +54,8 @@ $filesToArchive = @(
     "start.bat"
 )
 
-$repoRoot = Resolve-Path "."
+$scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+$repoRoot = Split-Path -Parent $scriptDir
 $destDir = New-ArchiveFolder
 
 $moved = 0
