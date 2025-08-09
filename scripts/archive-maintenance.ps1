@@ -48,6 +48,8 @@ $filesToArchive = @(
     "debug-weekly-stats.js",
     "explore-database.js",
     "explore-exact-structure.ps1",
+    "inspect-database.js",
+    "inspect-db-structure.js",
     # misc convenience
     "start.bat"
 )

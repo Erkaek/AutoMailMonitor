@@ -12,7 +12,10 @@
   "rebuild": "node scripts/build-native.js",
   "fix-sqlite": "node scripts/build-native.js",
   "import-activity": "node src/cli/import-activity.js",
-  "db:weekly": "node scripts/show-weekly-stats.js"
+  "db:weekly": "node scripts/show-weekly-stats.js",
+  "archive:tests": "powershell -ExecutionPolicy Bypass -File scripts/archive-tests.ps1",
+  "archive:maintenance": "powershell -ExecutionPolicy Bypass -File scripts/archive-maintenance.ps1",
+  "restore:tests": "powershell -ExecutionPolicy Bypass -File scripts/restore-archived-tests.ps1"
   },
   "keywords": [
     "electron",
