@@ -5,7 +5,8 @@
   "main": "src/main/index.js",
   "scripts": {
   "start": "npx electron .",
-  "import-activity": "node src/cli/import-activity.js"
+  "import-activity": "node src/cli/import-activity.js",
+  "test:carry": "set ELECTRON_RUN_AS_NODE=1&& npx electron scripts/test-carry-over.js"
   },
   "keywords": [
     "electron",

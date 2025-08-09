@@ -46,8 +46,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getFolderStats: () => ipcRenderer.invoke('api-database-folder-stats'),
   
   // APIs de monitoring
-  startMonitoring: () => ipcRenderer.invoke('api-monitoring-start'),
-  stopMonitoring: () => ipcRenderer.invoke('api-monitoring-stop'),
+  // start/stop manuels retirés de l'UI; on conserve uniquement la lecture du statut
   getMonitoringStatus: () => ipcRenderer.invoke('api-monitoring-status'),
   
   // Listeners pour les événements du processus principal
@@ -59,12 +58,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onEmailUpdate: (callback) => ipcRenderer.on('email-update', (event, ...args) => callback(...args)),
   onNewEmail: (callback) => ipcRenderer.on('new-email', (event, ...args) => callback(...args)),
   onMonitoringCycleComplete: (callback) => ipcRenderer.on('monitoring-cycle-complete', (event, ...args) => callback(...args)),
+  onMonitoringStatus: (callback) => ipcRenderer.on('monitoring-status', (event, ...args) => callback(...args)),
   
   // NOUVEAU: Événements COM Outlook temps réel
   onCOMListeningStarted: (callback) => ipcRenderer.on('com-listening-started', (event, ...args) => callback(...args)),
   onCOMListeningFailed: (callback) => ipcRenderer.on('com-listening-failed', (event, ...args) => callback(...args)),
   onRealtimeEmailUpdate: (callback) => ipcRenderer.on('realtime-email-update', (event, ...args) => callback(...args)),
   onRealtimeNewEmail: (callback) => ipcRenderer.on('realtime-new-email', (event, ...args) => callback(...args)),
+  // Événement de mise à jour des stats hebdo (import, ajustements)
+  onWeeklyStatsUpdated: (callback) => ipcRenderer.on('weekly-stats-updated', (event, ...args) => callback(...args)),
   
   // Loading events - pour la page de chargement
   onLoadingProgress: (callback) => ipcRenderer.on('loading-progress', (event, ...args) => callback(...args)),

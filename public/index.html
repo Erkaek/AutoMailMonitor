@@ -14,9 +14,9 @@
       --titlebar-height: 40px;
     }
     
-    /* Barre de titre personnalisée - MASQUÉE (utilisation barre Windows native) */
+    /* Barre de titre personnalisée - AFFICHÉE (fenêtre sans cadre) */
     .custom-titlebar {
-      display: none; /* Masquer la barre de titre personnalisée */
+      display: flex; /* Afficher et utiliser pour le drag */
       height: var(--titlebar-height);
       background: linear-gradient(90deg, var(--bs-primary) 0%, rgba(13, 110, 253, 0.9) 100%);
       align-items: center;
@@ -75,15 +75,15 @@
     
     .sidebar {
       width: var(--sidebar-width);
-      min-height: 100vh;
+      min-height: calc(100vh - var(--titlebar-height));
       background: linear-gradient(180deg, var(--bs-primary) 0%, rgba(13, 110, 253, 0.8) 100%);
-      margin-top: 0; /* Supprimé pour barre Windows native */
+      margin-top: var(--titlebar-height);
     }
     
     .main-content {
       margin-left: var(--sidebar-width);
-      margin-top: 0; /* Supprimé pour barre Windows native */
-      min-height: 100vh; /* Hauteur complète pour barre Windows native */
+      margin-top: var(--titlebar-height);
+      min-height: calc(100vh - var(--titlebar-height));
     }
     
     .nav-link.active {
@@ -214,8 +214,8 @@
 </head>
 <body class="bg-light">
   
-  <!-- Barre de titre personnalisée - MASQUÉE pour barre Windows native -->
-  <div class="custom-titlebar" style="display: none;">
+  <!-- Barre de titre personnalisée -->
+  <div class="custom-titlebar">
     <div class="titlebar-title">
       <i class="bi bi-envelope-check"></i>
       <span>Mail Monitor - Surveillance Outlook</span>
@@ -352,10 +352,7 @@
                 <div class="card-body text-center">
                   <i class="bi bi-folder2-open text-info fs-1 mb-3"></i>
                   <h3 class="mb-2 counter-animate" id="monitored-folders">--</h3>
-                  <p class="text-muted mb-1">Dossiers surveillés</p>
-                  <small id="monitoring-status" class="text-muted">
-                    <span class="status-indicator status-connecting me-1"></span>Initialisation...
-                  </small>
+                  <p class="text-muted mb-0">Dossiers surveillés</p>
                 </div>
               </div>
             </div>
@@ -817,6 +814,23 @@
                     <h6 class="text-muted">Aucune donnée hebdomadaire</h6>
                     <p class="text-muted mb-0">Les statistiques apparaîtront dès la réception d'emails</p>
                   </div>
+
+                  <!-- Pagination Historique des semaines -->
+                  <div id="weekly-pagination" class="d-flex justify-content-between align-items-center mt-3 d-none">
+                    <div class="small text-muted">
+                      <span id="weekly-page-info">Page 1 / 1</span>
+                      <span class="ms-2">•</span>
+                      <span class="ms-2"><span id="weekly-total-weeks">0</span> semaines</span>
+                    </div>
+                    <div class="btn-group" role="group" aria-label="Pagination historique">
+                      <button type="button" class="btn btn-outline-secondary btn-sm" id="weekly-prev" disabled>
+                        <i class="bi bi-chevron-left"></i> Précédent
+                      </button>
+                      <button type="button" class="btn btn-outline-secondary btn-sm" id="weekly-next" disabled>
+                        Suivant <i class="bi bi-chevron-right"></i>
+                      </button>
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>
@@ -902,58 +916,9 @@
               </div>
             </div>
 
-            <!-- Panneau de contrôle -->
+            <!-- Panneau de contrôle retiré -->
             <div class="col-lg-4">
-              <!-- Statut du monitoring avec design moderne -->
-              <div class="card border-0 shadow-sm mb-4">
-                <div class="card-header bg-gradient" style="background: linear-gradient(135deg, #198754 0%, #20c997 100%); color: white;">
-                  <h5 class="mb-0 fw-semibold">
-                    <i class="bi bi-activity me-2"></i>Statut du système
-                  </h5>
-                </div>
-                <div class="card-body">
-                  <div id="monitoring-status">
-                    <div class="d-flex align-items-center justify-content-between mb-3">
-                      <div class="d-flex align-items-center">
-                        <div class="status-indicator status-disconnected me-3"></div>
-                        <div>
-                          <div class="fw-bold">Arrêté</div>
-                          <small class="text-muted">Aucun dossier surveillé</small>
-                        </div>
-                      </div>
-                      <i class="bi bi-pause-circle fs-3 text-muted"></i>
-                    </div>
-                  </div>
-                  
-                  <div class="d-grid gap-2 mt-3">
-                    <button class="btn btn-success btn-lg" id="start-monitoring" style="display: inline-block;">
-                      <i class="bi bi-play-fill me-2"></i>Démarrer la surveillance
-                    </button>
-                    <button class="btn btn-danger btn-lg" id="stop-monitoring" style="display: none;">
-                      <i class="bi bi-stop-fill me-2"></i>Arrêter la surveillance
-                    </button>
-                  </div>
-                  
-                  <!-- Indicateurs de performance -->
-                  <div class="mt-4 pt-3 border-top">
-                    <div class="row text-center g-3">
-                      <div class="col-6">
-                        <div class="performance-metric">
-                          <div class="h5 mb-1 text-success" id="sync-frequency">--</div>
-                          <small class="text-muted">Sync/min</small>
-                        </div>
-                      </div>
-                      <div class="col-6">
-                        <div class="performance-metric">
-                          <div class="h5 mb-1 text-info" id="last-sync">--</div>
-                          <small class="text-muted">Dernière sync</small>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
+              
               <!-- Statistiques modernes -->
               <div class="card border-0 shadow-sm">
                 <div class="card-header bg-gradient" style="background: linear-gradient(135deg, #6f42c1 0%, #8b5cf6 100%); color: white;">
@@ -1100,25 +1065,8 @@
                       <option value="100">100 emails</option>
                     </select>
                   </div>
-                  <div class="col-12">
-                    <div class="form-check">
-                      <input class="form-check-input" type="checkbox" id="auto-start-monitoring">
-                      <label class="form-check-label" for="auto-start-monitoring">
-                        Démarrer automatiquement le monitoring au lancement
-                      </label>
-                    </div>
-                  </div>
-                  <div class="col-12">
-                    <div class="form-check">
-                      <input class="form-check-input" type="checkbox" id="treat-read-as-processed">
-                      <label class="form-check-label" for="treat-read-as-processed">
-                        Considérer les emails lus comme traités
-                      </label>
-                      <div class="form-text">
-                        Si activé, les emails marqués comme lus seront comptabilisés dans les statistiques de traitement
-                      </div>
-                    </div>
-                  </div>
+                  <!-- Contrôle auto-start retiré: le monitoring est automatique par conception -->
+                  <!-- Option avancée masquée: le moteur gère les statuts automatiquement -->
                 </div>
                 <hr>
                 <div class="d-flex gap-2">

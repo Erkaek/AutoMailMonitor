@@ -1616,6 +1616,152 @@ class OptimizedDatabaseService {
     }
 
     /**
+     * NOUVEAU: Compte le nombre total de semaines distinctes dans weekly_stats
+     */
+    getWeeklyDistinctWeeksCount() {
+        try {
+            const row = this.db.prepare(`SELECT COUNT(DISTINCT week_identifier) AS total FROM weekly_stats`).get();
+            return row?.total || 0;
+        } catch (error) {
+            console.error('❌ [WEEKLY] Erreur comptage semaines distinctes:', error);
+            return 0;
+        }
+    }
+
+    /**
+     * NOUVEAU: Récupère une page d'historique hebdomadaire par semaines (pas par lignes)
+     * @param {number} page - numéro de page (1-based)
+     * @param {number} pageSize - nombre de semaines par page
+     * @returns {{ rows: any[], totalWeeks: number }}
+     */
+    getWeeklyHistoryPage(page = 1, pageSize = 5) {
+        try {
+            const totalWeeks = this.getWeeklyDistinctWeeksCount();
+            const totalPages = pageSize > 0 ? Math.max(1, Math.ceil(totalWeeks / pageSize)) : 1;
+            const safePage = Math.min(Math.max(1, page), totalPages);
+            const offset = (safePage - 1) * pageSize;
+
+            // CTE pour sélectionner les semaines de la page, puis joindre sur weekly_stats pour récupérer les 3 catégories
+            const sql = `
+                WITH weeks_page AS (
+                    SELECT week_identifier, MAX(week_year) AS week_year, MAX(week_number) AS week_number
+                    FROM weekly_stats
+                    GROUP BY week_identifier
+                    ORDER BY week_year DESC, week_number DESC
+                    LIMIT @limit OFFSET @offset
+                )
+                SELECT 
+                    ws.week_identifier,
+                    ws.week_number,
+                    ws.week_year,
+                    ws.week_start_date,
+                    ws.week_end_date,
+                    ws.folder_type,
+                    ws.emails_received,
+                    ws.emails_treated,
+                    ws.manual_adjustments,
+                    (ws.emails_received + ws.manual_adjustments) as total_received,
+                    ws.updated_at
+                FROM weekly_stats ws
+                INNER JOIN weeks_page wp ON wp.week_identifier = ws.week_identifier
+                ORDER BY wp.week_year DESC, wp.week_number DESC, ws.folder_type ASC
+            `;
+
+            const rows = this.db.prepare(sql).all({ limit: pageSize, offset });
+            return { rows, totalWeeks, page: safePage, pageSize, totalPages };
+        } catch (error) {
+            console.error('❌ [WEEKLY] Erreur récupération page historique:', error);
+            return { rows: [], totalWeeks: 0, page: 1, pageSize, totalPages: 1 };
+        }
+    }
+
+    /**
+     * Calcule le stock (carry-over) par catégorie avant une semaine donnée (exclue),
+     * en simulant semaine par semaine avec clamp à 0.
+     * @param {number} weekYear
+     * @param {number} weekNumber
+     * @returns {{declarations:number, reglements:number, mails_simples:number}}
+     */
+    getCarryBeforeWeek(weekYear, weekNumber) {
+        try {
+            const sql = `
+                SELECT week_year, week_number, folder_type,
+                       COALESCE(emails_received,0) AS emails_received,
+                       COALESCE(emails_treated,0) AS emails_treated,
+                       COALESCE(manual_adjustments,0) AS manual_adjustments
+                FROM weekly_stats
+                WHERE (week_year < @year)
+                   OR (week_year = @year AND week_number < @number)
+                ORDER BY week_year ASC, week_number ASC, folder_type ASC
+            `;
+            const rows = this.db.prepare(sql).all({ year: weekYear, number: weekNumber });
+
+            // Accumulate per week, applying clamp to 0 at each step
+            const carry = { declarations: 0, reglements: 0, mails_simples: 0 };
+            let currentKey = null;
+            let weekAgg = {
+                declarations: { rec: 0, trt: 0, adj: 0 },
+                reglements: { rec: 0, trt: 0, adj: 0 },
+                mails_simples: { rec: 0, trt: 0, adj: 0 }
+            };
+
+            const flushWeek = () => {
+                if (!currentKey) return;
+                for (const type of ['declarations', 'reglements', 'mails_simples']) {
+                    const rec = weekAgg[type].rec || 0;
+                    const treatedTotal = (weekAgg[type].trt || 0) + (weekAgg[type].adj || 0);
+                    const net = rec - treatedTotal;
+                    const next = carry[type] + net;
+                    carry[type] = next < 0 ? 0 : next;
+                }
+                // reset
+                weekAgg = {
+                    declarations: { rec: 0, trt: 0, adj: 0 },
+                    reglements: { rec: 0, trt: 0, adj: 0 },
+                    mails_simples: { rec: 0, trt: 0, adj: 0 }
+                };
+            };
+
+            // Helper: map any folder_type variant to canonical keys used in carry structure
+            const toCanonical = (ft) => {
+                if (!ft) return 'mails_simples';
+                const v = String(ft).toLowerCase();
+                // Accept both localized labels and internal identifiers
+                if (v.includes('déclar') || v.includes('declar')) return 'declarations';
+                if (v.includes('règle') || v.includes('regle') || v.includes('reglement')) return 'reglements';
+                if (v.includes('mail') || v.includes('simple')) return 'mails_simples';
+                // Fallback to raw if already canonical
+                if (v === 'declarations' || v === 'reglements' || v === 'mails_simples') return v;
+                return 'mails_simples';
+            };
+
+            for (const row of rows) {
+                const wk = `${row.week_year}-${row.week_number}`;
+                if (currentKey !== wk) {
+                    // process previous week
+                    flushWeek();
+                    currentKey = wk;
+                }
+                const type = toCanonical(row.folder_type);
+                if (!weekAgg[type]) {
+                    weekAgg[type] = { rec: 0, trt: 0, adj: 0 };
+                }
+                weekAgg[type].rec += row.emails_received || 0;
+                weekAgg[type].trt += row.emails_treated || 0;
+                weekAgg[type].adj += row.manual_adjustments || 0;
+            }
+
+            // Process the last aggregated week
+            flushWeek();
+
+            return carry;
+        } catch (error) {
+            console.error('❌ [WEEKLY] Erreur calcul carry-over:', error);
+            return { declarations: 0, reglements: 0, mails_simples: 0 };
+        }
+    }
+
+    /**
      * Sauvegarde ou met à jour un mapping de dossier personnalisé
      */
     saveFolderMapping(originalPath, mappedCategory, displayName = null) {

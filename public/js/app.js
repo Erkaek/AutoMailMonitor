@@ -20,7 +20,13 @@ class MailMonitor {
       },
       recentEmails: [],
       databaseStats: {},
-      lastUpdate: null
+      lastUpdate: null,
+      weeklyHistory: {
+        page: 1,
+  pageSize: 5,
+        totalWeeks: 0,
+        totalPages: 1
+      }
     };
     
     // Gestionnaire de chargement centralisé
@@ -32,6 +38,8 @@ class MailMonitor {
     };
     
     this.updateInterval = null;
+  // Timers for animated counters to prevent overlaps
+  this.counterTimers = new Map();
     this.charts = {};
     this.init();
   }
@@ -255,6 +263,15 @@ class MailMonitor {
       });
     }
 
+    // Écouter les changements de statut du monitoring
+    if (window.electronAPI.onMonitoringStatus) {
+      window.electronAPI.onMonitoringStatus((status) => {
+        const isActive = status?.status === 'active';
+        this.state.isMonitoring = isActive;
+        this.updateMonitoringStatus(isActive);
+      });
+    }
+
     // NOUVEAU: Écouter les événements COM Outlook
     if (window.electronAPI.onCOMListeningStarted) {
       window.electronAPI.onCOMListeningStarted((data) => {
@@ -282,6 +299,20 @@ class MailMonitor {
       window.electronAPI.onRealtimeNewEmail((emailData) => {
         console.log('📬 Nouvel email temps réel COM:', emailData);
         this.handleRealtimeNewEmail(emailData);
+      });
+    }
+    
+    // Rafraîchissement auto des stats hebdo après import/ajustements
+    if (window.electronAPI.onWeeklyStatsUpdated) {
+      window.electronAPI.onWeeklyStatsUpdated(async (payload) => {
+        console.log('📅 Événement weekly-stats-updated reçu:', payload);
+        try {
+          await this.loadCurrentWeekStats();
+          await this.loadWeeklyHistory();
+          this.updateLastRefreshTime();
+        } catch (e) {
+          console.warn('⚠️ Erreur refresh weekly après event:', e);
+        }
       });
     }
     
@@ -530,8 +561,7 @@ class MailMonitor {
     });
     
     // Monitoring
-    document.getElementById('start-monitoring')?.addEventListener('click', () => this.startMonitoring());
-    document.getElementById('stop-monitoring')?.addEventListener('click', () => this.stopMonitoring());
+  // Boutons start/stop retirés: la surveillance est automatique
     document.getElementById('add-folder')?.addEventListener('click', () => this.showAddFolderModal());
     document.getElementById('refresh-folders')?.addEventListener('click', () => this.refreshFoldersDisplay());
     
@@ -639,6 +669,15 @@ class MailMonitor {
         if (importStatus) importStatus.textContent = `Import terminé: ${res.inserted || 0} ligne(s) insérées • ${res.skippedWeeks?.length || 0} semaine(s) ignorée(s)`;
         if (importLogs) importLogs.textContent = `Année: ${res.year || ''}${res.csvPath ? ` • CSV: ${res.csvPath}` : ''}`;
         this.showNotification('Import terminé', 'Les données hebdomadaires ont été enregistrées', 'success');
+
+        // Rafraîchir automatiquement l'affichage hebdomadaire (semaine courante + historique)
+        try {
+          await this.loadCurrentWeekStats();
+          await this.loadWeeklyHistory();
+          this.updateLastRefreshTime();
+        } catch (refreshErr) {
+          console.warn('⚠️ Rafraîchissement hebdomadaire après import: ', refreshErr);
+        }
       } catch (error) {
         if (importStatus) importStatus.textContent = 'Erreur lors de l\'import';
         this.showNotification('Erreur', `Import: ${error.message}`, 'danger');
@@ -869,75 +908,30 @@ class MailMonitor {
 
   async checkMonitoringStatus() {
     try {
-      // Vérifier si des dossiers sont configurés pour le monitoring
-      const foldersData = await window.electronAPI.getFoldersTree();
-      const foldersCount = foldersData?.folders?.length || 0;
-      
-      if (foldersCount > 0) {
-        console.log(`📁 ${foldersCount} dossier(s) configuré(s) - monitoring probablement actif`);
-        
-        // Assumer que le monitoring est actif si des dossiers sont configurés
-        // (car il se démarre automatiquement au lancement)
-        this.state.isMonitoring = true;
-        this.updateMonitoringStatus(true);
-        
-        // this.showNotification(
-        //   'Monitoring automatique', 
-        //   `Le monitoring automatique est actif sur ${foldersCount} dossier(s)`, 
-        //   'info'
-        // ); // Notification supprimée
-      } else {
-        console.log('📁 Aucun dossier configuré - monitoring arrêté');
-        this.state.isMonitoring = false;
-        this.updateMonitoringStatus(false);
+      const serviceStatus = await window.electronAPI.getMonitoringStatus?.();
+      const isActive = serviceStatus?.active === true;
+      let foldersCount = typeof serviceStatus?.foldersMonitored === 'number' ? serviceStatus.foldersMonitored : 0;
+      if (foldersCount === 0 && window.electronAPI.getFoldersTree) {
+        try {
+          const foldersData = await window.electronAPI.getFoldersTree();
+          foldersCount = foldersData?.folders?.length || 0;
+        } catch (_) {}
       }
+      this.state.isMonitoring = isActive;
+      this.state.foldersMonitoredCount = foldersCount;
+      this.updateMonitoringStatus(isActive);
     } catch (error) {
       console.error('❌ Erreur vérification statut monitoring:', error);
-      this.state.isMonitoring = false;
-      this.updateMonitoringStatus(false);
+      const fallbackCount = Object.keys(this.state.folderCategories || {}).length;
+      const fallbackActive = fallbackCount > 0;
+      this.state.isMonitoring = fallbackActive;
+      this.state.foldersMonitoredCount = fallbackCount;
+      this.updateMonitoringStatus(fallbackActive);
     }
   }
 
   // === MONITORING ===
-  async startMonitoring() {
-    try {
-      console.log('🚀 Démarrage du monitoring...');
-      
-      if (Object.keys(this.state.folderCategories).length === 0) {
-        this.showNotification('Configuration requise', 'Veuillez d\'abord configurer des dossiers à surveiller', 'warning');
-        return;
-      }
-      
-      const result = await window.electronAPI.startMonitoring();
-      
-      if (result.success) {
-        this.state.isMonitoring = true;
-        this.updateMonitoringStatus(true);
-        this.showNotification('Monitoring démarré', result.message, 'success');
-        console.log('✅ Monitoring démarré avec succès');
-      } else {
-        this.showNotification('Erreur de monitoring', result.message || 'Impossible de démarrer le monitoring', 'danger');
-      }
-    } catch (error) {
-      console.error('❌ Erreur démarrage monitoring:', error);
-      this.showNotification('Erreur', error.message, 'danger');
-    }
-  }
-
-  async stopMonitoring() {
-    try {
-      console.log('🛑 Arrêt du monitoring...');
-      const result = await window.electronAPI.stopMonitoring();
-      
-      this.state.isMonitoring = false;
-      this.updateMonitoringStatus(false);
-      this.showNotification('Monitoring arrêté', result.message || 'Monitoring arrêté avec succès', 'info');
-      console.log('✅ Monitoring arrêté');
-    } catch (error) {
-      console.error('❌ Erreur arrêt monitoring:', error);
-      this.showNotification('Erreur', error.message, 'danger');
-    }
-  }
+  // Les méthodes start/stop manuelles ne sont plus nécessaires (surveillance auto)
 
   // === CONFIGURATION DES DOSSIERS ===
   async showAddFolderModal() {
@@ -1314,9 +1308,10 @@ class MailMonitor {
     const stats = this.state.stats;
     
     // Mise à jour des compteurs principaux avec animation
-    this.animateCounterUpdate('total-emails', stats.totalEmails || 0);
-    this.animateCounterUpdate('emails-unread', stats.unreadTotal || 0);
-    this.animateCounterUpdate('emails-today', stats.emailsToday || 0);
+  this.animateCounterUpdate('total-emails', stats.totalEmails || 0);
+  // Aligner le comportement de "Non lus" sur "Total mails" (ajustement fluide, sans disparition)
+  this.animateCounterUpdate('emails-unread', stats.unreadTotal || 0);
+  this.animateCounterUpdate('emails-today', stats.emailsToday || 0);
     
     // Calcul et affichage des pourcentages
     const totalEmails = stats.totalEmails || 0;
@@ -1354,29 +1349,55 @@ class MailMonitor {
     const element = document.getElementById(elementId);
     if (!element) return;
     
-    const currentValue = parseInt(element.textContent) || 0;
-    
-    if (currentValue !== newValue) {
-      element.classList.add('updating');
-      
-      // Animation de comptage
-      const duration = 500;
-      const steps = 20;
-      const increment = (newValue - currentValue) / steps;
-      let currentStep = 0;
-      
-      const counter = setInterval(() => {
-        currentStep++;
-        const value = Math.round(currentValue + (increment * currentStep));
-        element.textContent = value;
-        
-        if (currentStep >= steps) {
-          clearInterval(counter);
-          element.textContent = newValue;
-          element.classList.remove('updating');
-        }
-      }, duration / steps);
+    const parsed = parseInt((element.textContent || '').toString().replace(/[^0-9-]/g, ''), 10);
+    const currentValue = Number.isFinite(parsed) ? parsed : 0;
+    // Éviter l'animation sur des petites variations
+    if (currentValue === newValue) return;
+    if (Math.abs(newValue - currentValue) <= 1) {
+      element.textContent = newValue;
+      return;
     }
+    
+    // Stopper une animation en cours pour cet élément
+    if (this.counterTimers.has(elementId)) {
+      clearInterval(this.counterTimers.get(elementId));
+      this.counterTimers.delete(elementId);
+    }
+
+    element.classList.add('updating');
+    const duration = 400;
+    const steps = 16;
+    const increment = (newValue - currentValue) / steps;
+    let currentStep = 0;
+
+    const timer = setInterval(() => {
+      currentStep++;
+      const value = Math.round(currentValue + (increment * currentStep));
+      element.textContent = value;
+      if (currentStep >= steps) {
+        clearInterval(timer);
+        this.counterTimers.delete(elementId);
+        element.textContent = newValue;
+        element.classList.remove('updating');
+      }
+    }, duration / steps);
+    this.counterTimers.set(elementId, timer);
+  }
+
+  // Mise à jour immédiate, sans animation, sans reset visuel
+  setCounterImmediate(elementId, newValue) {
+    const element = document.getElementById(elementId);
+    if (!element) return;
+    const parsed = parseInt((element.textContent || '').toString().replace(/[^0-9-]/g, ''), 10);
+    const currentValue = Number.isFinite(parsed) ? parsed : null;
+    if (currentValue === newValue) return;
+    // Stopper une éventuelle animation en cours
+    if (this.counterTimers.has(elementId)) {
+      clearInterval(this.counterTimers.get(elementId));
+      this.counterTimers.delete(elementId);
+    }
+    element.classList.remove('updating');
+    element.textContent = newValue;
   }
 
   // Nouvelle méthode pour mettre à jour les métriques d'activité
@@ -2212,11 +2233,12 @@ class MailMonitor {
 
   updateMonitoringStatus(isRunning) {
     const statusContainer = document.getElementById('monitoring-status');
-    const startBtn = document.getElementById('start-monitoring');
-    const stopBtn = document.getElementById('stop-monitoring');
+  // Boutons retirés
     
     if (statusContainer) {
-      const foldersCount = Object.keys(this.state.folderCategories).length;
+      const foldersCount = typeof this.state.foldersMonitoredCount === 'number'
+        ? this.state.foldersMonitoredCount
+        : Object.keys(this.state.folderCategories || {}).length;
       const currentTime = new Date().toLocaleTimeString('fr-FR', { 
         hour: '2-digit', 
         minute: '2-digit',
@@ -2262,7 +2284,7 @@ class MailMonitor {
           <div class="bg-light p-2 rounded-3 mb-3">
             <div class="text-center">
               <small class="text-muted">
-                <i class="bi bi-info-circle me-1"></i>Cliquez sur "Démarrer" pour activer la surveillance
+                <i class="bi bi-info-circle me-1"></i>La surveillance démarre automatiquement lorsque des dossiers sont configurés
               </small>
             </div>
           </div>
@@ -2273,14 +2295,7 @@ class MailMonitor {
       }
     }
     
-    if (startBtn && stopBtn) {
-      startBtn.style.display = isRunning ? 'none' : 'block';
-      stopBtn.style.display = isRunning ? 'block' : 'none';
-      
-      // Ajouter les classes modernes
-      startBtn.className = 'btn btn-success btn-lg btn-modern';
-      stopBtn.className = 'btn btn-danger btn-lg btn-modern';
-    }
+  // Rien à faire pour des boutons inexistants
     
     // Mettre à jour l'état global
     this.state.isMonitoring = isRunning;
@@ -2351,7 +2366,8 @@ class MailMonitor {
     // Métriques quotidiennes (utiliser les vrais ID du HTML)
     const daily = vbaMetrics.daily || {};
     safeSetContent('emails-today', daily.emailsReceived);
-    safeSetContent('emails-unread', daily.emailsUnread);
+  // Ne pas écraser le compteur "Non lus" du tableau de bord qui est mis à jour en temps réel
+  // safeSetContent('emails-unread', daily.emailsUnread);
     
     // Note: emails-sent, stock-start, stock-end n'existent pas dans le DOM
     // Utiliser les éléments existants ou ignorer ces mises à jour
@@ -2569,9 +2585,10 @@ class MailMonitor {
       // Récupérer les valeurs du formulaire
       const settings = {
         monitoring: {
-          treatReadEmailsAsProcessed: document.getElementById('treat-read-as-processed')?.checked || false,
+          // Options de monitoring simplifiées (UI desactivée)
+          treatReadEmailsAsProcessed: false,
           scanInterval: parseInt(document.getElementById('sync-interval')?.value) || 30000,
-          autoStart: document.getElementById('auto-start-monitoring')?.checked || true
+          autoStart: true
         },
         ui: {
           theme: "default",
@@ -2665,20 +2682,14 @@ class MailMonitor {
   loadSettingsIntoForm(settings) {
     // Monitoring
     if (settings.monitoring) {
-      const treatReadCheckbox = document.getElementById('treat-read-as-processed');
-      if (treatReadCheckbox) {
-        treatReadCheckbox.checked = settings.monitoring.treatReadEmailsAsProcessed || false;
-      }
+  // UI desactivée pour 'treatReadEmailsAsProcessed'
       
       const syncInterval = document.getElementById('sync-interval');
       if (syncInterval) {
         syncInterval.value = settings.monitoring.scanInterval || 30000;
       }
       
-      const autoStartCheckbox = document.getElementById('auto-start-monitoring');
-      if (autoStartCheckbox) {
-        autoStartCheckbox.checked = settings.monitoring.autoStart !== false;
-      }
+  // UI desactivée pour auto-start (forcée à true)
     }
     
     // UI
@@ -2971,6 +2982,26 @@ class MailMonitor {
     setInterval(() => {
       this.refreshCurrentWeekStats();
     }, 30000); // Toutes les 30 secondes
+
+    // Pagination historique hebdomadaire
+    const prevBtn = document.getElementById('weekly-prev');
+    const nextBtn = document.getElementById('weekly-next');
+    if (prevBtn) {
+      prevBtn.addEventListener('click', async () => {
+        if (this.state.weeklyHistory.page > 1) {
+          this.state.weeklyHistory.page -= 1;
+          await this.loadWeeklyHistory();
+        }
+      });
+    }
+    if (nextBtn) {
+      nextBtn.addEventListener('click', async () => {
+        if (this.state.weeklyHistory.page < this.state.weeklyHistory.totalPages) {
+          this.state.weeklyHistory.page += 1;
+          await this.loadWeeklyHistory();
+        }
+      });
+    }
   }
 
   /**
@@ -3163,9 +3194,16 @@ class MailMonitor {
    */
   async loadWeeklyHistory() {
     try {
-      const response = await window.electronAPI.invoke('api-weekly-history', { limit: 10 });
+      const { page, pageSize } = this.state.weeklyHistory;
+      const response = await window.electronAPI.invoke('api-weekly-history', { page, pageSize, limit: pageSize });
       if (response.success) {
         this.updateWeeklyHistoryDisplay(response.data);
+        // Mettre à jour l'état de pagination
+        this.state.weeklyHistory.page = response.page || page;
+        this.state.weeklyHistory.pageSize = response.pageSize || pageSize;
+        this.state.weeklyHistory.totalWeeks = response.totalWeeks || 0;
+        this.state.weeklyHistory.totalPages = response.totalPages || 1;
+        this.updateWeeklyPaginationControls();
       } else {
         console.error('Erreur lors du chargement de l\'historique:', response.error);
       }
@@ -3181,6 +3219,7 @@ class MailMonitor {
     const historyTable = document.getElementById('weekly-history-table');
     const loadingElement = document.getElementById('weekly-loading');
     const noDataElement = document.getElementById('weekly-no-data');
+  const paginationEl = document.getElementById('weekly-pagination');
     
     if (!historyTable) return;
 
@@ -3194,12 +3233,13 @@ class MailMonitor {
 
     let historyHtml = '';
     
-    if (historyData.length === 0) {
+    if (!historyData || historyData.length === 0) {
       // Afficher le message "aucune donnée" et masquer le tableau
       if (noDataElement) {
         noDataElement.classList.remove('d-none');
       }
       historyTable.style.display = 'none';
+      if (paginationEl) paginationEl.classList.add('d-none');
       return;
     } else {
       // Masquer le message "aucune donnée" et afficher le tableau
@@ -3207,6 +3247,7 @@ class MailMonitor {
         noDataElement.classList.add('d-none');
       }
       historyTable.style.display = 'table';
+      if (paginationEl) paginationEl.classList.remove('d-none');
       
       for (const week of historyData) {
         // Calculer le total des stocks pour la semaine
@@ -3257,6 +3298,26 @@ class MailMonitor {
     
     // Ajouter les événements de survol pour les semaines complètes
     this.addWeekHoverEvents();
+  }
+
+  /**
+   * Met à jour les contrôles et libellés de pagination de l'historique hebdo
+   */
+  updateWeeklyPaginationControls() {
+    const { page, totalPages, totalWeeks } = this.state.weeklyHistory;
+    const prevBtn = document.getElementById('weekly-prev');
+    const nextBtn = document.getElementById('weekly-next');
+    const pageInfo = document.getElementById('weekly-page-info');
+    const totalEl = document.getElementById('weekly-total-weeks');
+    const paginationEl = document.getElementById('weekly-pagination');
+
+    if (!paginationEl) return;
+
+    paginationEl.classList.remove('d-none');
+    if (pageInfo) pageInfo.textContent = `Page ${page} / ${Math.max(totalPages, 1)}`;
+    if (totalEl) totalEl.textContent = totalWeeks || 0;
+    if (prevBtn) prevBtn.disabled = page <= 1;
+    if (nextBtn) nextBtn.disabled = page >= (totalPages || 1);
   }
 
   /**

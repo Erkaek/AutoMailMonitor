@@ -134,6 +134,13 @@ function setupRealtimeEventForwarding() {
     return;
   }
 
+  // Éviter les double-bindings si cette fonction est appelée plusieurs fois
+  if (global.unifiedMonitoringService.__ipcForwardingSet) {
+    console.log('ℹ️ Transfert d\'événements déjà configuré, on évite un double-binding');
+    return;
+  }
+  global.unifiedMonitoringService.__ipcForwardingSet = true;
+
   console.log('🔔 Configuration du transfert d\'événements temps réel...');
 
   // Transférer les événements de mise à jour d'emails
@@ -161,6 +168,13 @@ function setupRealtimeEventForwarding() {
   global.unifiedMonitoringService.on('monitoringCycleComplete', (cycleData) => {
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('monitoring-cycle-complete', cycleData);
+    }
+  });
+
+  // Transférer les changements de statut du monitoring (actif/arrêté)
+  global.unifiedMonitoringService.on('monitoring-status', (status) => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('monitoring-status', status);
     }
   });
 
@@ -205,9 +219,10 @@ function createWindow() {
     minHeight: APP_CONFIG.minHeight,
   icon: path.join(__dirname, '../../resources', 'new logo', 'logo.ico'),
     title: 'Mail Monitor - Surveillance Outlook',
-    show: false,
-    frame: true, // Réactivation de la barre d'outils Windows
-    titleBarStyle: 'default', // Style par défaut de la barre de titre
+  show: false,
+  frame: false, // Supprime la barre d'outils/du titre native Windows
+  titleBarStyle: 'hidden', // Barre de titre cachée (on utilise la barre personnalisée)
+  autoHideMenuBar: true,
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
@@ -215,6 +230,9 @@ function createWindow() {
       preload: path.join(__dirname, 'preload.js')
     }
   });
+
+  // Supprimer tout menu d'application pour une UI sans barre de menu
+  try { Menu.setApplicationMenu(null); } catch (_) {}
 
   mainWindow.loadFile(path.join(__dirname, '../../public/index.html'));
 
@@ -1306,7 +1324,7 @@ ipcMain.handle('api-weekly-current-stats', async () => {
 });
 
 // API pour récupérer l'historique des statistiques hebdomadaires
-ipcMain.handle('api-weekly-history', async (event, { limit = 20 } = {}) => {
+ipcMain.handle('api-weekly-history', async (event, { limit = 5, page = 1, pageSize = null } = {}) => {
   try {
     console.log('📅 [IPC] api-weekly-history appelé');
     
@@ -1318,11 +1336,19 @@ ipcMain.handle('api-weekly-history', async (event, { limit = 20 } = {}) => {
       waitAttempts++;
     }
     
-    let weeklyStats = [];
+  let weeklyStats = [];
+  let pagination = { totalWeeks: 0, page: 1, pageSize: limit || 5, totalPages: 1 };
     
     if (global.unifiedMonitoringService && global.unifiedMonitoringService.isInitialized && global.unifiedMonitoringService.dbService) {
       console.log('📅 [IPC] Service prêt, récupération historique...');
-      weeklyStats = global.unifiedMonitoringService.dbService.getWeeklyStats(null, limit);
+      if (typeof page === 'number' && (pageSize || limit)) {
+        const size = pageSize || limit;
+        const result = global.unifiedMonitoringService.dbService.getWeeklyHistoryPage(page, size);
+        weeklyStats = result.rows;
+        pagination = { totalWeeks: result.totalWeeks, page: result.page, pageSize: result.pageSize, totalPages: result.totalPages };
+      } else {
+        weeklyStats = global.unifiedMonitoringService.dbService.getWeeklyStats(null, limit);
+      }
     } else {
       // Fallback: utiliser directement le service de BD
       console.log('📅 [IPC] Fallback: utilisation directe du service BD...');
@@ -1333,7 +1359,14 @@ ipcMain.handle('api-weekly-history', async (event, { limit = 20 } = {}) => {
         await optimizedDatabaseService.initialize();
       }
       
-      weeklyStats = optimizedDatabaseService.getWeeklyStats(null, limit);
+      if (typeof page === 'number' && (pageSize || limit)) {
+        const size = pageSize || limit;
+        const result = optimizedDatabaseService.getWeeklyHistoryPage(page, size);
+        weeklyStats = result.rows;
+        pagination = { totalWeeks: result.totalWeeks, page: result.page, pageSize: result.pageSize, totalPages: result.totalPages };
+      } else {
+        weeklyStats = optimizedDatabaseService.getWeeklyStats(null, limit);
+      }
     }
     
     // Transformer les données pour l'interface
@@ -1366,11 +1399,16 @@ ipcMain.handle('api-weekly-history', async (event, { limit = 20 } = {}) => {
         };
       }
       
-      // Mapper le type de dossier vers une catégorie lisible
-      let category = row.folder_type || 'Mails simples';
-      if (category === 'mails_simples') category = 'Mails simples';
-      else if (category === 'declarations') category = 'Déclarations';
-      else if (category === 'reglements') category = 'Règlements';
+      // Mapper le type de dossier vers une catégorie lisible (tolérant aux accents/casse)
+      const toDisplayCategory = (val) => {
+        if (!val) return 'Mails simples';
+        const v = String(val).toLowerCase();
+        if (v === 'mails_simples' || v.includes('mail')) return 'Mails simples';
+        if (v === 'declarations' || v.includes('déclar') || v.includes('declar')) return 'Déclarations';
+        if (v === 'reglements' || v.includes('règle') || v.includes('regle') || v.includes('reglement')) return 'Règlements';
+        return 'Mails simples';
+      };
+      let category = toDisplayCategory(row.folder_type);
       
       const received = row.emails_received || 0;
       const treated = row.emails_treated || 0;
@@ -1382,7 +1420,8 @@ ipcMain.handle('api-weekly-history', async (event, { limit = 20 } = {}) => {
           received,
           treated,
           adjustments,
-          stockEndWeek: Math.max(0, received - treated)
+          // Cohérence: inclure les ajustements comme traitements additionnels
+          stockEndWeek: Math.max(0, (received || 0) - ((treated || 0) + (adjustments || 0)))
         };
       }
     });
@@ -1403,63 +1442,111 @@ ipcMain.handle('api-weekly-history', async (event, { limit = 20 } = {}) => {
       return 0;
     });
     
-    // Calculer l'évolution pour chaque semaine
-    for (let i = 0; i < sortedWeeks.length; i++) {
-      const weekKey = sortedWeeks[i];
+    // Calcul du stock roulant avec report par catégorie
+    // 1) Déterminer le point de départ (carry) avant la première semaine de la page
+    let startYear = null, startWeek = null;
+    if (sortedWeeks.length) {
+      const m = sortedWeeks[sortedWeeks.length - 1].match(/S(\d+) - (\d+)/); // dernière = plus ancienne
+      if (m) { startWeek = parseInt(m[1], 10); startYear = parseInt(m[2], 10); }
+    }
+
+    // Accès au service DB pour calculer le carry initial
+    let dbForCarry = null;
+    if (global.unifiedMonitoringService && global.unifiedMonitoringService.isInitialized && global.unifiedMonitoringService.dbService) {
+      dbForCarry = global.unifiedMonitoringService.dbService;
+    } else {
+      dbForCarry = require('../services/optimizedDatabaseService');
+      if (!dbForCarry.isInitialized) await dbForCarry.initialize();
+    }
+
+    const carryInitial = (startYear && startWeek) ? dbForCarry.getCarryBeforeWeek(startYear, startWeek) : { declarations: 0, reglements: 0, mails_simples: 0 };
+
+    // 2) Construire les entrées en partant de la plus ancienne vers la plus récente
+    const running = {
+      'Déclarations': carryInitial.declarations || 0,
+      'Règlements': carryInitial.reglements || 0,
+      'Mails simples': carryInitial.mails_simples || 0
+    };
+
+    for (let i = sortedWeeks.length - 1; i >= 0; i--) {
+      const weekKey = sortedWeeks[i]; // plus ancienne -> la première itération
       const weekData = weeklyGroups[weekKey];
-      const previousWeekData = i < sortedWeeks.length - 1 ? weeklyGroups[sortedWeeks[i + 1]] : null;
-      
-      // Créer une structure avec les 3 catégories
+
+      // Construire catégories avec stockStart/End selon running
+      const cats = ['Déclarations', 'Règlements', 'Mails simples'].map(name => {
+        const rec = weekData.categories[name].received || 0;
+        const trt = weekData.categories[name].treated || 0;
+        const adj = weekData.categories[name].adjustments || 0;
+        const start = running[name] || 0;
+        const end = Math.max(0, start + rec - (trt + adj));
+        running[name] = end;
+
+        // Debug ciblé pour vérification du calcul S-1 (désactivable en commentant)
+        try {
+          if (weekData.week_year && weekData.week_number && name === 'Déclarations') {
+            // Journaux compacts pour diagnostiquer les écarts de stock
+            console.log(`🔎 [WEEKLY][${weekData.week_year}-S${weekData.week_number}] ${name}: start=${start} rec=${rec} trt=${trt} adj=${adj} => end=${end}`);
+          }
+        } catch (_) {}
+        return {
+          name,
+          received: rec,
+          treated: trt,
+          adjustments: adj,
+          stockStart: start,
+          stockEndWeek: end
+        };
+      });
+
       const weekEntry = {
         weekDisplay: weekData.weekDisplay,
+        week_number: weekData.week_number,
+        week_year: weekData.week_year,
         dateRange: weekData.dateRange,
-        categories: [
-          {
-            name: 'Déclarations',
-            received: weekData.categories['Déclarations'].received,
-            treated: weekData.categories['Déclarations'].treated,
-            adjustments: weekData.categories['Déclarations'].adjustments,
-            stockEndWeek: weekData.categories['Déclarations'].stockEndWeek || 0
-          },
-          {
-            name: 'Règlements',
-            received: weekData.categories['Règlements'].received,
-            treated: weekData.categories['Règlements'].treated,
-            adjustments: weekData.categories['Règlements'].adjustments,
-            stockEndWeek: weekData.categories['Règlements'].stockEndWeek || 0
-          },
-          {
-            name: 'Mails simples',
-            received: weekData.categories['Mails simples'].received,
-            treated: weekData.categories['Mails simples'].treated,
-            adjustments: weekData.categories['Mails simples'].adjustments,
-            stockEndWeek: weekData.categories['Mails simples'].stockEndWeek || 0
-          }
-        ]
+        categories: cats
       };
-      
-      // Calculer l'évolution par rapport à la semaine précédente
-      if (previousWeekData) {
-        const currentTotal = weekEntry.categories.reduce((sum, cat) => sum + cat.received, 0);
-        const previousTotal = Object.values(previousWeekData.categories).reduce((sum, cat) => sum + cat.received, 0);
-        const evolution = currentTotal - previousTotal;
-        const evolutionPercent = previousTotal > 0 ? ((evolution / previousTotal) * 100) : 0;
-        
-        weekEntry.evolution = {
-          absolute: evolution,
-          percent: evolutionPercent,
-          trend: evolution > 0 ? 'up' : evolution < 0 ? 'down' : 'stable'
+
+      transformedData.push(weekEntry);
+    }
+
+    // Remettre l'ordre décroissant (récente -> ancienne) pour l'affichage
+    transformedData.reverse();
+
+    // Calculer l'évolution S-1 basée sur le STOCK (carry-over) plutôt que sur les arrivées
+    for (let i = 0; i < transformedData.length; i++) {
+      const curr = transformedData[i];
+      const prev = i < transformedData.length - 1 ? transformedData[i + 1] : null;
+      if (prev) {
+        const currentStock = curr.categories.reduce((sum, cat) => sum + (cat.stockEndWeek || 0), 0);
+        const previousStock = prev.categories.reduce((sum, cat) => sum + (cat.stockEndWeek || 0), 0);
+        const abs = currentStock - previousStock;
+        const pct = previousStock > 0 ? (abs / previousStock) * 100 : 0;
+
+        // Conserver aussi l'ancienne évolution basée sur les arrivées (info annexe)
+        const currentArr = curr.categories.reduce((sum, cat) => sum + (cat.received || 0), 0);
+        const previousArr = prev.categories.reduce((sum, cat) => sum + (cat.received || 0), 0);
+        const absArr = currentArr - previousArr;
+        const pctArr = previousArr > 0 ? (absArr / previousArr) * 100 : 0;
+
+        curr.evolution = {
+          absolute: abs,
+          percent: pct,
+          trend: abs > 0 ? 'up' : abs < 0 ? 'down' : 'stable',
+          basis: 'stock',
+          received: { absolute: absArr, percent: pctArr }
         };
       } else {
-        weekEntry.evolution = { absolute: 0, percent: 0, trend: 'stable' };
+        curr.evolution = { absolute: 0, percent: 0, trend: 'stable', basis: 'stock', received: { absolute: 0, percent: 0 } };
       }
-      
-      transformedData.push(weekEntry);
     }
     
     return {
       success: true,
       data: transformedData,
+      page: pagination.page,
+      pageSize: pagination.pageSize,
+      totalWeeks: pagination.totalWeeks,
+      totalPages: pagination.totalPages,
       timestamp: new Date().toISOString()
     };
     
@@ -1573,6 +1660,19 @@ ipcMain.handle('api-activity-import-run', async (event, { filePath, weeks, outCs
         created_at: null
       }));
       databaseService.upsertWeeklyStatsBatch(payload);
+      // Notifier le frontend que les stats hebdo ont été mises à jour
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        try {
+          mainWindow.webContents.send('weekly-stats-updated', {
+            inserted: payload.length,
+            year,
+            weeksAffected: [...new Set(payload.map(p => p.week_number))],
+            timestamp: new Date().toISOString()
+          });
+        } catch (e) {
+          console.warn('[IPC] Impossible d\'émettre weekly-stats-updated:', e?.message || e);
+        }
+      }
     }
     let csvPath = null;
     if (outCsv) {
@@ -1604,10 +1704,27 @@ ipcMain.handle('api-weekly-adjust-count', async (event, { weekIdentifier, folder
         adjustmentType
       );
       
-      return {
+      const result = {
         success: success,
         message: success ? 'Ajustement effectué' : 'Échec de l\'ajustement'
       };
+
+      // Notifier le frontend si succès
+      if (success && mainWindow && !mainWindow.isDestroyed()) {
+        try {
+          mainWindow.webContents.send('weekly-stats-updated', {
+            weekIdentifier,
+            folderType,
+            adjustmentType,
+            adjustmentValue,
+            timestamp: new Date().toISOString()
+          });
+        } catch (e) {
+          console.warn('[IPC] Impossible d\'émettre weekly-stats-updated (adjust):', e?.message || e);
+        }
+      }
+
+      return result;
     }
     
     return {
