@@ -6,4 +6,4 @@
  */
 
 // Redirection vers le nouveau service de base de données
-module.exports = require('../services/databaseService');
+// Legacy databaseService supprimé. Utiliser optimizedDatabaseService à la place.

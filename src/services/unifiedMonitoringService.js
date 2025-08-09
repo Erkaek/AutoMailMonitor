@@ -1,35 +1,44 @@
 // ...existing code...
 /**
- * Service de monitoring unifié - Version avec événements COM Outlook
- * 1. Synchronisation complète initiale BDD vs Dossiers
- * 2. Monitoring en temps réel via événements COM Outlook
+ * Service de monitoring unifié OPTIMISÉ - Microsoft Graph API + Better-SQLite3
+ * Performance maximale avec API REST native + cache intelligent
  */
 
 const EventEmitter = require('events');
-const databaseService = require('./optimizedDatabaseService');
+const optimizedDatabaseService = require('./optimizedDatabaseService');
 const cacheService = require('./cacheService');
 
-// Importer le connecteur COM basé sur FFI-NAPI pour les événements COM natifs
-const COMConnector = require('../server/comConnector');
-let comConnector = null;
-try {
-    comConnector = new COMConnector();
-    console.log('[COM] Module FFI-NAPI COM chargé avec succès');
-} catch (error) {
-    console.log('[COM] FFI-NAPI COM non disponible:', error.message);
-}
+// NOUVEAU: Connector optimisé Graph API
+// CORRECTION: Utiliser le connecteur principal
+const optimizedOutlookConnector = require('../server/outlookConnector');
+
+// NOUVEAU: Service d'écoute événements COM
+const OutlookEventsService = require('./outlookEventsService');
 
 class UnifiedMonitoringService extends EventEmitter {
     constructor(outlookConnector = null) {
         super();
         
-        this.outlookConnector = outlookConnector;
-        this.dbService = databaseService;
+        // Utiliser le connector optimisé si non fourni
+        this.outlookConnector = outlookConnector || optimizedOutlookConnector;
+        this.dbService = optimizedDatabaseService;
+        this.cacheService = cacheService;
+        
         this.isInitialized = false;
         this.isMonitoring = false;
         this.monitoredFolders = [];
         this.outlookEventHandlers = new Map(); // Stockage des handlers d'événements
         this.pollingInterval = null; // Intervalle de polling complémentaire
+        
+        // NOUVEAU: Gestion dynamique des dossiers configurés
+        this.foldersConfigHash = null;
+        this.configCheckInterval = null;
+        this.lastConfigCheck = null;
+        
+        // NOUVEAU: Service d'écoute événements COM moderne
+        this.outlookEventsService = new OutlookEventsService();
+        this.isUsingCOMEvents = false;
+        this.fallbackPollingActive = false;
         
         // Configuration
         this.config = {
@@ -39,12 +48,13 @@ class UnifiedMonitoringService extends EventEmitter {
             skipInitialSync: false, // CRITIQUE: Sync PowerShell complète au démarrage
             useComEvents: true, // Utiliser les événements COM au lieu du polling
             useCaching: true, // Cache intelligent activé
-            cacheExpiry: 30000, // 30 secondes
+            cacheExpiry: 5000, // 5 secondes seulement
             maxConcurrentBatches: 3, // Traitement parallèle
-            partialSyncInterval: 5000, // Minimum entre sync partielles
+            partialSyncInterval: 1000, // 1 seconde entre sync partielles
             preferNativeComEvents: true, // Préférer FFI-NAPI COM si disponible
             forcePowerShellInitialSync: true, // NOUVEAU: Forcer sync PowerShell au démarrage
-            enableRealtimeComAfterSync: true // NOUVEAU: Activer COM après sync initiale
+            enableRealtimeComAfterSync: true, // NOUVEAU: Activer COM après sync initiale
+            configCheckInterval: 3000 // Vérifier la config des dossiers toutes les 3 secondes
         };
         
         // Statistiques
@@ -95,11 +105,20 @@ class UnifiedMonitoringService extends EventEmitter {
             // Charger les dossiers configurés
             await this.loadMonitoredFolders();
             
+            // Démarrer la surveillance des changements de configuration
+            this.startConfigurationWatcher();
+            
             // Démarrer le nettoyage automatique du cache
             this.startCacheCleanup();
             
+            // NOUVEAU: Configurer les listeners d'événements COM modernes
+            this.setupModernCOMEventListeners();
+            
             this.isInitialized = true;
             this.log('✅ Service de monitoring unifié initialisé', 'SUCCESS');
+            
+            // Démarrer la surveillance de la configuration des dossiers
+            this.startConfigWatcher();
             
             // Démarrer automatiquement le monitoring si configuré
             if (this.config.autoStartMonitoring && this.monitoredFolders.length > 0) {
@@ -131,13 +150,13 @@ class UnifiedMonitoringService extends EventEmitter {
                         return;
                     }
                     
-                    this.dbService.db.get("SELECT 1 as test", [], (err, row) => {
-                        if (err) {
-                            reject(err);
-                        } else {
-                            resolve(row);
-                        }
-                    });
+                    try {
+                        // Better-SQLite3 est synchrone
+                        const result = this.dbService.db.prepare("SELECT 1 as test").get();
+                        resolve(result);
+                    } catch (err) {
+                        reject(err);
+                    }
                 });
                 
                 this.log('✅ Base de données prête et fonctionnelle', 'DB');
@@ -162,29 +181,248 @@ class UnifiedMonitoringService extends EventEmitter {
             this.log('📁 Chargement des dossiers configurés...', 'CONFIG');
             const foldersConfig = await this.dbService.getFoldersConfiguration();
             
+            // Calculer le hash de la nouvelle configuration
+            const newConfigHash = this.calculateConfigHash(foldersConfig);
+            
             // foldersConfig est maintenant toujours un tableau après correction
             if (Array.isArray(foldersConfig)) {
                 this.monitoredFolders = foldersConfig.filter(folder => 
                     folder && 
-                    (folder.is_active === 1 || folder.enabled === true) &&
-                    (folder.folder_path || folder.path) &&
-                    folder.folder_path !== 'folderCategories'
-                ).map(folder => ({
-                    path: folder.folder_path || folder.path,
-                    category: folder.category,
-                    name: folder.folder_name || folder.name,
-                    enabled: true
-                }));
+                    (folder.folder_path || folder.folder_name || folder.path) &&
+                    (folder.folder_name !== 'folderCategories') &&
+                    folder.category // S'assurer qu'une catégorie est définie
+                ).map(folder => {
+                    console.log(`🔍 DEBUG MAP - Raw folder:`, folder);
+                    console.log(`  folder_path: "${folder.folder_path}"`);
+                    console.log(`  folder_name: "${folder.folder_name}"`);
+                    console.log(`  path: "${folder.path}"`);
+                    
+                    const mapped = {
+                        path: folder.folder_path || folder.folder_name || folder.path,
+                        category: folder.category,
+                        name: folder.folder_name || folder.name,
+                        enabled: true
+                    };
+                    
+                    console.log(`🎯 DEBUG MAP - Mapped:`, mapped);
+                    return mapped;
+                });
             } else {
                 this.log('⚠️ Format de configuration inattendu, utilisation tableau vide', 'WARNING');
                 this.monitoredFolders = [];
             }
             
+            // Détecter les changements de configuration
+            const configChanged = this.foldersConfigHash !== newConfigHash;
+            this.foldersConfigHash = newConfigHash;
+            
             this.log(`📁 ${this.monitoredFolders.length} dossiers configurés pour le monitoring`, 'CONFIG');
+            
+            // Si la configuration a changé et qu'on est en cours de monitoring, redémarrer
+            if (configChanged && this.isMonitoring) {
+                this.log('🔄 Configuration des dossiers modifiée, redémarrage du monitoring...', 'CONFIG');
+                await this.restartMonitoring();
+            }
+            
+            return configChanged;
             
         } catch (error) {
             this.log(`❌ Erreur chargement dossiers: ${error.message}`, 'ERROR');
             this.monitoredFolders = [];
+            return false;
+        }
+    }
+
+    /**
+     * Calculer un hash de la configuration des dossiers pour détecter les changements
+     */
+    calculateConfigHash(foldersConfig) {
+        if (!Array.isArray(foldersConfig) || foldersConfig.length === 0) {
+            return 'empty';
+        }
+        
+        // Créer une signature basée sur les chemins et catégories
+        const signature = foldersConfig
+            .filter(folder => folder && (folder.folder_path || folder.folder_name || folder.path))
+            .map(folder => `${folder.folder_path || folder.folder_name || folder.path}:${folder.category}`)
+            .sort()
+            .join('|');
+            
+        return signature;
+    }
+
+    /**
+     * Redémarrer le monitoring avec la nouvelle configuration
+     */
+    async restartMonitoring() {
+        try {
+            this.log('🔄 Redémarrage du monitoring...', 'RESTART');
+            
+            // Arrêter le monitoring actuel
+            await this.stopMonitoring();
+            
+            // Attendre un peu pour que l'arrêt soit complet
+            await new Promise(resolve => setTimeout(resolve, 1000));
+            
+            // Redémarrer avec la nouvelle configuration
+            await this.startMonitoring();
+            
+            this.log('✅ Monitoring redémarré avec succès', 'RESTART');
+            
+        } catch (error) {
+            this.log(`❌ Erreur redémarrage monitoring: ${error.message}`, 'ERROR');
+        }
+    }
+
+    /**
+     * Vérifier périodiquement si la configuration des dossiers a changé
+     */
+    startConfigurationWatcher() {
+        // Nettoyer l'ancien watcher s'il existe
+        if (this.configCheckInterval) {
+            clearInterval(this.configCheckInterval);
+        }
+        
+        // Vérifier toutes les 3 secondes
+        this.configCheckInterval = setInterval(async () => {
+            try {
+                await this.checkConfigurationChanges();
+            } catch (error) {
+                this.log(`⚠️ Erreur vérification configuration: ${error.message}`, 'WARNING');
+            }
+        }, 3000);
+        
+        this.log('👁️ Surveillance des changements de configuration activée', 'CONFIG');
+    }
+
+    /**
+     * Vérifier si la configuration a changé
+     */
+    async checkConfigurationChanges() {
+        const now = Date.now();
+        
+        // Éviter les vérifications trop fréquentes
+        if (this.lastConfigCheck && now - this.lastConfigCheck < 10000) {
+            return;
+        }
+        
+        this.lastConfigCheck = now;
+        
+        try {
+            const configChanged = await this.loadMonitoredFolders();
+            
+            if (configChanged) {
+                this.log('🔔 Configuration des dossiers modifiée détectée', 'CONFIG');
+                this.emit('configuration-changed', {
+                    foldersCount: this.monitoredFolders.length,
+                    folders: this.monitoredFolders.map(f => f.path)
+                });
+            }
+            
+        } catch (error) {
+            this.log(`❌ Erreur vérification configuration: ${error.message}`, 'ERROR');
+        }
+    }
+
+    /**
+     * Recharger manuellement la configuration des dossiers
+     */
+    async reloadFoldersConfiguration() {
+        this.log('🔄 Rechargement manuel de la configuration...', 'MANUAL');
+        
+        try {
+            const configChanged = await this.loadMonitoredFolders();
+            
+            if (configChanged) {
+                this.log('✅ Configuration rechargée et monitoring redémarré', 'MANUAL');
+                return {
+                    success: true,
+                    foldersCount: this.monitoredFolders.length,
+                    folders: this.monitoredFolders.map(f => f.path)
+                };
+            } else {
+                this.log('ℹ️ Aucun changement de configuration détecté', 'MANUAL');
+                return {
+                    success: true,
+                    foldersCount: this.monitoredFolders.length,
+                    noChange: true
+                };
+            }
+            
+        } catch (error) {
+            this.log(`❌ Erreur rechargement configuration: ${error.message}`, 'ERROR');
+            return {
+                success: false,
+                error: error.message
+            };
+        }
+    }
+
+    /**
+     * Démarrer la surveillance de la configuration des dossiers
+     */
+    startConfigWatcher() {
+        if (this.configCheckInterval) {
+            clearInterval(this.configCheckInterval);
+        }
+        
+        this.configCheckInterval = setInterval(async () => {
+            try {
+                await this.checkConfigurationChanges();
+            } catch (error) {
+                this.log(`⚠️ Erreur vérification configuration: ${error.message}`, 'WARNING');
+            }
+        }, this.config.configCheckInterval);
+        
+        this.log(`👁️ Surveillance de la configuration démarrée (intervalle: ${this.config.configCheckInterval}ms)`, 'CONFIG');
+    }
+
+    /**
+     * Arrêter la surveillance de la configuration
+     */
+    stopConfigWatcher() {
+        if (this.configCheckInterval) {
+            clearInterval(this.configCheckInterval);
+            this.configCheckInterval = null;
+            this.log('🛑 Surveillance de la configuration arrêtée', 'CONFIG');
+        }
+    }
+
+    /**
+     * Vérifier les changements de configuration
+     */
+    async checkConfigurationChanges() {
+        try {
+            const foldersConfig = await this.dbService.getFoldersConfiguration();
+            const newConfigHash = this.calculateConfigHash(foldersConfig);
+            
+            if (this.foldersConfigHash && this.foldersConfigHash !== newConfigHash) {
+                this.log('📋 Changement de configuration détecté, rechargement...', 'CONFIG');
+                await this.loadMonitoredFolders();
+            }
+            
+            this.lastConfigCheck = new Date();
+        } catch (error) {
+            this.log(`❌ Erreur vérification configuration: ${error.message}`, 'ERROR');
+        }
+    }
+
+    /**
+     * Redémarrer le monitoring avec la nouvelle configuration
+     */
+    async restartMonitoring() {
+        try {
+            this.log('🔄 Redémarrage du monitoring avec nouvelle configuration...', 'RESTART');
+            
+            if (this.isMonitoring) {
+                await this.stopRealtimeMonitoring();
+                await this.sleep(1000); // Attendre un peu
+                await this.startRealtimeMonitoring();
+            }
+            
+            this.log('✅ Monitoring redémarré avec succès', 'RESTART');
+        } catch (error) {
+            this.log(`❌ Erreur redémarrage monitoring: ${error.message}`, 'ERROR');
         }
     }
 
@@ -214,26 +452,28 @@ class UnifiedMonitoringService extends EventEmitter {
                 this.log('⏭️ Synchronisation initiale ignorée (mode rapide)', 'INFO');
             }
             
-            // ÉTAPE 2: Basculer vers COM pour le temps réel (si disponible)
-            if (this.config.enableRealtimeComAfterSync && this.comConnector) {
-                this.log('🎧 PHASE 2: Activation monitoring COM temps réel...', 'COM');
-                await this.startComEventMonitoring();
-                this.log('✅ PHASE 2: COM actif pour emails entrants/traités/supprimés', 'SUCCESS');
-            } else {
-                this.log('⚠️ PHASE 2: COM non disponible, utilisation PowerShell polling', 'WARNING');
-                await this.startComEventMonitoring(); // Fallback PowerShell
+            // ÉTAPE 2: Démarrer le monitoring temps réel simple via PowerShell
+            this.log('🎧 PHASE 2: Activation monitoring temps réel PowerShell...', 'COM');
+            try {
+                await this.startRealtimeMonitoring();
+                this.log('✅ PHASE 2: Monitoring temps réel PowerShell actif', 'SUCCESS');
+            } catch (error) {
+                this.log('⚠️ PHASE 2: Monitoring temps réel échoué, utilisation polling', 'WARNING');
+                this.startFallbackPolling();
             }
             
             this.isMonitoring = true;
-            this.log('✅ Monitoring opérationnel: PowerShell (sync) + COM (temps réel)', 'SUCCESS');
+            this.log('✅ Monitoring opérationnel: PowerShell (sync) + COM moderne (temps réel)', 'SUCCESS');
             
-            // Démarrer le polling de sécurité en complément
-            this.startPollingMode();
+            // Démarrer le polling de sécurité en standby
+            if (this.isUsingCOMEvents) {
+                this.setupFallbackPollingStandby();
+            }
             
             // Émettre un événement pour signaler que le monitoring a démarré
             this.emit('monitoring-status', { 
                 status: 'active',
-                mode: this.comConnector ? 'powershell-sync + com-realtime' : 'powershell-only',
+                mode: this.isUsingCOMEvents ? 'powershell-sync + com-modern-realtime' : 'powershell-fallback',
                 folders: this.monitoredFolders.length,
                 stats: this.stats
             });
@@ -246,21 +486,34 @@ class UnifiedMonitoringService extends EventEmitter {
     }
 
     /**
-     * Démarrage du monitoring en temps réel via événements COM
+     * Démarrage du monitoring en temps réel via événements COM modernes
      */
     async startComEventMonitoring() {
         try {
-            this.log('🎧 Démarrage du monitoring via événements COM...', 'COM');
+            this.log('🎧 Démarrage du monitoring via événements COM modernes...', 'COM');
 
-            for (const folderConfig of this.monitoredFolders) {
-                await this.setupFolderComEvents(folderConfig);
+            if (!this.outlookEventsService) {
+                throw new Error('Service d\'écoute COM non initialisé');
             }
 
-            this.log(`✅ Événements COM configurés pour ${this.monitoredFolders.length} dossiers`, 'COM');
-            this.emit('com-monitoring-started', { foldersCount: this.monitoredFolders.length });
+            // Récupérer les chemins des dossiers à surveiller
+            const folderPaths = this.monitoredFolders.map(folder => folder.path);
+            
+            // Démarrer l'écoute COM
+            const result = await this.outlookEventsService.startListening(folderPaths);
+
+            if (result.success) {
+                this.isUsingCOMEvents = true;
+                this.log(`✅ Écoute COM activée pour ${folderPaths.length} dossiers`, 'COM');
+                this.emit('com-listening-started', { folders: folderPaths.length });
+            } else {
+                throw new Error(result.message);
+            }
 
         } catch (error) {
             this.log(`❌ Erreur lors du démarrage des événements COM: ${error.message}`, 'ERROR');
+            this.isUsingCOMEvents = false;
+            this.emit('com-listening-failed', error.message);
             throw error;
         }
     }
@@ -699,14 +952,17 @@ class UnifiedMonitoringService extends EventEmitter {
             
             // Sauvegarder en base
             const emailRecord = {
-                entry_id: processedEmail.EntryID || processedEmail.id,
+                outlook_id: processedEmail.EntryID || processedEmail.id,
                 outlook_id: processedEmail.EntryID || processedEmail.id,
                 subject: processedEmail.subject,
-                sender_email: processedEmail.senderEmail,
+                sender_email: processedEmail.senderName,
+                sender_email: emailData.senderName || emailData.SenderName || processedEmail.senderName || '',
+                
+                sender_email: emailData.senderEmail || emailData.SenderEmailAddress || processedEmail.senderEmail || '',
                 received_time: processedEmail.receivedTime,
                 is_read: processedEmail.isRead,
                 size: processedEmail.size || 0,
-                folder_path: folderConfig.path,
+                folder_name: folderConfig.path,
                 folder_type: folderConfig.category || folderConfig.type,
                 is_treated: false,
                 created_at: new Date().toISOString()
@@ -745,7 +1001,7 @@ class UnifiedMonitoringService extends EventEmitter {
             const updateData = {
                 is_read: processedEmail.isRead,
                 subject: processedEmail.subject,
-                folder_path: folderConfig.path
+                folder_name: folderConfig.path
             };
             
             const entryId = processedEmail.EntryID || processedEmail.id;
@@ -802,7 +1058,27 @@ class UnifiedMonitoringService extends EventEmitter {
             // Arrêter le polling
             this.stopPollingMode();
 
-            // Nettoyer tous les handlers d'événements COM
+            // NOUVEAU: Arrêter l'écoute COM moderne
+            await this.stopCOMEventListening();
+
+            // NOUVEAU: Arrêter le monitoring temps réel
+            await this.stopRealtimeMonitoring();
+
+            // Arrêter le polling de secours
+            if (this.pollingInterval) {
+                clearInterval(this.pollingInterval);
+                this.pollingInterval = null;
+                this.fallbackPollingActive = false;
+            }
+            
+            // Arrêter la surveillance de la configuration
+            if (this.configCheckInterval) {
+                clearInterval(this.configCheckInterval);
+                this.configCheckInterval = null;
+                this.log('✅ Surveillance de la configuration arrêtée', 'STOP');
+            }
+
+            // Nettoyer tous les handlers d'événements COM anciens (si présents)
             for (const [folderPath, handler] of this.outlookEventHandlers) {
                 try {
                     if (handler && handler.eventConnection) {
@@ -825,6 +1101,9 @@ class UnifiedMonitoringService extends EventEmitter {
                 }
             }
             this.outlookEventHandlers.clear();
+
+            // Arrêter la surveillance de la configuration
+            this.stopConfigWatcher();
 
             this.isMonitoring = false;
             this.log('✅ Monitoring arrêté avec succès', 'SUCCESS');
@@ -882,19 +1161,34 @@ class UnifiedMonitoringService extends EventEmitter {
     async syncFolder(folder) {
         try {
             this.log(`📁 Synchronisation du dossier: ${folder.name}`, 'SYNC');
+            
+            // DEBUG: Afficher les valeurs exactes
+            console.log(`🔍 DEBUG folder.path: "${folder.path}"`);
+            console.log(`🔍 DEBUG folder.name: "${folder.name}"`);
 
             // Récupérer tous les emails du dossier avec gestion d'erreur
             let emails = [];
             try {
                 const emailsResult = await this.outlookConnector.getFolderEmails(folder.path);
                 
-                // getFolderEmails retourne un objet avec une propriété Emails
-                if (emailsResult && emailsResult.Emails && Array.isArray(emailsResult.Emails)) {
+                // getFolderEmails retourne un objet avec une propriété emails ou Emails
+                if (emailsResult && emailsResult.success && emailsResult.emails && Array.isArray(emailsResult.emails)) {
+                    emails = emailsResult.emails;
+                } else if (emailsResult && emailsResult.Emails && Array.isArray(emailsResult.Emails)) {
                     emails = emailsResult.Emails;
                 } else if (Array.isArray(emailsResult)) {
                     emails = emailsResult;
+                } else if (emailsResult && emailsResult.error) {
+                    // Dossier inexistant ou erreur d'accès - ne pas spam les logs
+                    if (emailsResult.error.includes('non trouve') || emailsResult.error.includes('not found')) {
+                        this.log(`ℹ️ Dossier "${folder.name}" non trouvé dans Outlook`, 'INFO');
+                    } else {
+                        this.log(`⚠️ Erreur accès dossier ${folder.name}: ${emailsResult.error}`, 'WARNING');
+                    }
+                    emails = [];
                 } else {
                     this.log(`⚠️ Format de retour inattendu pour ${folder.name}: ${typeof emailsResult}`, 'WARNING');
+                    this.log(`⚠️ Structure reçue:`, 'WARNING', emailsResult ? Object.keys(emailsResult) : 'null');
                     emails = [];
                 }
             } catch (error) {
@@ -1158,17 +1452,14 @@ class UnifiedMonitoringService extends EventEmitter {
             
             // Formatter les données pour la base de données
             const emailRecord = {
-                entry_id: emailData.EntryID || emailData.id,
                 outlook_id: emailData.EntryID || emailData.id,
                 subject: emailData.subject,
-                sender_email: emailData.senderEmail || emailData.SenderEmailAddress,
+                sender_email: emailData.senderEmail || emailData.SenderEmailAddress || emailData.senderName || emailData.SenderName || '',
                 received_time: emailData.receivedTime || emailData.ReceivedTime,
-                is_read: emailData.isRead !== undefined ? emailData.isRead : !emailData.UnRead,
-                size: emailData.size || 0,
-                folder_path: folder.path,
-                folder_type: folder.category || folder.type,
-                is_treated: false,
-                created_at: new Date().toISOString()
+                is_read: emailData.UnRead !== undefined ? !emailData.UnRead : (emailData.isRead || false),
+                folder_name: folder.path,
+                category: folder.category || folder.type,
+                is_treated: false
             };
             
             await this.dbService.insertEmail(emailRecord);
@@ -1195,13 +1486,13 @@ class UnifiedMonitoringService extends EventEmitter {
             
             // Formatter les données pour la mise à jour
             const updateData = {
-                is_read: emailData.isRead !== undefined ? emailData.isRead : !emailData.UnRead,
+                is_read: emailData.UnRead !== undefined ? !emailData.UnRead : (emailData.isRead || false),
                 subject: emailData.subject,
-                folder_path: folder.path
+                folder_name: folder.path
             };
             
             const entryId = emailData.EntryID || emailData.id;
-            await this.dbService.updateEmailStatus(entryId, updateData);
+            await this.dbService.updateEmailStatus(entryId, updateData.is_read, updateData.folder_name);
             
             this.emit('email-updated', {
                 folder: folder.name,
@@ -1225,6 +1516,52 @@ class UnifiedMonitoringService extends EventEmitter {
             foldersCount: this.monitoredFolders.length,
             mode: 'com-events'
         };
+    }
+
+    /**
+     * NOUVEAU: Obtenir les statistiques business réelles depuis la BDD
+     */
+    async getBusinessStats() {
+        try {
+            // Utiliser le cache si récent
+            const cacheKey = 'business_stats';
+            const cached = this.emailCache.get(cacheKey);
+            
+            if (cached && (Date.now() - cached.timestamp) < 15000) { // 15 secondes de cache
+                return cached.data;
+            }
+            
+            // Calculer les vraies stats depuis la BDD
+            const dbStats = await this.dbService.getEmailStats();
+            
+            const businessStats = {
+                emailsToday: dbStats.emailsToday || 0,
+                treatedToday: dbStats.treatedToday || 0,
+                unreadTotal: dbStats.unreadTotal || 0,
+                totalEmails: dbStats.totalEmails || 0,
+                lastSyncTime: this.stats.lastSyncTime || new Date(),
+                monitoringActive: this.isMonitoring
+            };
+            
+            // Mettre en cache
+            this.emailCache.set(cacheKey, {
+                timestamp: Date.now(),
+                data: businessStats
+            });
+            
+            return businessStats;
+            
+        } catch (error) {
+            this.log(`❌ Erreur récupération stats business: ${error.message}`, 'ERROR');
+            return {
+                emailsToday: 0,
+                treatedToday: 0,
+                unreadTotal: 0,
+                totalEmails: 0,
+                lastSyncTime: new Date(),
+                monitoringActive: this.isMonitoring
+            };
+        }
     }
 
     /**
@@ -1431,7 +1768,7 @@ class UnifiedMonitoringService extends EventEmitter {
             } catch (error) {
                 this.log(`⚠️ Erreur polling: ${error.message}`, 'WARNING');
             }
-        }, 30000); // Vérification toutes les 30 secondes
+        }, 5000); // Vérification toutes les 5 secondes
     }
 
     /**
@@ -1522,6 +1859,37 @@ class UnifiedMonitoringService extends EventEmitter {
     }
 
     /**
+     * Invalider le cache d'emails - méthode pour synchronisation en temps réel
+     */
+    invalidateEmailCache() {
+        try {
+            // Vider complètement le cache d'emails
+            this.emailCache.clear();
+            
+            // Invalider aussi le cache des stats de dossiers
+            this.folderStatsCache.clear();
+            
+            // Invalider le cache du service de base de données
+            if (this.dbService && this.dbService.cache) {
+                // Invalider spécifiquement les clés d'emails récents
+                const keys = this.dbService.cache.keys();
+                const emailKeys = keys.filter(key => 
+                    key.startsWith('recent_emails_') || 
+                    key.startsWith('stats_') ||
+                    key.startsWith('folder_')
+                );
+                
+                emailKeys.forEach(key => this.dbService.cache.del(key));
+                
+                console.log(`🗑️ [CACHE] Cache invalidé: ${emailKeys.length} clés emails/stats + cache UI`);
+            }
+            
+        } catch (error) {
+            console.error('❌ [CACHE] Erreur invalidation cache emails:', error);
+        }
+    }
+
+    /**
      * Obtenir les emails récents (API compatibility)
      */
     async getRecentEmails(limit = 20) {
@@ -1556,6 +1924,505 @@ class UnifiedMonitoringService extends EventEmitter {
      */
     async getDatabaseStats() {
         return await this.dbService.getDatabaseStats();
+    }
+
+    /**
+     * NOUVEAU: Configure les listeners d'événements COM modernes
+     */
+    setupModernCOMEventListeners() {
+        if (!this.outlookEventsService) return;
+
+        this.log('🔧 Configuration des listeners COM modernes...', 'COM');
+
+        // Écouter les nouveaux emails
+        this.outlookEventsService.on('newEmail', (emailData) => {
+            this.log(`📬 Nouvel email COM: ${emailData.subject}`, 'COM');
+            this.handleCOMNewEmail(emailData);
+        });
+
+        // Écouter les changements d'état des emails (COM Events)
+        this.outlookEventsService.on('emailChanged', (emailData) => {
+            this.log(`🔄 Email modifié COM: ${emailData.subject}`, 'COM');
+            this.handleCOMEmailChanged(emailData);
+        });
+
+        // Écouter les changements d'état des emails (Polling Intelligent)
+        this.outlookEventsService.on('email-changed', (eventData) => {
+            this.log(`🔄 Email modifié POLLING: ${eventData.Subject || 'N/A'} - ${eventData.ChangeType}`, 'POLLING');
+            this.handlePollingEmailChanged(eventData);
+        });
+
+        // Écouter les événements groupés
+        this.outlookEventsService.on('eventsProcessed', (groupedEvents) => {
+            this.log(`📊 Traitement groupé: ${groupedEvents.totalEvents} événements`, 'COM');
+            this.handleCOMGroupedEvents(groupedEvents);
+        });
+
+        // Écouter les problèmes d'écoute
+        this.outlookEventsService.on('listening-failed', (error) => {
+            this.log('❌ Écoute COM échouée, basculement vers polling', 'ERROR');
+            this.isUsingCOMEvents = false;
+            this.startFallbackPolling();
+        });
+
+        this.log('✅ Listeners événements COM modernes configurés', 'COM');
+    }
+
+    /**
+     * NOUVEAU: Gère les nouveaux emails détectés via COM
+     */
+    async handleCOMNewEmail(emailData) {
+        try {
+            // Traiter immédiatement le nouvel email en base
+            const result = await this.dbService.processCOMNewEmail(emailData);
+            
+            if (result.processed) {
+                this.log(`📧 Nouvel email traité via COM: ${emailData.subject}`, 'COM');
+                
+                // Émettre l'événement pour mise à jour UI temps réel
+                this.emit('realtime-new-email', {
+                    ...emailData,
+                    category: this.getFolderCategory(emailData.folderPath),
+                    timestamp: new Date()
+                });
+
+                // Incrémenter les stats
+                this.stats.emailsAdded++;
+                this.stats.eventsReceived++;
+            }
+
+        } catch (error) {
+            this.log(`❌ Erreur traitement nouvel email COM: ${error.message}`, 'ERROR');
+        }
+    }
+
+    /**
+     * NOUVEAU: Gère les changements d'état des emails via COM
+     */
+    async handleCOMEmailChanged(emailData) {
+        try {
+            // Mettre à jour l'état de l'email en base
+            const result = await this.dbService.processCOMEmailChange(emailData);
+            
+            if (result.updated) {
+                this.log(`🔄 État email mis à jour via COM: ${emailData.subject}`, 'COM');
+                
+                // Émettre l'événement pour mise à jour UI temps réel
+                this.emit('realtime-email-update', {
+                    ...emailData,
+                    category: this.getFolderCategory(emailData.folderPath),
+                    timestamp: new Date()
+                });
+
+                // Incrémenter les stats
+                this.stats.emailsUpdated++;
+                this.stats.eventsReceived++;
+            }
+
+        } catch (error) {
+            this.log(`❌ Erreur traitement changement email COM: ${error.message}`, 'ERROR');
+        }
+    }
+
+    /**
+     * NOUVEAU: Gère les changements d'état des emails via Polling Intelligent
+     */
+    async handlePollingEmailChanged(eventData) {
+        try {
+            this.log(`🔄 [POLLING] Traitement changement détecté: ${eventData.Subject} - ${eventData.ChangeType}`, 'POLLING');
+            
+            // Convertir les données du polling en format compatible base de données
+            const emailUpdateData = {
+                messageId: eventData.EntryID,
+                folderPath: eventData.FolderPath,
+                subject: eventData.Subject,
+                isRead: !eventData.UnRead, // UnRead est inversé
+                lastModificationTime: eventData.LastModificationTime,
+                changeType: eventData.ChangeType,
+                changes: eventData.Changes || []
+            };
+
+            // Mettre à jour l'état de l'email en base
+            const result = await this.dbService.processPollingEmailChange(emailUpdateData);
+            
+            if (result && result.updated) {
+                this.log(`✅ [POLLING] État email mis à jour en BDD: ${eventData.Subject}`, 'SUCCESS');
+                
+                // Émettre l'événement pour mise à jour UI temps réel
+                this.emit('realtime-email-update', {
+                    ...emailUpdateData,
+                    category: this.getFolderCategory(eventData.FolderPath),
+                    timestamp: new Date()
+                });
+
+                // Incrémenter les stats
+                this.stats.emailsUpdated++;
+                this.stats.eventsReceived++;
+            } else {
+                this.log(`⚠️ [POLLING] Changement non traité: ${eventData.Subject}`, 'WARNING');
+            }
+
+        } catch (error) {
+            this.log(`❌ [POLLING] Erreur traitement changement email: ${error.message}`, 'ERROR');
+            console.error('Stack trace:', error.stack);
+        }
+    }
+
+    /**
+     * NOUVEAU: Gère les événements groupés COM
+     */
+    async handleCOMGroupedEvents(groupedEvents) {
+        try {
+            // Traiter les événements par dossier
+            for (const [folderPath, events] of Object.entries(groupedEvents.groupedEvents)) {
+                this.log(`📊 Traitement ${events.newEmails} nouveaux + ${events.changedEmails} modifiés dans ${folderPath}`, 'COM');
+            }
+
+            // Émettre un événement de synchronisation terminée
+            this.emit('syncCompleted', {
+                totalEvents: groupedEvents.totalEvents,
+                folders: Object.keys(groupedEvents.groupedEvents).length,
+                timestamp: groupedEvents.timestamp,
+                source: 'COM'
+            });
+
+        } catch (error) {
+            this.log(`❌ Erreur traitement événements groupés COM: ${error.message}`, 'ERROR');
+        }
+    }
+
+    /**
+     * NOUVEAU: Démarre le polling de secours en cas d'échec COM
+     */
+    startFallbackPolling() {
+        if (this.fallbackPollingActive) return;
+
+        this.log('🔄 Démarrage du polling de secours...', 'FALLBACK');
+        this.fallbackPollingActive = true;
+
+        // Polling moins fréquent (toutes les 2 minutes) car c'est un fallback
+        this.pollingInterval = setInterval(() => {
+            this.performLightMonitoringCheck();
+        }, 120000); // 2 minutes
+
+        this.log('✅ Polling de secours actif (2 min)', 'FALLBACK');
+    }
+
+    /**
+     * NOUVEAU: Configure le polling de secours en standby
+     */
+    setupFallbackPollingStandby() {
+        // Polling très léger toutes les 5 minutes pour vérifier que l'écoute COM fonctionne
+        this.pollingInterval = setInterval(() => {
+            this.checkCOMHealthAndFallback();
+        }, 300000); // 5 minutes
+
+        this.log('✅ Polling de secours en standby (5 min)', 'STANDBY');
+    }
+
+    /**
+     * NOUVEAU: Vérifie la santé de l'écoute COM et bascule si nécessaire
+     */
+    async checkCOMHealthAndFallback() {
+        try {
+            if (!this.isUsingCOMEvents) return;
+
+            const stats = this.outlookEventsService.getListeningStats();
+            
+            if (!stats.isListening) {
+                this.log('⚠️ Écoute COM interrompue, basculement vers polling', 'WARNING');
+                this.isUsingCOMEvents = false;
+                this.startFallbackPolling();
+            } else {
+                this.log('✅ Écoute COM opérationnelle', 'COM');
+            }
+
+        } catch (error) {
+            this.log(`❌ Erreur vérification santé COM: ${error.message}`, 'ERROR');
+        }
+    }
+
+    /**
+     * NOUVEAU: Démarre le monitoring en temps réel avec PowerShell
+     */
+    async startRealtimeMonitoring() {
+        try {
+            this.log('🚀 Démarrage du monitoring en temps réel complet...', 'REALTIME');
+            
+            if (!this.outlookConnector) {
+                throw new Error('Outlook connector non disponible');
+            }
+
+            // Vérifier que nous avons des dossiers à surveiller
+            if (!this.monitoredFolders || this.monitoredFolders.length === 0) {
+                this.log('⚠️ Aucun dossier configuré pour le monitoring', 'WARNING');
+                return;
+            }
+
+            // ===== CONFIGURER TOUS LES GESTIONNAIRES D'ÉVÉNEMENTS =====
+            
+            // 1. Nouveaux emails détectés
+            this.outlookConnector.on('newEmailDetected', (emailData) => {
+                this.handleRealtimeNewEmail(emailData);
+            });
+
+            // 2. Changements de statut lu/non lu
+            this.outlookConnector.on('emailStatusChanged', async (data) => {
+                try {
+                    this.log(`📝 Statut changé: ${data.subject} -> ${data.isRead ? 'Lu' : 'Non lu'}`, 'STATUS');
+                    
+                    // Mettre à jour la base de données
+                    await this.dbService.updateEmailStatus(data.entryId, data.isRead);
+                    
+                    // Émettre événement pour mise à jour de l'interface
+                    this.emit('emailStatusUpdated', {
+                        entryId: data.entryId,
+                        isRead: data.isRead,
+                        subject: data.subject,
+                        folderPath: data.folderPath
+                    });
+                    
+                    // Invalider le cache des statistiques
+                    if (this.cacheService && typeof this.cacheService.invalidateStats === 'function') {
+                        if (this.cacheService && typeof this.cacheService.invalidateStats === 'function') {
+                        this.cacheService.invalidateStats();
+                    } else if (this.dbService && this.dbService.cache) {
+                        // Fallback: invalider le cache de la base de données
+                        this.dbService.cache.flushAll();
+                    }
+                    } else if (this.dbService && this.dbService.cache) {
+                        // Fallback: invalider le cache de la base de données
+                        this.dbService.cache.flushAll();
+                    }
+                    
+                } catch (error) {
+                    this.log(`❌ Erreur mise à jour statut: ${error.message}`, 'ERROR');
+                }
+            });
+
+            // 3. Modifications du sujet d'email
+            this.outlookConnector.on('emailSubjectChanged', async (data) => {
+                try {
+                    this.log(`📝 Sujet modifié: "${data.oldSubject}" -> "${data.newSubject}"`, 'MODIFY');
+                    
+                    // Mettre à jour la base de données
+                    await this.dbService.updateEmailField(data.entryId, 'subject', data.newSubject);
+                    
+                    // Émettre événement
+                    this.emit('emailSubjectUpdated', data);
+                    
+                } catch (error) {
+                    this.log(`❌ Erreur mise à jour sujet: ${error.message}`, 'ERROR');
+                }
+            });
+
+            // 4. Modifications générales d'emails
+            this.outlookConnector.on('emailModified', async (data) => {
+                try {
+                    this.log(`🔄 Email modifié: ${data.subject}`, 'MODIFY');
+                    
+                    // Marquer comme modifié dans la base
+                    await this.dbService.updateEmailField(data.entryId, 'last_modified', new Date());
+                    
+                    // Émettre événement
+                    this.emit('emailModified', data);
+                    
+                } catch (error) {
+                    this.log(`❌ Erreur traitement modification: ${error.message}`, 'ERROR');
+                }
+            });
+
+            // 5. Emails supprimés
+            this.outlookConnector.on('emailDeleted', async (data) => {
+                try {
+                    this.log(`🗑️ Email supprimé: ${data.subject}`, 'DELETE');
+                    
+                    // Marquer comme supprimé ou supprimer de la base
+                    await this.dbService.markEmailAsDeleted(data.entryId);
+                    
+                    // Émettre événement
+                    this.emit('emailDeleted', data);
+                    
+                    // Invalider le cache des statistiques
+                    if (this.cacheService && typeof this.cacheService.invalidateStats === 'function') {
+                        if (this.cacheService && typeof this.cacheService.invalidateStats === 'function') {
+                        this.cacheService.invalidateStats();
+                    } else if (this.dbService && this.dbService.cache) {
+                        // Fallback: invalider le cache de la base de données
+                        this.dbService.cache.flushAll();
+                    }
+                    } else if (this.dbService && this.dbService.cache) {
+                        // Fallback: invalider le cache de la base de données
+                        this.dbService.cache.flushAll();
+                    }
+                    
+                } catch (error) {
+                    this.log(`❌ Erreur traitement suppression: ${error.message}`, 'ERROR');
+                }
+            });
+
+            // 6. Changements de nombre d'emails dans un dossier
+            this.outlookConnector.on('folderCountChanged', async (data) => {
+                try {
+                    this.log(`📊 Nombre d'emails changé dans ${data.folderPath}: ${data.oldCount} -> ${data.newCount}`, 'COUNT');
+                    
+                    // Émettre événement pour mise à jour de l'interface
+                    this.emit('folderCountUpdated', data);
+                    
+                    // Invalider le cache des statistiques
+                    if (this.cacheService && typeof this.cacheService.invalidateStats === 'function') {
+                        if (this.cacheService && typeof this.cacheService.invalidateStats === 'function') {
+                        this.cacheService.invalidateStats();
+                    } else if (this.dbService && this.dbService.cache) {
+                        // Fallback: invalider le cache de la base de données
+                        this.dbService.cache.flushAll();
+                    }
+                    } else if (this.dbService && this.dbService.cache) {
+                        // Fallback: invalider le cache de la base de données
+                        this.dbService.cache.flushAll();
+                    }
+                    
+                } catch (error) {
+                    this.log(`❌ Erreur traitement changement de nombre: ${error.message}`, 'ERROR');
+                }
+            });
+
+            // ===== DÉMARRER LE MONITORING POUR CHAQUE DOSSIER =====
+            for (const folderConfig of this.monitoredFolders) {
+                try {
+                    await this.outlookConnector.startFolderMonitoring(folderConfig.path);
+                    this.log(`✅ Monitoring complet activé pour: ${folderConfig.name}`, 'REALTIME');
+                } catch (error) {
+                    this.log(`❌ Erreur monitoring dossier ${folderConfig.name}: ${error.message}`, 'ERROR');
+                }
+            }
+
+            this.log('🎯 Monitoring temps réel complet démarré avec succès', 'REALTIME');
+            this.log('📋 Événements surveillés: Nouveaux emails, Statuts lu/non lu, Modifications, Suppressions', 'INFO');
+            
+        } catch (error) {
+            this.log(`❌ Erreur démarrage monitoring temps réel: ${error.message}`, 'ERROR');
+            throw error;
+        }
+    }
+
+    /**
+     * NOUVEAU: Gère les nouveaux emails détectés en temps réel
+     */
+    async handleRealtimeNewEmail(emailData) {
+        try {
+            this.log(`📧 Nouvel email détecté: ${emailData.subject}`, 'REALTIME');
+            
+            // Trouver la configuration du dossier
+            const folderConfig = this.monitoredFolders.find(f => f.path === emailData.folderPath);
+            if (!folderConfig) {
+                this.log(`⚠️ Dossier non configuré: ${emailData.folderPath}`, 'WARNING');
+                return;
+            }
+
+            // Enrichir les données email avec la catégorie
+            const enrichedEmailData = {
+                ...emailData,
+                category: folderConfig.category || 'autres'
+            };
+
+            // Sauvegarder en base de données
+            await this.databaseService.saveEmail(enrichedEmailData);
+            
+            this.log(`💾 Email sauvegardé en temps réel: ${emailData.subject}`, 'REALTIME');
+
+            // Émettre l'événement de mise à jour
+            this.emit('realtimeEmailAdded', {
+                email: enrichedEmailData,
+                folder: folderConfig.name,
+                category: folderConfig.category
+            });
+
+        } catch (error) {
+            this.log(`❌ Erreur traitement email temps réel: ${error.message}`, 'ERROR');
+        }
+    }
+
+    /**
+     * NOUVEAU: Arrête le monitoring en temps réel
+     */
+    async stopRealtimeMonitoring() {
+        try {
+            this.log('🛑 Arrêt du monitoring en temps réel...', 'REALTIME');
+            
+            if (this.outlookConnector) {
+                // Arrêter le monitoring pour chaque dossier
+                for (const folderConfig of this.monitoredFolders) {
+                    try {
+                        await this.outlookConnector.stopFolderMonitoring(folderConfig.path);
+                        this.log(`⏹️ Monitoring arrêté pour: ${folderConfig.name}`, 'REALTIME');
+                    } catch (error) {
+                        this.log(`⚠️ Erreur arrêt monitoring ${folderConfig.name}: ${error.message}`, 'WARNING');
+                    }
+                }
+
+                // Supprimer les écouteurs d'événements
+                this.outlookConnector.removeAllListeners('newEmailDetected');
+            }
+
+            this.log('✅ Monitoring en temps réel arrêté', 'REALTIME');
+            
+        } catch (error) {
+            this.log(`❌ Erreur arrêt monitoring temps réel: ${error.message}`, 'ERROR');
+        }
+    }
+
+    /**
+     * NOUVEAU: Arrête l'écoute des événements COM
+     */
+    async stopCOMEventListening() {
+        try {
+            if (this.outlookEventsService && this.isUsingCOMEvents) {
+                await this.outlookEventsService.stopListening();
+                this.isUsingCOMEvents = false;
+                this.log('🛑 Écoute COM arrêtée', 'COM');
+            }
+        } catch (error) {
+            this.log(`❌ Erreur arrêt écoute COM: ${error.message}`, 'ERROR');
+        }
+    }
+
+    /**
+     * Récupère la catégorie d'un dossier
+     */
+    getFolderCategory(folderPath) {
+        const folderConfig = this.monitoredFolders.find(f => f.path === folderPath);
+        return folderConfig ? folderConfig.category : 'autres';
+    }
+
+    /**
+     * NOUVEAU: Vérification légère de monitoring (pour fallback)
+     */
+    async performLightMonitoringCheck() {
+        try {
+            this.log('🔍 Vérification légère de monitoring (fallback)...', 'FALLBACK');
+            
+            // Sync rapide seulement si nécessaire
+            const stats = await this.performQuickSync();
+            
+            if (stats.totalProcessed > 0) {
+                this.log(`📊 Fallback: ${stats.totalProcessed} emails traités`, 'FALLBACK');
+                this.emit('syncCompleted', {
+                    ...stats,
+                    source: 'FALLBACK'
+                });
+            }
+            
+        } catch (error) {
+            this.log(`❌ Erreur vérification fallback: ${error.message}`, 'ERROR');
+        }
+    }
+
+    /**
+     * Utilitaire pour attendre
+     */
+    sleep(ms) {
+        return new Promise(resolve => setTimeout(resolve, ms));
     }
 }
 

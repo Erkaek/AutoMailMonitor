@@ -13,36 +13,73 @@
 
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background: transparent; /* Fond transparent au lieu du gradient */
+            background: linear-gradient(135deg, #1e3c72 0%, #2a5298 50%, #1e3c72 100%);
+            background-size: 300% 300%;
+            animation: gradientShift 8s ease infinite;
             display: flex;
             justify-content: center;
             align-items: center;
             height: 100vh;
+            width: 100vw;
             color: white;
             overflow: hidden;
             margin: 0;
-            padding: 20px; /* Ajouter un peu de padding pour éviter les bords */
+            padding: 20px;
+            -webkit-app-region: drag;
+            box-sizing: border-box;
+        }
+
+        @keyframes gradientShift {
+            0% { background-position: 0% 50%; }
+            50% { background-position: 100% 50%; }
+            100% { background-position: 0% 50%; }
         }
 
         .loading-container {
             text-align: center;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); /* Le gradient va ici maintenant */
-            padding: 25px 35px;
-            border-radius: 20px;
-            backdrop-filter: blur(10px);
-            border: 1px solid rgba(255, 255, 255, 0.2);
-            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3); /* Ombre plus prononcée pour se détacher */
-            max-width: 650px;
-            width: 90%;
+            background: rgba(255, 255, 255, 0.08);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            border: 2px solid rgba(255, 255, 255, 0.15);
+            border-radius: 24px;
+            padding: 30px;
+            box-shadow: 
+                0 20px 40px rgba(0, 0, 0, 0.15),
+                inset 0 1px 0 rgba(255, 255, 255, 0.2);
+            width: auto;
+            min-width: 400px;
+            max-width: 600px;
             height: auto;
-            min-height: 200px; /* Hauteur minimale pour éviter un conteneur trop petit */
+            position: relative;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            -webkit-app-region: no-drag; /* Empêcher le drag sur les éléments interactifs */
+            display: inline-block; /* Pour un meilleur dimensionnement */
+        }
+
+        .loading-container:hover {
+            transform: translateY(-2px);
+            box-shadow: 
+                0 25px 50px rgba(0, 0, 0, 0.2),
+                inset 0 1px 0 rgba(255, 255, 255, 0.25);
+            border-color: rgba(255, 255, 255, 0.2);
+        }
+
+        /* Boutons et éléments interactifs */
+        button, input, select, textarea, .interactive {
+            -webkit-app-region: no-drag;
         }
 
         .logo {
-            width: 75px; /* Taille optimisée */
-            height: 75px;
-            margin: 0 auto 12px; /* Marge réduite */
-            animation: pulse 2s infinite;
+            width: 85px;
+            height: 85px;
+            margin: 10px auto 20px;
+            animation: logoFloat 3s ease-in-out infinite;
+            filter: drop-shadow(0 4px 8px rgba(0, 0, 0, 0.2));
+        }
+
+        @keyframes logoFloat {
+            0%, 100% { transform: translateY(0px) rotate(0deg); }
+            50% { transform: translateY(-8px) rotate(2deg); }
         }
 
         .logo svg {
@@ -51,53 +88,214 @@
         }
 
         .app-title {
-            font-size: 24px; /* Taille optimisée */
-            font-weight: 600;
-            margin-bottom: 6px; /* Marge minimale */
+            font-size: 28px;
+            font-weight: 700;
+            margin-bottom: 8px;
             color: #fff;
             line-height: 1.2;
+            text-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+            letter-spacing: -0.5px;
         }
 
         .app-subtitle {
-            font-size: 14px; /* Taille réduite */
-            margin-bottom: 20px; /* Marge réduite */
-            color: rgba(255, 255, 255, 0.8);
-            line-height: 1.3;
+            font-size: 15px;
+            margin-bottom: 25px;
+            color: rgba(255, 255, 255, 0.85);
+            line-height: 1.4;
+            font-weight: 400;
         }
 
         .loading-spinner {
-            width: 45px; /* Plus petit */
-            height: 45px;
-            border: 3px solid rgba(255, 255, 255, 0.3);
-            border-top: 3px solid #fff;
+            width: 50px;
+            height: 50px;
+            border: 4px solid rgba(255, 255, 255, 0.2);
+            border-top: 4px solid rgba(255, 255, 255, 0.9);
             border-radius: 50%;
-            animation: spin 1s linear infinite;
-            margin: 0 auto 12px; /* Marge réduite */
+            animation: modernSpin 1.2s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+            margin: 0 auto 20px;
+            position: relative;
+        }
+
+        .loading-spinner::after {
+            content: '';
+            position: absolute;
+            top: -4px;
+            left: -4px;
+            right: -4px;
+            bottom: -4px;
+            border: 4px solid transparent;
+            border-top: 4px solid rgba(255, 255, 255, 0.4);
+            border-radius: 50%;
+            animation: modernSpin 0.8s cubic-bezier(0.4, 0, 0.2, 1) infinite reverse;
+        }
+
+        @keyframes modernSpin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
         }
 
         .loading-text {
-            font-size: 16px; /* Taille réduite */
-            margin-bottom: 10px; /* Marge réduite */
-            font-weight: 500;
+            font-size: 18px;
+            margin-bottom: 12px;
+            font-weight: 600;
             line-height: 1.3;
             color: #fff;
+            text-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
         }
 
         .loading-details {
-            font-size: 12px; /* Taille réduite */
-            color: rgba(255, 255, 255, 0.7);
-            margin-bottom: 15px; /* Marge réduite */
-            min-height: 16px; /* Hauteur minimale réduite */
-            line-height: 1.4;
+            font-size: 14px;
+            color: rgba(255, 255, 255, 0.8);
+            margin-bottom: 20px;
+            min-height: 40px;
+            line-height: 1.5;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 12px;
+            padding: 12px 16px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
         }
 
         .progress-container {
-            margin-bottom: 8px;
-            transition: all 0.5s ease;
+            margin-bottom: 15px;
+            transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 12px;
+            padding: 8px;
+            border: 1px solid rgba(255, 255, 255, 0.08);
         }
 
         .progress-container.completed {
-            transform: scale(0.9);
+            transform: scale(0.98);
+            background: rgba(76, 175, 80, 0.1);
+            border-color: rgba(76, 175, 80, 0.3);
+        }
+
+        .progress-bar {
+            width: 100%;
+            height: 8px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 6px;
+            overflow: hidden;
+            position: relative;
+            margin: 8px 0;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, 
+                rgba(255, 255, 255, 0.9) 0%, 
+                rgba(255, 255, 255, 0.7) 50%, 
+                rgba(255, 255, 255, 0.9) 100%);
+            background-size: 200% 100%;
+            animation: progressShimmer 2s ease-in-out infinite;
+            border-radius: 6px;
+            width: 0%;
+            transition: all 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+            position: relative;
+        }
+
+        @keyframes progressShimmer {
+            0% { background-position: -200% 0; }
+            100% { background-position: 200% 0; }
+        }
+
+        .progress-fill.completed {
+            background: linear-gradient(90deg, #4caf50, #66bb6a);
+            animation: none;
+        }
+
+        .status-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 12px 16px;
+            margin: 8px 0;
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 10px;
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            transition: all 0.3s ease;
+            font-size: 14px;
+        }
+
+        .status-item:hover {
+            background: rgba(255, 255, 255, 0.08);
+            transform: translateX(4px);
+        }
+
+        .status-item.active {
+            background: rgba(33, 150, 243, 0.15);
+            border-color: rgba(33, 150, 243, 0.3);
+            box-shadow: 0 0 20px rgba(33, 150, 243, 0.2);
+        }
+
+        .status-item.completed {
+            background: rgba(76, 175, 80, 0.15);
+            border-color: rgba(76, 175, 80, 0.3);
+            color: rgba(255, 255, 255, 0.95);
+        }
+
+        .status-item.error {
+            background: rgba(244, 67, 54, 0.15);
+            border-color: rgba(244, 67, 54, 0.3);
+            animation: errorPulse 1s ease-in-out;
+        }
+
+        @keyframes errorPulse {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.02); }
+        }
+
+        .status-icon {
+            font-size: 16px;
+            width: 24px;
+            height: 24px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 50%;
+            background: rgba(255, 255, 255, 0.1);
+            margin-right: 12px;
+            transition: all 0.3s ease;
+        }
+
+        .status-item.active .status-icon {
+            background: rgba(33, 150, 243, 0.3);
+            animation: iconPulse 1.5s ease-in-out infinite;
+        }
+
+        @keyframes iconPulse {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.7; transform: scale(1.1); }
+        }
+
+        .retry-button {
+            background: linear-gradient(135deg, #ff4757, #ff3742);
+            color: white;
+            border: none;
+            padding: 14px 28px;
+            border-radius: 12px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            margin-top: 20px;
+            box-shadow: 0 4px 15px rgba(255, 71, 87, 0.3);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .retry-button:hover {
+            background: linear-gradient(135deg, #ff3742, #ff2837);
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(255, 71, 87, 0.4);
+        }
+
+        .retry-button:active {
+            transform: translateY(0);
+        }
             opacity: 0.8;
         }
 
@@ -227,11 +425,156 @@
             font-size: 14px;
             margin-top: 15px;
             transition: all 0.3s ease;
+            -webkit-app-region: no-drag; /* Empêcher le drag sur le bouton */
         }
 
         .retry-button:hover {
             background: rgba(255, 255, 255, 0.3);
             transform: translateY(-2px);
+        }
+
+        /* Nouvelles animations pour les améliorations */
+        @keyframes pulse {
+            0%, 100% { transform: scale(1) rotate(0deg); opacity: 1; }
+            50% { transform: scale(1.05) rotate(1deg); opacity: 0.8; }
+        }
+
+        @keyframes fadeIn {
+            from { 
+                opacity: 0; 
+                transform: translateY(20px) scale(0.9); 
+            }
+            to { 
+                opacity: 1; 
+                transform: translateY(0) scale(1); 
+            }
+        }
+
+        @keyframes fadeOut {
+            from { 
+                opacity: 1; 
+                transform: translateY(0) scale(1); 
+            }
+            to { 
+                opacity: 0; 
+                transform: translateY(-20px) scale(0.9); 
+            }
+        }
+
+        @keyframes slideInFromLeft {
+            from { transform: translateX(-100%) scale(0.8); opacity: 0; }
+            to { transform: translateX(0) scale(1); opacity: 1; }
+        }
+
+        /* Amélioration des indicateurs de progression */
+        .progress-fill {
+            transition: all 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+            position: relative;
+        }
+
+        .progress-fill::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: linear-gradient(90deg, 
+                transparent 0%, 
+                rgba(255, 255, 255, 0.4) 50%, 
+                transparent 100%);
+            animation: progressGlow 2s ease-in-out infinite;
+        }
+
+        @keyframes progressGlow {
+            0%, 100% { transform: translateX(-100%); }
+            50% { transform: translateX(100%); }
+        }
+
+        .status-item.completed .status-icon {
+            animation: bounceIn 0.6s ease;
+            background: rgba(76, 175, 80, 0.3);
+        }
+
+        @keyframes bounceIn {
+            0% { transform: scale(0.3) rotate(-180deg); opacity: 0; }
+            50% { transform: scale(1.1) rotate(0deg); opacity: 1; }
+            70% { transform: scale(0.9) rotate(10deg); }
+            100% { transform: scale(1) rotate(0deg); opacity: 1; }
+        }
+
+        .status-item.error .status-icon {
+            animation: shakeError 0.5s ease;
+            background: rgba(244, 67, 54, 0.3);
+        }
+
+        @keyframes shakeError {
+            0%, 100% { transform: translateX(0) rotate(0deg); }
+            10%, 30%, 50%, 70%, 90% { transform: translateX(-4px) rotate(-2deg); }
+            20%, 40%, 60%, 80% { transform: translateX(4px) rotate(2deg); }
+        }
+
+        /* Style amélioré pour les messages */
+        #loadingDetails {
+            min-height: 40px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+            animation: fadeIn 0.5s ease;
+        }
+
+        /* Effet de glassmorphism plus prononcé */
+        .glass-effect {
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+        }
+
+        /* Animation d'entrée pour le conteneur */
+        .loading-container {
+            animation: containerEntrance 0.8s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+        }
+
+        @keyframes containerEntrance {
+            0% {
+                opacity: 0;
+                transform: scale(0.8) translateY(50px);
+            }
+            100% {
+                opacity: 1;
+                transform: scale(1) translateY(0);
+            }
+        }
+
+        /* Particules flottantes en arrière-plan */
+        .loading-container::before {
+            content: '';
+            position: absolute;
+            top: -50%;
+            left: -50%;
+            width: 200%;
+            height: 200%;
+            background: radial-gradient(circle, 
+                rgba(255, 255, 255, 0.03) 1px, 
+                transparent 1px);
+            background-size: 50px 50px;
+            animation: particleFloat 20s linear infinite;
+            pointer-events: none;
+            z-index: 0;
+        }
+
+        @keyframes particleFloat {
+            0% { transform: translate(0, 0) rotate(0deg); }
+            100% { transform: translate(-50px, -50px) rotate(360deg); }
+        }
+
+        /* S'assurer que le contenu est au-dessus des particules */
+        .loading-container > * {
+            position: relative;
+            z-index: 1;
         }
         
         /* Styles pour le copyright dans la page de chargement */
@@ -250,48 +593,7 @@
 <body>
     <div class="loading-container" id="loadingContainer">
         <div class="logo">
-            <svg width="80" height="80" viewBox="0 0 128 128" xmlns="http://www.w3.org/2000/svg">
-                <defs>
-                    <linearGradient id="mainGradient" x1="0%" y1="0%" x2="100%" y2="100%">
-                        <stop offset="0%" style="stop-color:#667eea;stop-opacity:1" />
-                        <stop offset="100%" style="stop-color:#764ba2;stop-opacity:1" />
-                    </linearGradient>
-                    <linearGradient id="accentGradient" x1="0%" y1="0%" x2="100%" y2="100%">
-                        <stop offset="0%" style="stop-color:#4facfe;stop-opacity:1" />
-                        <stop offset="100%" style="stop-color:#00f2fe;stop-opacity:1" />
-                    </linearGradient>
-                    <filter id="shadow" x="-50%" y="-50%" width="200%" height="200%">
-                        <feDropShadow dx="2" dy="4" stdDeviation="4" flood-color="#000000" flood-opacity="0.25"/>
-                    </filter>
-                </defs>
-                
-                <circle cx="64" cy="64" r="60" fill="url(#mainGradient)" filter="url(#shadow)"/>
-                
-                <g transform="translate(24, 32)">
-                    <rect x="0" y="16" width="80" height="48" rx="4" ry="4" fill="#ffffff" opacity="0.95"/>
-                    <path d="M 0 16 L 40 36 L 80 16 L 80 20 L 40 40 L 0 20 Z" fill="#f8f9fa" opacity="0.8"/>
-                    <path d="M 0 16 L 40 36 L 80 16" stroke="url(#accentGradient)" stroke-width="2" fill="none"/>
-                    
-                    <g transform="translate(32, 24)">
-                        <ellipse cx="8" cy="8" rx="12" ry="6" fill="url(#accentGradient)" opacity="0.3"/>
-                        <circle cx="8" cy="8" r="6" fill="url(#accentGradient)"/>
-                        <circle cx="8" cy="8" r="3" fill="#ffffff"/>
-                        <circle cx="9" cy="7" r="1" fill="url(#accentGradient)"/>
-                    </g>
-                </g>
-                
-                <circle cx="88" cy="40" r="6" fill="#ff4757"/>
-                <text x="88" y="44" text-anchor="middle" fill="white" font-family="Arial, sans-serif" font-size="8" font-weight="bold">3</text>
-                
-                <circle cx="96" cy="56" r="4" fill="#ffa502"/>
-                
-                <g opacity="0.6">
-                    <circle cx="100" cy="72" r="2" fill="url(#accentGradient)">
-                        <animate attributeName="r" values="2;6;2" dur="2s" repeatCount="indefinite"/>
-                        <animate attributeName="opacity" values="1;0;1" dur="2s" repeatCount="indefinite"/>
-                    </circle>
-                </g>
-            </svg>
+            <img src="../resources/new%20logo/logo_128x128.png" alt="Logo" width="80" height="80" style="border-radius: 12px; box-shadow: 0 4px 10px rgba(0,0,0,0.2);" />
         </div>
         <div class="app-title">Mail Monitor</div>
         <div class="app-subtitle">Surveillance intelligente d'Outlook</div>
@@ -382,23 +684,27 @@
         class LoadingManager {
             constructor() {
                 this.currentStep = 0;
+                this.totalTasks = 6; // Nombre total de tâches
+                this.completedTasks = 0;
                 this.steps = [
-                    'status-environment',
-                    'status-outlook', 
-                    'status-mailboxes',
-                    'status-folders',
-                    'status-monitoring',
-                    'status-ready'
+                    'progress-environment',
+                    'progress-outlook', 
+                    'progress-mailboxes',
+                    'progress-folders',
+                    'progress-monitoring',
+                    'progress-analysis'
                 ];
                 this.stepMessages = [
-                    'Verification de l\'environnement Windows...',
-                    'Etablissement de la connexion Outlook...',
-                    'Detection des boites mail disponibles...',
-                    'Chargement de la structure des dossiers...',
+                    'Vérification de l\'environnement système...',
+                    'Connexion à Outlook...',
+                    'Analyse des boîtes mail...',
+                    'Exploration de la structure des dossiers...',
                     'Configuration du monitoring automatique...',
-                    'Finalisation de l\'initialisation...'
+                    'Analyse des emails existants...'
                 ];
+                this.taskProgress = new Map();
                 this.isError = false;
+                this.startTime = Date.now();
                 this.init();
             }
 
@@ -410,6 +716,7 @@
                     });
 
                     window.electronAPI.onLoadingComplete(() => {
+                        console.log('✅ Événement loading-complete reçu du processus principal');
                         this.complete();
                     });
 
@@ -417,65 +724,280 @@
                         this.showError(error);
                     });
                     
-                    // Écouter les événements de progression de l'analyse PowerShell
-                    window.electronAPI.onPowerShellAnalysisProgress((progressData) => {
-                        this.updateAnalysisProgress(progressData);
+                    // Écouter les événements de progression détaillée
+                    window.electronAPI.onTaskProgress?.((taskData) => {
+                        this.updateTaskProgress(taskData);
+                    });
+
+                    // Écouter la progression d'analyse PowerShell (branchée sur la barre Monitoring)
+                    window.electronAPI.onPowerShellAnalysisProgress?.((psData) => {
+                        this.updateAnalysisProgress(psData);
                     });
                 }
 
-                // Simuler le progres automatique si pas de retour
+                // Démarrer le redimensionnement automatique
+                this.setupAutoResize();
+                
+                // NOUVEAU: Démarrer une simulation de chargement après un délai court
+                // si aucun événement de progression n'est reçu du processus principal
+                this.fallbackTimer = setTimeout(() => {
+                    console.log('⚠️ Aucun événement reçu, démarrage simulation de chargement...');
+                    this.simulateProgress();
+                }, 2000);
+
+                // Démarrer avec un timer de sécurité et init UI
                 this.startAutoProgress();
+                this.updateCounters();
 
                 // Bouton de retry
-                document.getElementById('retryButton').addEventListener('click', () => {
+                document.getElementById('retryButton')?.addEventListener('click', () => {
                     this.retry();
                 });
             }
 
-            startAutoProgress() {
-                // Demarrer le premier step
-                setTimeout(() => this.nextStep(), 500);
+            setupAutoResize() {
+                // Observer les changements de contenu pour ajuster la taille
+                const container = document.getElementById('loadingContainer');
+                if (!container) return;
+
+                const resizeObserver = new ResizeObserver((entries) => {
+                    for (let entry of entries) {
+                        this.adjustWindowSize();
+                    }
+                });
+
+                // Observer le container principal
+                resizeObserver.observe(container);
+
+                // Aussi observer les changements dans le DOM
+                const mutationObserver = new MutationObserver(() => {
+                    // Petit délai pour laisser le DOM se mettre à jour
+                    setTimeout(() => this.adjustWindowSize(), 100);
+                });
+
+                mutationObserver.observe(container, {
+                    childList: true,
+                    subtree: true,
+                    attributes: true,
+                    attributeFilter: ['class', 'style']
+                });
+
+                // Redimensionnement initial
+                setTimeout(() => this.adjustWindowSize(), 500);
+                
+                // Forcer l'affichage de la première barre pour démonstration
+                setTimeout(() => {
+                    const firstProgress = document.getElementById('progress-environment');
+                    if (firstProgress) {
+                        firstProgress.style.display = 'block';
+                        setTimeout(() => this.adjustWindowSize(), 100);
+                    }
+                }, 1000);
             }
 
-            nextStep() {
-                if (this.isError || this.currentStep >= this.steps.length) return;
+            adjustWindowSize() {
+                if (!window.electronAPI?.resizeToContent) return;
 
-                // Marquer l'etape precedente comme completee
-                if (this.currentStep > 0) {
-                    const prevStep = document.getElementById(this.steps[this.currentStep - 1]);
-                    if (prevStep) {
-                        prevStep.classList.remove('active');
-                        prevStep.classList.add('completed');
-                        prevStep.querySelector('.status-icon').textContent = '✅';
-                    }
+                const container = document.getElementById('loadingContainer');
+                if (!container) return;
+
+                // Calculer la taille réelle du contenu
+                const containerRect = container.getBoundingClientRect();
+                const bodyRect = document.body.getBoundingClientRect();
+
+                // Dimensions avec marges de sécurité
+                const contentWidth = Math.ceil(containerRect.width + 80); // 40px de marge de chaque côté
+                const contentHeight = Math.ceil(containerRect.height + 80); // 40px de marge en haut et en bas
+
+                // Limites raisonnables
+                const finalWidth = Math.max(450, Math.min(700, contentWidth));
+                const finalHeight = Math.max(350, Math.min(800, contentHeight));
+
+                // Redimensionner seulement si nécessaire (éviter les boucles)
+                const currentBounds = window.screen.width; // Proxy pour vérifier si on a accès
+                if (currentBounds) {
+                    console.log(`🔧 Ajustement taille fenêtre: ${finalWidth}x${finalHeight}`);
+                    window.electronAPI.resizeToContent(finalWidth, finalHeight);
+                }
+            }
+
+
+            updateCounters() {
+                const percentage = this.totalTasks > 0 
+                    ? Math.round((this.completedTasks / this.totalTasks) * 100)
+                    : 0;
+                
+                // Mettre à jour la barre de progression principale
+                const progressFill = document.getElementById('progressFill');
+                if (progressFill) {
+                    progressFill.style.width = `${percentage}%`;
                 }
 
-                // Activer l'etape actuelle
+                // Mettre à jour le texte de pourcentage si il existe
+                const progressPercent = document.querySelector('.progress-percent');
+                if (progressPercent) {
+                    progressPercent.textContent = `${percentage}%`;
+                }
+
+                // Mettre à jour le compteur de tâches
+                const loadingDetails = document.getElementById('loadingDetails');
+                if (loadingDetails && this.completedTasks > 0) {
+                    const elapsed = Math.round((Date.now() - this.startTime) / 1000);
+                    loadingDetails.innerHTML = `
+                        ${this.getCurrentStepMessage()}<br>
+                        <small style="opacity: 0.8;">${this.completedTasks}/${this.totalTasks} tâches • ${elapsed}s</small>
+                    `;
+                }
+            }
+
+            getCurrentStepMessage() {
+                if (this.currentStep < this.stepMessages.length) {
+                    return this.stepMessages[this.currentStep];
+                }
+                return 'Finalisation...';
+            }
+
+            updateTaskProgress(taskData) {
+                const { taskId, description, completed, error } = taskData;
+                
+                this.taskProgress.set(taskId, { description, completed, error });
+                
+                if (completed && !error) {
+                    this.completedTasks++;
+                    this.markStepCompleted(taskId);
+                }
+                
+                this.updateCounters();
+                
+                // Mettre à jour le message actuel
+                if (!completed) {
+                    const loadingDetails = document.getElementById('loadingDetails');
+                    if (loadingDetails) {
+                        loadingDetails.textContent = description;
+                    }
+                }
+            }
+
+            markStepCompleted(taskId) {
+                // Mapping des IDs de tâches vers les éléments HTML
+                const taskMapping = {
+                    'configuration': 'status-configuration',
+                    'connection': 'status-connection',
+                    'stats': 'status-stats',
+                    'emails': 'status-emails',
+                    'categories': 'status-categories',
+                    'folders': 'status-folders',
+                    'vba': 'status-vba',
+                    'monitoring': 'status-monitoring',
+                    'weekly': 'status-weekly'
+                };
+
+                const elementId = taskMapping[taskId];
+                if (elementId) {
+                    const element = document.getElementById(elementId);
+                    if (element) {
+                        element.classList.remove('active');
+                        element.classList.add('completed');
+                        const icon = element.querySelector('.status-icon');
+                        if (icon) {
+                            icon.textContent = '✅';
+                        }
+                    }
+                }
+            }
+
+            startAutoProgress() {
+                // Demarrer le premier step si pas de retour IPC
+                setTimeout(() => {
+                    if (this.completedTasks === 0) {
+                        this.simulateProgress();
+                    }
+                }, 1000);
+            }
+
+            simulateProgress() {
+                if (this.isError || this.currentStep >= this.steps.length) return;
+
+                // Marquer l'étape précédente comme complétée
+                if (this.currentStep > 0) {
+                    const prevStepId = this.steps[this.currentStep - 1];
+                    const prevStep = document.getElementById(prevStepId);
+                    if (prevStep) {
+                        // Afficher la barre précédente si pas déjà visible
+                        if (prevStep.style.display === 'none' || prevStep.style.display === '') {
+                            prevStep.style.display = 'block';
+                            setTimeout(() => this.adjustWindowSize(), 100);
+                        }
+                        
+                        // Compléter la barre précédente
+                        this.completeTask(prevStepId.replace('progress-', ''));
+                    }
+                    this.completedTasks++;
+                    
+                    // Redimensionner après chaque étape complétée
+                    setTimeout(() => this.adjustWindowSize(), 200);
+                }
+
+                // Activer l'étape actuelle
                 if (this.currentStep < this.steps.length) {
-                    const currentStepEl = document.getElementById(this.steps[this.currentStep]);
+                    const currentStepId = this.steps[this.currentStep];
+                    const currentStepEl = document.getElementById(currentStepId);
                     if (currentStepEl) {
-                        currentStepEl.classList.add('active');
+                        // Afficher la barre actuelle si pas déjà visible
+                        if (currentStepEl.style.display === 'none' || currentStepEl.style.display === '') {
+                            currentStepEl.style.display = 'block';
+                            setTimeout(() => this.adjustWindowSize(), 100);
+                        }
+                        
+                        // Démarrer la progression de la tâche actuelle
+                        const taskName = currentStepId.replace('progress-', '');
+                        this.startTaskProgress(taskName);
                     }
 
-                    // Mettre a jour le texte et la progression
-                    document.getElementById('loadingDetails').textContent = this.stepMessages[this.currentStep];
-                    
-                    const progress = ((this.currentStep + 1) / this.steps.length) * 100;
-                    document.getElementById('progressFill').style.width = progress + '%';
-
+                    this.updateCounters();
                     this.currentStep++;
 
-                    // Passer a l'etape suivante
+                    // Passer à l'étape suivante
                     if (this.currentStep < this.steps.length) {
-                        setTimeout(() => this.nextStep(), 2000 + Math.random() * 2000);
+                        setTimeout(() => this.simulateProgress(), 4000 + Math.random() * 1000);
                     } else {
-                        setTimeout(() => this.complete(), 1000);
+                        setTimeout(() => this.complete(), 2000);
                     }
+                }
+            }
+
+            startTaskProgress(taskName) {
+                const progressFill = document.getElementById(`progressFill-${taskName}`);
+                const progressPercent = document.getElementById(`progressPercent-${taskName}`);
+                
+                if (progressFill && progressPercent) {
+                    let progress = 0;
+                    const interval = setInterval(() => {
+                        progress += Math.random() * 15 + 5; // Progression de 5-20% par step
+                        if (progress >= 95) {
+                            progress = 100;
+                            clearInterval(interval);
+                        }
+                        
+                        progressFill.style.width = progress + '%';
+                        progressPercent.textContent = Math.round(progress) + '%';
+                        
+                        if (progress >= 100) {
+                            this.completeTask(taskName);
+                        }
+                    }, 200 + Math.random() * 300);
                 }
             }
 
             updateProgress(data) {
                 console.log('Update progress:', data);
+                
+                // Annuler le timer de fallback puisqu'on reçoit des événements réels
+                if (this.fallbackTimer) {
+                    clearTimeout(this.fallbackTimer);
+                    this.fallbackTimer = null;
+                    console.log('🔄 Timer de fallback annulé - événements reçus du processus principal');
+                }
                 
                 // Mettre à jour le message principal
                 if (data.message) {
@@ -495,6 +1017,9 @@
                             if (progressContainer.style.display === 'none' || progressContainer.style.display === '') {
                                 progressContainer.style.display = 'block';
                                 console.log(`Barre ${currentTask} maintenant visible`);
+                                
+                                // Déclencher un redimensionnement après l'affichage d'un nouvel élément
+                                setTimeout(() => this.adjustWindowSize(), 150);
                             }
                         }
 
@@ -513,6 +1038,8 @@
                         // Si la tâche est terminée (100%), la transformer en validation
                         if (data.progress >= 100) {
                             this.completeTask(currentTask);
+                            // Redimensionner après la completion d'une tâche
+                            setTimeout(() => this.adjustWindowSize(), 200);
                         }
                     }
                 }
@@ -684,102 +1211,268 @@
                 }, 500);
             }
 
+
+
+            // Nouvelle méthode pour compléter le processus de chargement
             complete() {
-                // NE PAS compléter toutes les tâches automatiquement
-                // Chaque tâche doit être complétée individuellement
-                document.getElementById('loadingText').textContent = 'Chargement terminé !';
-                document.getElementById('loadingDetails').textContent = 'Redirection vers l\'application...';
-
-                // Animation de fermeture
-                setTimeout(() => {
-                    document.getElementById('loadingContainer').classList.add('fade-out');
-                    
-                    // Signaler au processus principal qu'on peut changer de page
-                    setTimeout(() => {
-                        if (window.electronAPI && window.electronAPI.loadingComplete) {
-                            window.electronAPI.loadingComplete();
-                        }
-                    }, 500);
-                }, 1000);
-            }
-
-            showError(error) {
-                this.isError = true;
+                console.log('Loading completed - Enhanced version');
                 
-                document.getElementById('loadingContainer').classList.add('error-state');
-                document.getElementById('loadingSpinner').style.display = 'none';
-                document.getElementById('loadingText').textContent = 'Erreur de chargement';
-                document.getElementById('loadingText').classList.add('error-text');
-                document.getElementById('loadingDetails').textContent = error.message || 'Une erreur est survenue lors de l\'initialisation';
-                document.getElementById('loadingDetails').classList.add('error-text');
-                document.getElementById('retryButton').style.display = 'block';
-
-                // Marquer l'etape actuelle comme en erreur
-                if (this.currentStep < this.steps.length) {
-                    const currentStepEl = document.getElementById(this.steps[this.currentStep]);
-                    if (currentStepEl) {
-                        currentStepEl.classList.add('active');
-                        currentStepEl.querySelector('.status-icon').textContent = '❌';
-                    }
+                // Annuler le timer de fallback si il existe
+                if (this.fallbackTimer) {
+                    clearTimeout(this.fallbackTimer);
+                    this.fallbackTimer = null;
                 }
-            }
-
-            retry() {
-                // Réinitialiser l'interface
-                this.isError = false;
                 
-                document.getElementById('loadingContainer').classList.remove('error-state');
-                document.getElementById('loadingSpinner').style.display = 'block';
-                document.getElementById('loadingText').textContent = 'Initialisation en cours...';
-                document.getElementById('loadingText').classList.remove('error-text');
-                document.getElementById('loadingDetails').textContent = 'Préparation de l\'environnement';
-                document.getElementById('loadingDetails').classList.remove('error-text');
-                document.getElementById('retryButton').style.display = 'none';
-
-                // Réinitialiser toutes les barres de progression
-                const taskNames = ['environment', 'outlook', 'mailboxes', 'folders', 'monitoring', 'analysis'];
-                taskNames.forEach(taskName => {
-                    const progressContainer = document.getElementById(`progress-${taskName}`);
-                    const progressFill = document.getElementById(`progressFill-${taskName}`);
-                    const progressPercent = document.getElementById(`progressPercent-${taskName}`);
-                    const progressBar = document.getElementById(`bar-${taskName}`);
-                    const progressLabel = document.getElementById(`label-${taskName}`);
-
-                    if (progressContainer) {
-                        progressContainer.style.display = 'none';
-                        progressContainer.classList.remove('completed');
-                    }
-                    
-                    if (progressFill) {
-                        progressFill.style.width = '0%';
-                        progressFill.classList.remove('completed');
-                    }
-                    
-                    if (progressPercent) {
-                        progressPercent.textContent = '0%';
-                        progressPercent.classList.remove('completed');
-                        progressPercent.style.display = 'block';
-                    }
-                    
-                    if (progressBar) {
-                        progressBar.classList.remove('completed');
-                    }
-                    
-                    if (progressLabel) {
-                        progressLabel.classList.remove('completed');
+                // Marquer toutes les étapes comme complétées
+                this.steps.forEach(stepId => {
+                    const stepEl = document.getElementById(stepId);
+                    if (stepEl) {
+                        stepEl.classList.remove('active');
+                        stepEl.classList.add('completed');
+                        const icon = stepEl.querySelector('.status-icon');
+                        if (icon) {
+                            icon.textContent = '✅';
+                        }
                     }
                 });
 
-                // Signaler au processus principal de réessayer
-                if (window.electronAPI && window.electronAPI.retryLoading) {
-                    window.electronAPI.retryLoading();
+                this.completedTasks = this.totalTasks;
+                this.updateCounters();
+
+                // Message de finalisation avec design amélioré
+                const loadingDetails = document.getElementById('loadingDetails');
+                if (loadingDetails) {
+                    const elapsed = Math.round((Date.now() - this.startTime) / 1000);
+                    loadingDetails.innerHTML = `
+                        <div style="text-align: center; padding: 20px;">
+                            <div style="font-size: 24px; color: #28a745; margin-bottom: 10px;">
+                                ✅ Initialisation réussie!
+                            </div>
+                            <div style="color: #6c757d; font-size: 14px;">
+                                Toutes les tâches terminées en ${elapsed}s
+                            </div>
+                            <div style="margin-top: 15px; color: #007bff; font-size: 13px;">
+                                Redirection vers l'application...
+                            </div>
+                        </div>
+                    `;
                 }
+
+                // Effet de réussite sur la barre de progression
+                const progressFill = document.getElementById('progressFill');
+                if (progressFill) {
+                    progressFill.style.width = '100%';
+                    progressFill.style.background = 'linear-gradient(90deg, #28a745, #20c997)';
+                    progressFill.style.transition = 'all 0.5s ease';
+                }
+
+                // Animation de célébration (optionnelle)
+                this.playSuccessAnimation();
+
+                // Rediriger vers l'application principale après un délai
+                setTimeout(() => {
+                    if (window.electronAPI && window.electronAPI.closeLoadingWindow) {
+                        window.electronAPI.closeLoadingWindow();
+                    } else {
+                        // Fallback si l'API n'est pas disponible
+                        window.location.href = 'index.html';
+                    }
+                }, 2000);
+            }
+
+            // Méthode de simulation de chargement en fallback
+            simulateProgress() {
+                console.log('🔄 Démarrage de la simulation de chargement...');
+                
+                const taskNames = ['environment', 'outlook', 'mailboxes', 'folders', 'monitoring', 'analysis'];
+                const messages = [
+                    'Vérification de l\'environnement système...',
+                    'Connexion à Outlook...',
+                    'Analyse des boîtes mail...',
+                    'Exploration de la structure des dossiers...',
+                    'Configuration du monitoring automatique...',
+                    'Analyse des emails existants...'
+                ];
+                
+                let currentTaskIndex = 0;
+                
+                const processNextTask = () => {
+                    if (currentTaskIndex >= taskNames.length) {
+                        // Simulation terminée, marquer comme complétée
+                        console.log('✅ Simulation de chargement terminée');
+                        setTimeout(() => this.complete(), 1000);
+                        return;
+                    }
+                    
+                    const taskName = taskNames[currentTaskIndex];
+                    const message = messages[currentTaskIndex];
+                    
+                    // Afficher la barre de progression pour cette tâche
+                    const progressContainer = document.getElementById(`progress-${taskName}`);
+                    if (progressContainer) {
+                        progressContainer.style.display = 'block';
+                        this.adjustWindowSize();
+                    }
+                    
+                    // Mettre à jour le message
+                    const loadingDetails = document.getElementById('loadingDetails');
+                    if (loadingDetails) {
+                        loadingDetails.textContent = message;
+                    }
+                    
+                    // Animer la progression de 0 à 100%
+                    this.startTaskProgress(taskName);
+                    
+                    // Passer à la tâche suivante après la progression
+                    setTimeout(() => {
+                        currentTaskIndex++;
+                        processNextTask();
+                    }, 3000); // 3 secondes par tâche
+                };
+                
+                // Démarrer la première tâche
+                processNextTask();
+            }
+
+            playSuccessAnimation() {
+                // Animation simple de pulsation pour la barre de progression
+                const progressContainer = document.querySelector('.progress-container');
+                if (progressContainer) {
+                    progressContainer.style.animation = 'pulse 0.6s ease-in-out';
+                    setTimeout(() => {
+                        progressContainer.style.animation = '';
+                    }, 600);
+                }
+            }
+
+            // Méthode améliorée pour gérer les erreurs avec plus de détails
+            showError(error) {
+                console.error('Loading error - Enhanced version:', error);
+                this.isError = true;
+
+                // Marquer l'étape actuelle comme en erreur
+                if (this.currentStep < this.steps.length) {
+                    const currentStepEl = document.getElementById(this.steps[this.currentStep]);
+                    if (currentStepEl) {
+                        currentStepEl.classList.remove('active');
+                        currentStepEl.classList.add('error');
+                        const icon = currentStepEl.querySelector('.status-icon');
+                        if (icon) {
+                            icon.textContent = '❌';
+                        }
+                    }
+                }
+
+                // Afficher le message d'erreur avec plus de détails
+                const loadingDetails = document.getElementById('loadingDetails');
+                if (loadingDetails) {
+                    const errorMessage = error.message || error || 'Erreur inconnue';
+                    loadingDetails.innerHTML = `
+                        <div style="text-align: center; padding: 20px;">
+                            <div style="font-size: 20px; color: #dc3545; margin-bottom: 10px;">
+                                ❌ Erreur d'initialisation
+                            </div>
+                            <div style="color: #6c757d; font-size: 14px; margin-bottom: 15px;">
+                                ${errorMessage}
+                            </div>
+                            <div style="color: #007bff; font-size: 13px;">
+                                Cliquez sur "Réessayer" pour relancer l'initialisation
+                            </div>
+                        </div>
+                    `;
+                }
+
+                // Modifier la barre de progression pour indiquer l'erreur
+                const progressFill = document.getElementById('progressFill');
+                if (progressFill) {
+                    progressFill.style.background = 'linear-gradient(90deg, #dc3545, #ff6b6b)';
+                }
+
+                // Afficher le bouton de retry avec style amélioré
+                const retryButton = document.getElementById('retryButton');
+                if (retryButton) {
+                    retryButton.style.display = 'inline-block';
+                    retryButton.style.animation = 'fadeIn 0.3s ease-in';
+                }
+            }
+
+            // Méthode améliorée pour redémarrer avec reset complet
+            retry() {
+                console.log('Retrying loading process - Enhanced version');
+                
+                // Réinitialiser l'état
+                this.isError = false;
+                this.currentStep = 0;
+                this.completedTasks = 0;
+                this.startTime = Date.now();
+                this.taskProgress.clear();
+
+                // Réinitialiser l'affichage avec animations
+                this.steps.forEach(stepId => {
+                    const stepEl = document.getElementById(stepId);
+                    if (stepEl) {
+                        stepEl.classList.remove('active', 'completed', 'error');
+                        const icon = stepEl.querySelector('.status-icon');
+                        if (icon) {
+                            icon.textContent = '⏳';
+                        }
+                    }
+                });
+
+                // Réinitialiser la barre de progression
+                const progressFill = document.getElementById('progressFill');
+                if (progressFill) {
+                    progressFill.style.width = '0%';
+                    progressFill.style.background = 'linear-gradient(90deg, #007bff, #17a2b8)';
+                    progressFill.style.transition = 'width 0.3s ease';
+                }
+
+                // Message de redémarrage
+                const loadingDetails = document.getElementById('loadingDetails');
+                if (loadingDetails) {
+                    loadingDetails.innerHTML = `
+                        <div style="text-align: center; color: #007bff;">
+                            🔄 Redémarrage de l'initialisation...
+                        </div>
+                    `;
+                }
+
+                // Cacher le bouton retry avec animation
+                const retryButton = document.getElementById('retryButton');
+                if (retryButton) {
+                    retryButton.style.animation = 'fadeOut 0.3s ease-out';
+                    setTimeout(() => {
+                        retryButton.style.display = 'none';
+                        retryButton.style.animation = '';
+                    }, 300);
+                }
+
+                // Redémarrer le processus
+                setTimeout(() => {
+                    if (window.electronAPI && window.electronAPI.retryLoading) {
+                        window.electronAPI.retryLoading();
+                    } else {
+                        this.startAutoProgress();
+                    }
+                }, 500);
             }
         }
 
         // Initialiser le gestionnaire de chargement
         document.addEventListener('DOMContentLoaded', () => {
-            new LoadingManager();
+            // Effet d'entrée animé
+            const container = document.getElementById('loadingContainer');
+            container.style.opacity = '0';
+            container.style.transform = 'scale(0.8) translateY(50px)';
+            
+            setTimeout(() => {
+                container.style.transition = 'all 0.8s cubic-bezier(0.4, 0, 0.2, 1)';
+                container.style.opacity = '1';
+                container.style.transform = 'scale(1) translateY(0)';
+            }, 100);
+            
+            // Initialiser le gestionnaire de chargement
+            const loadingManager = new LoadingManager();
         });
     </script>
 </body>

@@ -60,6 +60,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onNewEmail: (callback) => ipcRenderer.on('new-email', (event, ...args) => callback(...args)),
   onMonitoringCycleComplete: (callback) => ipcRenderer.on('monitoring-cycle-complete', (event, ...args) => callback(...args)),
   
+  // NOUVEAU: Événements COM Outlook temps réel
+  onCOMListeningStarted: (callback) => ipcRenderer.on('com-listening-started', (event, ...args) => callback(...args)),
+  onCOMListeningFailed: (callback) => ipcRenderer.on('com-listening-failed', (event, ...args) => callback(...args)),
+  onRealtimeEmailUpdate: (callback) => ipcRenderer.on('realtime-email-update', (event, ...args) => callback(...args)),
+  onRealtimeNewEmail: (callback) => ipcRenderer.on('realtime-new-email', (event, ...args) => callback(...args)),
+  
   // Loading events - pour la page de chargement
   onLoadingProgress: (callback) => ipcRenderer.on('loading-progress', (event, ...args) => callback(...args)),
   onLoadingComplete: (callback) => ipcRenderer.on('loading-complete', (event, ...args) => callback(...args)),

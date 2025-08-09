@@ -1,0 +1,10 @@
+{
+  "scripts": {
+    "postinstall": "npm rebuild better-sqlite3",
+    "prestart": "npm rebuild better-sqlite3 --silent",
+    "start": "npx electron .",
+    "dev": "npm run prestart && npx electron . --dev",
+    "rebuild": "npm rebuild better-sqlite3",
+    "clean-install": "rm -rf node_modules package-lock.json && npm install"
+  }
+}

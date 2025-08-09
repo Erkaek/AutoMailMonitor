@@ -14,9 +14,12 @@ class MonitoringService extends EventEmitter {
     this.checkInterval = 30000; // 30 secondes pour éviter de bloquer Outlook
     this.outlookConnector = null;
     this.databaseService = null;
+    this.outlookEventsService = null; // Nouveau service d'écoute COM
     this.monitoredFolders = {};
     this.initialScanComplete = {}; // Suivi des dossiers déjà scannés initialement
     this.lastCheck = null;
+    this.isUsingCOMEvents = false; // Flag pour savoir si l'écoute COM est active
+    this.fallbackPollingActive = false; // Polling de secours
   }
 
   /**
@@ -29,6 +32,13 @@ class MonitoringService extends EventEmitter {
       // Charger les services nécessaires
       this.outlookConnector = require('../server/outlookConnector');
       this.databaseService = require('./databaseService');
+      
+      // Initialiser le service d'écoute des événements COM Outlook
+      const OutlookEventsService = require('./outlookEventsService');
+      this.outlookEventsService = new OutlookEventsService();
+      
+      // Configurer les listeners d'événements COM
+      this.setupCOMEventListeners();
       
       console.log('✅ [MonitoringService] Service initialisé avec succès');
     } catch (error) {
@@ -74,8 +84,18 @@ class MonitoringService extends EventEmitter {
       console.log('🔍 [MonitoringService] Démarrage du scan initial...');
       await this.performInitialScan();
       
-      // Puis démarrer le cycle de monitoring régulier
-      this.startMonitoringCycle();
+      // ARCHITECTURE OPTIMISÉE: Démarrer l'écoute COM en temps réel après le scan initial
+      console.log('🔔 [MonitoringService] Activation de l\'écoute COM temps réel...');
+      await this.startCOMEventListening();
+      
+      // Si l'écoute COM échoue, utiliser le polling de secours
+      if (!this.isUsingCOMEvents) {
+        console.log('⚠️ [MonitoringService] Écoute COM indisponible - utilisation du polling de secours');
+        this.startFallbackPolling();
+      } else {
+        console.log('✅ [MonitoringService] Écoute COM temps réel active - polling de secours en standby');
+        this.setupFallbackPollingStandby();
+      }
 
       console.log(`✅ [MonitoringService] Monitoring démarré - ${Object.keys(this.monitoredFolders).length} dossiers surveillés`);
       
@@ -125,6 +145,210 @@ class MonitoringService extends EventEmitter {
       console.error('❌ [MonitoringService] Erreur arrêt monitoring:', error);
       throw error;
     }
+  }
+
+  /**
+   * NOUVEAU: Configure les listeners d'événements COM
+   */
+  setupCOMEventListeners() {
+    if (!this.outlookEventsService) return;
+
+    // Écouter les nouveaux emails
+    this.outlookEventsService.on('newEmail', (emailData) => {
+      console.log(`📬 [MonitoringService] Nouvel email COM: ${emailData.subject}`);
+      this.handleCOMNewEmail(emailData);
+    });
+
+    // Écouter les changements d'état des emails
+    this.outlookEventsService.on('emailChanged', (emailData) => {
+      console.log(`🔄 [MonitoringService] Email modifié COM: ${emailData.subject}`);
+      this.handleCOMEmailChanged(emailData);
+    });
+
+    // Écouter les événements groupés
+    this.outlookEventsService.on('eventsProcessed', (groupedEvents) => {
+      console.log(`📊 [MonitoringService] Traitement groupé: ${groupedEvents.totalEvents} événements`);
+      this.handleCOMGroupedEvents(groupedEvents);
+    });
+
+    // Écouter les problèmes d'écoute
+    this.outlookEventsService.on('listening-failed', (error) => {
+      console.error('❌ [MonitoringService] Écoute COM échouée, basculement vers polling');
+      this.isUsingCOMEvents = false;
+      this.startFallbackPolling();
+    });
+
+    console.log('✅ [MonitoringService] Listeners événements COM configurés');
+  }
+
+  /**
+   * NOUVEAU: Démarre l'écoute des événements COM Outlook
+   */
+  async startCOMEventListening() {
+    try {
+      if (!this.outlookEventsService) {
+        throw new Error('Service d\'écoute COM non initialisé');
+      }
+
+      const folderPaths = Object.keys(this.monitoredFolders);
+      const result = await this.outlookEventsService.startListening(folderPaths);
+
+      if (result.success) {
+        this.isUsingCOMEvents = true;
+        console.log('🔔 [MonitoringService] Écoute COM Outlook activée avec succès');
+        this.emit('com-listening-started', { folders: folderPaths.length });
+      } else {
+        throw new Error(result.message);
+      }
+
+    } catch (error) {
+      console.error('❌ [MonitoringService] Impossible de démarrer l\'écoute COM:', error);
+      this.isUsingCOMEvents = false;
+    }
+  }
+
+  /**
+   * NOUVEAU: Arrête l'écoute des événements COM
+   */
+  async stopCOMEventListening() {
+    try {
+      if (this.outlookEventsService && this.isUsingCOMEvents) {
+        await this.outlookEventsService.stopListening();
+        this.isUsingCOMEvents = false;
+        console.log('🛑 [MonitoringService] Écoute COM arrêtée');
+      }
+    } catch (error) {
+      console.error('❌ [MonitoringService] Erreur arrêt écoute COM:', error);
+    }
+  }
+
+  /**
+   * NOUVEAU: Démarre le polling de secours en cas d'échec COM
+   */
+  startFallbackPolling() {
+    if (this.fallbackPollingActive) return;
+
+    console.log('🔄 [MonitoringService] Démarrage du polling de secours...');
+    this.fallbackPollingActive = true;
+
+    // Polling moins fréquent (toutes les 2 minutes) car c'est un fallback
+    this.monitoringInterval = setInterval(() => {
+      this.performMonitoringCheck();
+    }, 120000); // 2 minutes
+
+    console.log('✅ [MonitoringService] Polling de secours actif (2 min)');
+  }
+
+  /**
+   * NOUVEAU: Configure le polling de secours en standby
+   */
+  setupFallbackPollingStandby() {
+    // Polling très léger toutes les 5 minutes pour vérifier que l'écoute COM fonctionne
+    this.monitoringInterval = setInterval(() => {
+      this.checkCOMHealthAndFallback();
+    }, 300000); // 5 minutes
+
+    console.log('✅ [MonitoringService] Polling de secours en standby (5 min)');
+  }
+
+  /**
+   * NOUVEAU: Vérifie la santé de l'écoute COM et bascule si nécessaire
+   */
+  async checkCOMHealthAndFallback() {
+    try {
+      if (!this.isUsingCOMEvents) return;
+
+      const stats = this.outlookEventsService.getListeningStats();
+      
+      if (!stats.isListening) {
+        console.warn('⚠️ [MonitoringService] Écoute COM interrompue, basculement vers polling');
+        this.isUsingCOMEvents = false;
+        this.startFallbackPolling();
+      } else {
+        console.log('✅ [MonitoringService] Écoute COM opérationnelle');
+      }
+
+    } catch (error) {
+      console.error('❌ [MonitoringService] Erreur vérification santé COM:', error);
+    }
+  }
+
+  /**
+   * NOUVEAU: Gère les nouveaux emails détectés via COM
+   */
+  async handleCOMNewEmail(emailData) {
+    try {
+      // Traiter immédiatement le nouvel email en base
+      const result = await this.databaseService.processCOMNewEmail(emailData);
+      
+      if (result.processed) {
+        console.log(`📧 [MonitoringService] Nouvel email traité via COM: ${emailData.subject}`);
+        
+        // Émettre l'événement pour mise à jour UI temps réel
+        this.emit('newEmail', {
+          ...emailData,
+          category: this.getFolderCategory(emailData.folderPath),
+          timestamp: new Date()
+        });
+      }
+
+    } catch (error) {
+      console.error('❌ [MonitoringService] Erreur traitement nouvel email COM:', error);
+    }
+  }
+
+  /**
+   * NOUVEAU: Gère les changements d'état des emails via COM
+   */
+  async handleCOMEmailChanged(emailData) {
+    try {
+      // Mettre à jour l'état de l'email en base
+      const result = await this.databaseService.processCOMEmailChange(emailData);
+      
+      if (result.updated) {
+        console.log(`🔄 [MonitoringService] État email mis à jour via COM: ${emailData.subject}`);
+        
+        // Émettre l'événement pour mise à jour UI temps réel
+        this.emit('emailUpdated', {
+          ...emailData,
+          category: this.getFolderCategory(emailData.folderPath),
+          timestamp: new Date()
+        });
+      }
+
+    } catch (error) {
+      console.error('❌ [MonitoringService] Erreur traitement changement email COM:', error);
+    }
+  }
+
+  /**
+   * NOUVEAU: Gère les événements groupés COM
+   */
+  async handleCOMGroupedEvents(groupedEvents) {
+    try {
+      // Traiter les événements par dossier
+      for (const [folderPath, events] of Object.entries(groupedEvents.groupedEvents)) {
+        console.log(`📊 [MonitoringService] Traitement ${events.newEmails} nouveaux + ${events.changedEmails} modifiés dans ${folderPath}`);
+      }
+
+      // Émettre un événement de synchronisation terminée
+      this.emit('syncCompleted', {
+        totalEvents: groupedEvents.totalEvents,
+        folders: Object.keys(groupedEvents.groupedEvents).length,
+        timestamp: groupedEvents.timestamp
+      });
+
+    } catch (error) {
+      console.error('❌ [MonitoringService] Erreur traitement événements groupés COM:', error);
+    }
+  }
+
+  /**
+   * Récupère la catégorie d'un dossier
+   */
+  getFolderCategory(folderPath) {
+    const folderConfig = this.monitoredFolders[folderPath];
+    return folderConfig ? folderConfig.category : 'autres';
   }
 
   /**

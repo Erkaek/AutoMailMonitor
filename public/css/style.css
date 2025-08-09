@@ -49,7 +49,327 @@ body {
 
 /* Layout principal */
 
-/* Styles pour la gestion des dossiers */
+/* Styles pour le tableau d'historique hebdomadaire */
+.week-separator {
+  border-top: 3px solid var(--primary) !important;
+}
+
+/* Styles pour le survol de semaine complète */
+.week-group {
+  transition: background-color 0.2s ease;
+}
+
+.week-group:hover {
+  background-color: rgba(13, 110, 253, 0.05) !important;
+}
+
+.week-group.week-hover {
+  background-color: rgba(13, 110, 253, 0.08) !important;
+}
+
+/* Styles modernes pour l'interface 2025 */
+
+/* Cartes de statistiques modernes */
+.stat-card {
+  transition: var(--transition);
+  border: 1px solid transparent;
+}
+
+.stat-card:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow);
+}
+
+/* Indicateurs de catégories */
+.category-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+/* Header avec gradient moderne */
+.bg-gradient {
+  position: relative;
+  overflow: hidden;
+}
+
+.bg-gradient::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: linear-gradient(45deg, rgba(255,255,255,0.1) 0%, rgba(255,255,255,0.05) 100%);
+  pointer-events: none;
+}
+
+/* Liste moderne des dossiers */
+.folder-card {
+  border: 1px solid var(--gray-200);
+  border-radius: var(--border-radius);
+  transition: var(--transition);
+  background: white;
+  overflow: hidden;
+}
+
+.folder-card:hover {
+  border-color: var(--primary);
+  box-shadow: 0 4px 12px rgba(13, 110, 253, 0.15);
+  transform: translateY(-2px);
+}
+
+.folder-card .folder-header {
+  background: linear-gradient(135deg, #f8f9fa 0%, #ffffff 100%);
+  border-bottom: 1px solid var(--gray-200);
+}
+
+.folder-path {
+  font-family: 'Consolas', 'Monaco', monospace;
+  font-size: 0.85rem;
+  background: var(--gray-100);
+  padding: 0.25rem 0.5rem;
+  border-radius: var(--border-radius-sm);
+  color: var(--gray-600);
+}
+
+/* Badges modernisés */
+.badge.modern {
+  font-weight: 500;
+  padding: 0.5rem 0.75rem;
+  border-radius: var(--border-radius-lg);
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.badge.category-declarations {
+  background: linear-gradient(135deg, #17a2b8 0%, #20c997 100%);
+  color: white;
+}
+
+.badge.category-reglements {
+  background: linear-gradient(135deg, #ffc107 0%, #fd7e14 100%);
+  color: #212529;
+}
+
+.badge.category-simples {
+  background: linear-gradient(135deg, #6c757d 0%, #495057 100%);
+  color: white;
+}
+
+/* Boutons modernisés */
+.btn-modern {
+  border-radius: var(--border-radius-lg);
+  padding: 0.75rem 1.5rem;
+  font-weight: 500;
+  letter-spacing: 0.3px;
+  transition: var(--transition);
+  position: relative;
+  overflow: hidden;
+}
+
+.btn-modern::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -100%;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,0.2), transparent);
+  transition: left 0.5s;
+}
+
+.btn-modern:hover::before {
+  left: 100%;
+}
+
+/* Indicateurs de statut modernes */
+.status-indicator {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  display: inline-block;
+  position: relative;
+  animation: pulse 2s infinite;
+}
+
+.status-indicator.status-connected {
+  background: var(--success);
+  box-shadow: 0 0 0 0 rgba(25, 135, 84, 0.7);
+}
+
+.status-indicator.status-disconnected {
+  background: var(--gray-400);
+  animation: none;
+}
+
+.status-indicator.status-warning {
+  background: var(--warning);
+  box-shadow: 0 0 0 0 rgba(255, 193, 7, 0.7);
+}
+
+@keyframes pulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(25, 135, 84, 0.7);
+  }
+  70% {
+    box-shadow: 0 0 0 10px rgba(25, 135, 84, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(25, 135, 84, 0);
+  }
+}
+
+/* Empty state moderne */
+.empty-state {
+  text-align: center;
+  padding: 3rem 1rem;
+  color: var(--gray-500);
+}
+
+.empty-state i {
+  font-size: 4rem;
+  margin-bottom: 1rem;
+  opacity: 0.3;
+}
+
+.empty-state h4 {
+  font-weight: 600;
+  margin-bottom: 0.5rem;
+}
+
+.empty-state p {
+  font-size: 0.9rem;
+  opacity: 0.8;
+}
+
+/* Métriques de performance */
+.performance-metric {
+  text-align: center;
+  padding: 0.5rem;
+  border-radius: var(--border-radius-sm);
+  transition: var(--transition);
+}
+
+.performance-metric:hover {
+  background: var(--gray-100);
+}
+
+/* Animations d'entrée */
+@keyframes slideInUp {
+  from {
+    opacity: 0;
+    transform: translateY(30px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes slideInRight {
+  from {
+    opacity: 0;
+    transform: translateX(30px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.animate-slide-up {
+  animation: slideInUp 0.5s ease-out;
+}
+
+.animate-slide-right {
+  animation: slideInRight 0.5s ease-out;
+}
+
+/* Barres de progression modernes */
+.progress {
+  border-radius: var(--border-radius-lg);
+  overflow: hidden;
+  background: var(--gray-200);
+}
+
+.progress-bar {
+  border-radius: var(--border-radius-lg);
+  position: relative;
+  overflow: hidden;
+}
+
+.progress-bar::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  right: 0;
+  background-image: linear-gradient(
+    45deg,
+    rgba(255, 255, 255, 0.2) 25%,
+    transparent 25%,
+    transparent 50%,
+    rgba(255, 255, 255, 0.2) 50%,
+    rgba(255, 255, 255, 0.2) 75%,
+    transparent 75%,
+    transparent
+  );
+  background-size: 1rem 1rem;
+  animation: progressStripes 1s linear infinite;
+}
+
+@keyframes progressStripes {
+  0% {
+    background-position: 1rem 0;
+  }
+  100% {
+    background-position: 0 0;
+  }
+}
+
+/* Mode sombre pour les cartes */
+@media (prefers-color-scheme: dark) {
+  .card {
+    background: var(--gray-800);
+    border-color: var(--gray-700);
+    color: var(--gray-100);
+  }
+  
+  .bg-gradient {
+    background: linear-gradient(135deg, var(--gray-800) 0%, var(--gray-700) 100%) !important;
+  }
+  
+  .folder-card {
+    background: var(--gray-800);
+    border-color: var(--gray-700);
+  }
+  
+  .folder-path {
+    background: var(--gray-700);
+    color: var(--gray-300);
+  }
+}
+
+/* Responsive amélioré */
+@media (max-width: 768px) {
+  .stat-card {
+    margin-bottom: 1rem;
+  }
+  
+  .category-stats {
+    font-size: 0.9rem;
+  }
+  
+  .performance-metric {
+    padding: 0.25rem;
+  }
+}
+
+/* Styles pour les dossiers */
 .folder-tree-list {
   max-height: 400px;
   overflow-y: auto;
@@ -926,4 +1246,99 @@ body {
 
 .folder-tree::-webkit-scrollbar-thumb:hover {
   background: #a8a8a8;
+}
+
+/* === INDICATEURS D'ÉVOLUTION 2025 === */
+.evolution-indicator {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  font-weight: 600;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  position: relative;
+  overflow: hidden;
+}
+
+.evolution-indicator.positive {
+  background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+  color: white;
+  box-shadow: 0 4px 12px rgba(16, 185, 129, 0.3);
+}
+
+.evolution-indicator.negative {
+  background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
+  color: white;
+  box-shadow: 0 4px 12px rgba(239, 68, 68, 0.3);
+}
+
+.evolution-indicator.stable {
+  background: linear-gradient(135deg, #6b7280 0%, #4b5563 100%);
+  color: white;
+  box-shadow: 0 4px 12px rgba(107, 114, 128, 0.2);
+}
+
+.evolution-indicator:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.15);
+}
+
+.evolution-indicator::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: linear-gradient(45deg, rgba(255, 255, 255, 0.2) 0%, transparent 100%);
+  border-radius: 50%;
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+
+.evolution-indicator:hover::before {
+  opacity: 1;
+}
+
+.evolution-indicator i {
+  position: relative;
+  z-index: 1;
+}
+
+/* Tailles de texte pour l'évolution */
+.tiny {
+  font-size: 0.7rem;
+  line-height: 1;
+}
+
+/* Animation pulse pour les indicateurs positifs */
+@keyframes evolution-pulse {
+  0% { box-shadow: 0 4px 12px rgba(16, 185, 129, 0.3); }
+  50% { box-shadow: 0 4px 20px rgba(16, 185, 129, 0.5); }
+  100% { box-shadow: 0 4px 12px rgba(16, 185, 129, 0.3); }
+}
+
+.evolution-indicator.positive:hover {
+  animation: evolution-pulse 2s infinite;
+}
+
+/* Styles pour les bordures de semaine */
+.border-top.border-primary.border-3 {
+  border-top: 3px solid var(--primary) !important;
+}
+
+/* Responsive pour les indicateurs d'évolution */
+@media (max-width: 768px) {
+  .evolution-indicator {
+    width: 28px;
+    height: 28px;
+    font-size: 12px;
+  }
+  
+  .tiny {
+    font-size: 0.6rem;
+  }
 }

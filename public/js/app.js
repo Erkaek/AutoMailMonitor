@@ -23,6 +23,14 @@ class MailMonitor {
       lastUpdate: null
     };
     
+    // Gestionnaire de chargement centralisé
+    this.loadingManager = {
+      tasks: new Map(),
+      totalTasks: 0,
+      completedTasks: 0,
+      isLoading: false
+    };
+    
     this.updateInterval = null;
     this.charts = {};
     this.init();
@@ -33,47 +41,176 @@ class MailMonitor {
     console.log('🚀 Initialisation de Mail Monitor...');
     
     try {
-      this.setupEventListeners();
-      await this.loadConfiguration();
-      await this.checkConnection();
-      await this.loadInitialData();
-      this.startPeriodicUpdates();
+      // Démarrer le gestionnaire de chargement
+      this.startLoading();
       
-      this.showNotification('Application prête', 'Mail Monitor est opérationnel', 'success');
+      // Enregistrer toutes les tâches de chargement
+      this.registerLoadingTask('configuration', 'Chargement de la configuration...');
+      this.registerLoadingTask('connection', 'Vérification de la connexion...');
+      this.registerLoadingTask('stats', 'Chargement des statistiques...');
+      this.registerLoadingTask('emails', 'Chargement des emails récents...');
+      this.registerLoadingTask('categories', 'Chargement des catégories...');
+      this.registerLoadingTask('folders', 'Chargement des dossiers...');
+      this.registerLoadingTask('vba', 'Chargement des métriques VBA...');
+      this.registerLoadingTask('monitoring', 'Vérification du monitoring...');
+      this.registerLoadingTask('settings', 'Chargement des paramètres...');
+      this.registerLoadingTask('weekly', 'Initialisation du suivi hebdomadaire...');
+      
+      this.setupEventListeners();
+      
+      await this.completeLoadingTask('configuration', this.loadConfiguration());
+      await this.completeLoadingTask('connection', this.checkConnection());
+      
+      // Charger les données en parallèle
+      await Promise.allSettled([
+        this.completeLoadingTask('stats', this.loadStats()),
+        this.completeLoadingTask('emails', this.loadRecentEmails()),
+        this.completeLoadingTask('categories', this.loadCategoryStats()),
+        this.completeLoadingTask('folders', this.loadFoldersStats()),
+        this.completeLoadingTask('vba', this.loadVBAMetrics()),
+        this.completeLoadingTask('monitoring', this.checkMonitoringStatus()),
+        this.completeLoadingTask('settings', this.loadSettings())
+      ]);
+      
+      await this.completeLoadingTask('weekly', this.initWeeklyTracking());
+      
+      this.startPeriodicUpdates();
+      this.setupAutoRefresh();
+      
+      // Terminer le chargement
+      this.finishLoading();
+      
       console.log('✅ MailMonitor app initialisée avec succès');
     } catch (error) {
       console.error('❌ Erreur lors de l\'initialisation:', error);
       this.showNotification('Erreur d\'initialisation', error.message, 'danger');
+      this.finishLoading();
     }
+  }
+
+  // === GESTIONNAIRE DE CHARGEMENT ===
+  startLoading() {
+    this.loadingManager.isLoading = true;
+    this.loadingManager.totalTasks = 0;
+    this.loadingManager.completedTasks = 0;
+    this.loadingManager.tasks.clear();
+    this.updateLoadingUI();
+  }
+
+  registerLoadingTask(taskId, description) {
+    this.loadingManager.tasks.set(taskId, {
+      description,
+      completed: false,
+      startTime: Date.now()
+    });
+    this.loadingManager.totalTasks++;
+    this.updateLoadingUI();
+  }
+
+  async completeLoadingTask(taskId, promise) {
+    try {
+      const result = await promise;
+      if (this.loadingManager.tasks.has(taskId)) {
+        this.loadingManager.tasks.get(taskId).completed = true;
+        this.loadingManager.completedTasks++;
+        this.updateLoadingUI();
+      }
+      return result;
+    } catch (error) {
+      console.error(`❌ Erreur tâche ${taskId}:`, error);
+      if (this.loadingManager.tasks.has(taskId)) {
+        this.loadingManager.tasks.get(taskId).completed = true;
+        this.loadingManager.tasks.get(taskId).error = error.message;
+        this.loadingManager.completedTasks++;
+        this.updateLoadingUI();
+      }
+      throw error;
+    }
+  }
+
+  updateLoadingUI() {
+    if (!this.loadingManager.isLoading) return;
+    
+    const percentage = this.loadingManager.totalTasks > 0 
+      ? Math.round((this.loadingManager.completedTasks / this.loadingManager.totalTasks) * 100)
+      : 0;
+    
+    // Mettre à jour la barre de progression s'il y en a une
+    const progressBar = document.querySelector('.loading-progress-bar');
+    if (progressBar) {
+      progressBar.style.width = `${percentage}%`;
+      progressBar.textContent = `${percentage}%`;
+    }
+    
+    // Mettre à jour le texte de statut
+    const statusText = document.querySelector('.loading-status-text');
+    if (statusText) {
+      const currentTask = Array.from(this.loadingManager.tasks.values())
+        .find(task => !task.completed);
+      
+      if (currentTask) {
+        statusText.textContent = currentTask.description;
+      } else {
+        statusText.textContent = 'Finalisation...';
+      }
+    }
+    
+    // Mettre à jour le compteur
+    const counter = document.querySelector('.loading-counter');
+    if (counter) {
+      counter.textContent = `${this.loadingManager.completedTasks}/${this.loadingManager.totalTasks}`;
+    }
+    
+    console.log(`📊 Chargement: ${this.loadingManager.completedTasks}/${this.loadingManager.totalTasks} (${percentage}%)`);
+  }
+
+  finishLoading() {
+    this.loadingManager.isLoading = false;
+    
+    // Masquer la page de chargement
+    const loadingScreen = document.getElementById('loading-screen');
+    if (loadingScreen) {
+      loadingScreen.style.display = 'none';
+    }
+    
+    // Afficher l'interface principale
+    const mainContent = document.getElementById('main-content');
+    if (mainContent) {
+      mainContent.style.display = 'block';
+    }
+    
+    console.log('✅ Chargement terminé');
   }
 
   /**
    * Configuration de l'actualisation automatique
    */
   setupAutoRefresh() {
+    // Log d'initialisation - conservé pour débogage important
     console.log('🔄 Configuration de l\'actualisation automatique...');
     
-    // Actualisation des statistiques principales toutes les 10 secondes
+    // Actualisation des statistiques principales toutes les 1 seconde
     this.statsRefreshInterval = setInterval(() => {
       this.performStatsRefresh();
-    }, 10000);
+    }, 1000);
     
-    // Actualisation des emails récents toutes les 15 secondes
+    // Actualisation des emails récents toutes les 1 seconde
     this.emailsRefreshInterval = setInterval(() => {
       this.performEmailsRefresh();
-    }, 15000);
+    }, 1000);
     
-    // Actualisation complète toutes les 2 minutes
+    // Actualisation des statistiques de dossiers toutes les 2 secondes
+    this.foldersRefreshInterval = setInterval(() => {
+      this.loadFoldersStats();
+    }, 2000);
+    
+    // Actualisation complète toutes les 5 secondes
     this.fullRefreshInterval = setInterval(() => {
       this.performFullRefresh();
-    }, 120000);
+    }, 5000);
     
-    // Actualisation des métriques VBA toutes les 20 secondes
-    this.vbaRefreshInterval = setInterval(() => {
-      this.loadVBAMetrics();
-    }, 20000);
-    
-    console.log('✅ Auto-refresh configuré (10s stats, 15s emails, 2min complet, 20s VBA)');
+    // Log de confirmation configuration - conservé pour débogage
+    console.log('✅ Auto-refresh configuré (1s stats, 1s emails, 2s dossiers, 5s complet)');
   }
 
   /**
@@ -85,7 +222,8 @@ class MailMonitor {
     // Écouter les mises à jour de statistiques en temps réel
     if (window.electronAPI.onStatsUpdate) {
       window.electronAPI.onStatsUpdate((stats) => {
-        console.log('📊 Événement stats temps réel reçu:', stats);
+        // Stats temps réel - log désactivé pour réduire le spam
+        // console.log('📊 Événement stats temps réel reçu:', stats);
         this.state.stats = { ...this.state.stats, ...stats };
         this.updateStatsDisplay();
         this.updateLastRefreshTime();
@@ -111,12 +249,43 @@ class MailMonitor {
     // Écouter la fin des cycles de monitoring
     if (window.electronAPI.onMonitoringCycleComplete) {
       window.electronAPI.onMonitoringCycleComplete((cycleData) => {
-        console.log('🔄 Cycle de monitoring terminé:', cycleData);
+        // Cycle monitoring - log désactivé pour réduire le spam
+        // console.log('🔄 Cycle de monitoring terminé:', cycleData);
         this.handleMonitoringCycleComplete(cycleData);
       });
     }
+
+    // NOUVEAU: Écouter les événements COM Outlook
+    if (window.electronAPI.onCOMListeningStarted) {
+      window.electronAPI.onCOMListeningStarted((data) => {
+        console.log('🔔 COM listening started:', data);
+        this.handleCOMListeningStarted(data);
+      });
+    }
+
+    if (window.electronAPI.onCOMListeningFailed) {
+      window.electronAPI.onCOMListeningFailed((error) => {
+        console.log('❌ COM listening failed:', error);
+        this.handleCOMListeningFailed(error);
+      });
+    }
+
+    // Événements temps réel pour les emails COM
+    if (window.electronAPI.onRealtimeEmailUpdate) {
+      window.electronAPI.onRealtimeEmailUpdate((emailData) => {
+        console.log('📧 Mise à jour email temps réel COM:', emailData);
+        this.handleRealtimeEmailUpdate(emailData);
+      });
+    }
+
+    if (window.electronAPI.onRealtimeNewEmail) {
+      window.electronAPI.onRealtimeNewEmail((emailData) => {
+        console.log('📬 Nouvel email temps réel COM:', emailData);
+        this.handleRealtimeNewEmail(emailData);
+      });
+    }
     
-    console.log('✅ Événements temps réel configurés');
+    console.log('✅ Événements temps réel configurés (y compris COM)');
   }
 
   /**
@@ -158,6 +327,52 @@ class MailMonitor {
     // Actualisation légère après chaque cycle
     this.performStatsRefresh();
     this.updateLastRefreshTime();
+  }
+
+  /**
+   * NOUVEAU: Gestion du démarrage de l'écoute COM
+   */
+  handleCOMListeningStarted(data) {
+    console.log('🔔 COM Outlook écoute démarrée:', data);
+    
+    // Mettre à jour le statut de monitoring pour afficher le mode COM
+    const statusContainer = document.getElementById('monitoring-status');
+    if (statusContainer) {
+      const comBadge = `<span class="badge bg-success ms-2">COM Actif</span>`;
+      const existingContent = statusContainer.innerHTML;
+      if (!existingContent.includes('COM Actif')) {
+        statusContainer.innerHTML = existingContent.replace('</div>', comBadge + '</div>');
+      }
+    }
+    
+    // Notification discrète
+    this.showNotification(
+      'Écoute COM activée', 
+      `Surveillance temps réel active sur ${data.folders} dossier(s)`, 
+      'success'
+    );
+  }
+
+  /**
+   * NOUVEAU: Gestion de l'échec de l'écoute COM
+   */
+  handleCOMListeningFailed(error) {
+    console.log('❌ COM Outlook écoute échouée:', error);
+    
+    // Mettre à jour le statut pour indiquer le fallback
+    const statusContainer = document.getElementById('monitoring-status');
+    if (statusContainer) {
+      const fallbackBadge = `<span class="badge bg-warning ms-2">Mode Polling</span>`;
+      const existingContent = statusContainer.innerHTML;
+      statusContainer.innerHTML = existingContent.replace(/COM Actif/g, 'Mode Polling');
+    }
+    
+    // Notification d'avertissement
+    this.showNotification(
+      'Basculement vers polling', 
+      'L\'écoute COM a échoué, utilisation du polling de secours', 
+      'warning'
+    );
   }
 
   /**
@@ -212,12 +427,14 @@ class MailMonitor {
    */
   async performFullRefresh() {
     try {
-      console.log('🔄 Actualisation complète automatique...');
+      // Actualisation auto - log simplifié
+      // console.log('🔄 Actualisation complète automatique...');
       await Promise.allSettled([
         this.checkConnection(),
         this.loadStats(),
         this.loadRecentEmails(),
         this.loadCategoryStats(),
+        this.loadFoldersStats(),
         this.loadVBAMetrics()
       ]);
       this.updateLastRefreshTime();
@@ -298,13 +515,25 @@ class MailMonitor {
       });
     });
     
-    // Emails
+    // Emails - Event listeners améliorés
     document.getElementById('refresh-emails')?.addEventListener('click', () => this.loadRecentEmails());
+    
+    // Filtres d'emails
+    document.getElementById('email-search')?.addEventListener('input', (e) => this.filterEmails());
+    document.getElementById('folder-filter')?.addEventListener('change', (e) => this.filterEmails());
+    document.getElementById('date-filter')?.addEventListener('change', (e) => this.filterEmails());
+    document.getElementById('status-filter')?.addEventListener('change', (e) => this.filterEmails());
+    
+    // Filtres rapides des emails
+    document.querySelectorAll('input[name="email-filter"]').forEach(filter => {
+      filter.addEventListener('change', (e) => this.applyQuickEmailFilter(e.target.id));
+    });
     
     // Monitoring
     document.getElementById('start-monitoring')?.addEventListener('click', () => this.startMonitoring());
     document.getElementById('stop-monitoring')?.addEventListener('click', () => this.stopMonitoring());
     document.getElementById('add-folder')?.addEventListener('click', () => this.showAddFolderModal());
+    document.getElementById('refresh-folders')?.addEventListener('click', () => this.refreshFoldersDisplay());
     
     // Paramètres
     document.getElementById('settings-form')?.addEventListener('submit', (e) => this.saveSettings(e));
@@ -339,11 +568,16 @@ class MailMonitor {
       console.log('🔄 Rechargement de la configuration des dossiers...');
       const result = await window.electronAPI.loadFoldersConfig();
       
+      // DEBUG: Vérifier les données reçues de l'API
+      console.log('🔍 Réponse API loadFoldersConfig:', result);
+      
       if (result.success) {
         this.state.folderCategories = result.folderCategories || {};
         console.log(`✅ Configuration rechargée: ${Object.keys(this.state.folderCategories).length} dossiers configurés`);
+        console.log('🔍 Détail des dossiers:', this.state.folderCategories);
       } else {
         console.warn('⚠️ Aucune configuration trouvée lors du rechargement');
+        console.warn('🔍 Réponse complète:', result);
         this.state.folderCategories = {};
       }
     } catch (error) {
@@ -359,7 +593,8 @@ class MailMonitor {
       this.loadStats(),
       this.loadRecentEmails(),
       this.loadCategoryStats(),
-      this.loadVBAMetrics(), // Nouvelles métriques VBA
+      this.loadFoldersStats(), // Nouvelle méthode pour stats dossiers
+      this.loadVBAMetrics(), // Métriques VBA
       this.checkMonitoringStatus(),
       this.loadSettings()
     ]);
@@ -388,17 +623,7 @@ class MailMonitor {
     }
   }
 
-  async loadRecentEmails() {
-    try {
-      const emails = await window.electronAPI.getRecentEmails();
-      this.state.recentEmails = emails || [];
-      this.updateEmailsTable();
-    } catch (error) {
-      console.error('❌ Erreur chargement emails:', error);
-      this.state.recentEmails = [];
-      this.updateEmailsTable();
-    }
-  }
+  // Méthode supprimée - utilise maintenant la nouvelle version loadRecentEmails() plus bas dans le fichier
 
   async loadCategoryStats() {
     try {
@@ -437,10 +662,108 @@ class MailMonitor {
     }
   }
 
+  // Nouvelle méthode pour charger et afficher les statistiques par dossier
+  async loadFoldersStats() {
+    try {
+      console.log('📁 Chargement statistiques dossiers...');
+      
+      // Récupérer les données des dossiers avec leurs emails
+      const foldersData = await window.electronAPI.getFoldersTree();
+      
+      if (foldersData && foldersData.folders) {
+        this.updateFoldersStatsDisplay(foldersData.folders);
+        
+        // Mettre à jour le badge total
+        const totalFoldersEl = document.getElementById('total-folders-badge');
+        if (totalFoldersEl) {
+          totalFoldersEl.textContent = `${foldersData.folders.length} dossier${foldersData.folders.length > 1 ? 's' : ''}`;
+        }
+      }
+      
+    } catch (error) {
+      console.error('❌ Erreur chargement stats dossiers:', error);
+    }
+  }
+
+  // Nouvelle méthode pour afficher les statistiques des dossiers
+  updateFoldersStatsDisplay(folders) {
+    const container = document.getElementById('folders-stats-grid');
+    if (!container) return;
+    
+    if (!folders || folders.length === 0) {
+      container.innerHTML = `
+        <div class="col-12 text-center text-muted py-4">
+          <i class="bi bi-folder-x fs-1 mb-3"></i>
+          <p>Aucun dossier configuré pour le monitoring</p>
+          <small>Ajoutez des dossiers dans l'onglet Configuration</small>
+        </div>
+      `;
+      return;
+    }
+    
+    // Générer les cartes pour chaque dossier
+    const foldersHtml = folders.map(folder => {
+      const categoryColor = this.getCategoryColor(folder.category);
+      const categoryIcon = this.getCategoryIcon(folder.category);
+      const readEmails = folder.emailCount || 0;  // Tous les emails pour ce dossier
+      
+      return `
+        <div class="col-xl-3 col-lg-4 col-md-6">
+          <div class="folder-stat-card p-3 h-100">
+            <div class="d-flex align-items-center mb-2">
+              <i class="bi ${categoryIcon} ${categoryColor} fs-4 me-2"></i>
+              <h6 class="mb-0 fw-semibold">${this.escapeHtml(folder.name)}</h6>
+            </div>
+            <div class="row g-2 text-center">
+              <div class="col-6">
+                <div class="fs-4 fw-bold text-primary">${readEmails}</div>
+                <small class="text-muted">Total</small>
+              </div>
+              <div class="col-6">
+                <div class="fs-4 fw-bold text-warning">0</div>
+                <small class="text-muted">Non lus</small>
+              </div>
+            </div>
+            <div class="mt-2">
+              <div class="d-flex justify-content-between align-items-center">
+                <small class="text-muted">${this.escapeHtml(folder.category)}</small>
+                <span class="badge bg-light text-dark">${folder.isMonitored ? 'Actif' : 'Inactif'}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      `;
+    }).join('');
+    
+    container.innerHTML = foldersHtml;
+  }
+
+  // Méthodes utilitaires pour les catégories
+  getCategoryColor(category) {
+    const colors = {
+      'Déclarations': 'text-danger',
+      'Règlements': 'text-success', 
+      'mails_simples': 'text-info',
+      'test': 'text-secondary'
+    };
+    return colors[category] || 'text-muted';
+  }
+
+  getCategoryIcon(category) {
+    const icons = {
+      'Déclarations': 'bi-file-earmark-text',
+      'Règlements': 'bi-credit-card',
+      'mails_simples': 'bi-envelope',
+      'test': 'bi-folder'
+    };
+    return icons[category] || 'bi-folder';
+  }
+
   async checkMonitoringStatus() {
     try {
       // Vérifier si des dossiers sont configurés pour le monitoring
-      const foldersCount = Object.keys(this.state.folderCategories).length;
+      const foldersData = await window.electronAPI.getFoldersTree();
+      const foldersCount = foldersData?.folders?.length || 0;
       
       if (foldersCount > 0) {
         console.log(`📁 ${foldersCount} dossier(s) configuré(s) - monitoring probablement actif`);
@@ -450,11 +773,11 @@ class MailMonitor {
         this.state.isMonitoring = true;
         this.updateMonitoringStatus(true);
         
-        this.showNotification(
-          'Monitoring automatique', 
-          `Le monitoring automatique est actif sur ${foldersCount} dossier(s)`, 
-          'info'
-        );
+        // this.showNotification(
+        //   'Monitoring automatique', 
+        //   `Le monitoring automatique est actif sur ${foldersCount} dossier(s)`, 
+        //   'info'
+        // ); // Notification supprimée
       } else {
         console.log('📁 Aucun dossier configuré - monitoring arrêté');
         this.state.isMonitoring = false;
@@ -882,12 +1205,157 @@ class MailMonitor {
   updateStatsDisplay() {
     const stats = this.state.stats;
     
-    document.getElementById('emails-today').textContent = stats.emailsToday || '--';
-    document.getElementById('emails-sent').textContent = stats.treatedToday || '--';  // Changé sentToday -> treatedToday
-    document.getElementById('emails-unread').textContent = stats.unreadTotal || '--';
+    // Mise à jour des compteurs principaux avec animation
+    this.animateCounterUpdate('total-emails', stats.totalEmails || 0);
+    this.animateCounterUpdate('emails-unread', stats.unreadTotal || 0);
+    this.animateCounterUpdate('emails-today', stats.emailsToday || 0);
+    
+    // Calcul et affichage des pourcentages
+    const totalEmails = stats.totalEmails || 0;
+    const unreadEmails = stats.unreadTotal || 0;
+    
+    if (totalEmails > 0) {
+      const unreadPercentage = Math.round((unreadEmails / totalEmails) * 100);
+      document.getElementById('unread-percentage').textContent = `${unreadPercentage}%`;
+      
+      // Coloration en fonction du pourcentage
+      const unreadEl = document.getElementById('unread-percentage');
+      if (unreadPercentage > 50) {
+        unreadEl.className = 'text-danger fw-bold';
+      } else if (unreadPercentage > 25) {
+        unreadEl.className = 'text-warning fw-bold';
+      } else {
+        unreadEl.className = 'text-success fw-bold';
+      }
+    }
+    
+    // Mise à jour du statut de monitoring
+    const monitoredFolders = Object.keys(this.state.folderCategories).length;
+    this.animateCounterUpdate('monitored-folders', monitoredFolders);
+    
+    this.updateMonitoringStatus();
+    this.updateActivityMetrics(stats);
     
     if (this.state.lastUpdate) {
       document.getElementById('last-sync').textContent = this.state.lastUpdate.toLocaleTimeString();
+    }
+  }
+
+  // Nouvelle méthode pour animer les mises à jour de compteurs
+  animateCounterUpdate(elementId, newValue) {
+    const element = document.getElementById(elementId);
+    if (!element) return;
+    
+    const currentValue = parseInt(element.textContent) || 0;
+    
+    if (currentValue !== newValue) {
+      element.classList.add('updating');
+      
+      // Animation de comptage
+      const duration = 500;
+      const steps = 20;
+      const increment = (newValue - currentValue) / steps;
+      let currentStep = 0;
+      
+      const counter = setInterval(() => {
+        currentStep++;
+        const value = Math.round(currentValue + (increment * currentStep));
+        element.textContent = value;
+        
+        if (currentStep >= steps) {
+          clearInterval(counter);
+          element.textContent = newValue;
+          element.classList.remove('updating');
+        }
+      }, duration / steps);
+    }
+  }
+
+  // Nouvelle méthode pour mettre à jour les métriques d'activité
+  updateActivityMetrics(stats) {
+    // Mise à jour des métriques d'activité
+    document.getElementById('activity-total').textContent = stats.emailsToday || 0;
+    document.getElementById('activity-read').textContent = (stats.totalEmails || 0) - (stats.unreadTotal || 0);
+    document.getElementById('activity-pending').textContent = stats.unreadTotal || 0;
+    
+    // Calcul emails par heure (approximatif)
+    const emailsToday = stats.emailsToday || 0;
+    const currentHour = new Date().getHours();
+    const emailsPerHour = currentHour > 0 ? Math.round(emailsToday / currentHour) : emailsToday;
+    document.getElementById('emails-per-hour').textContent = emailsPerHour;
+    
+    // Simulation de croissance (en attendant les vraies données historiques)
+    this.updateTodayGrowth(emailsToday);
+    
+    // Mise à jour des timestamps
+    const now = new Date();
+    document.getElementById('activity-last-update').textContent = now.toLocaleTimeString();
+    document.getElementById('last-check').textContent = now.toLocaleTimeString();
+  }
+
+  // Méthode pour calculer et afficher la croissance d'aujourd'hui
+  updateTodayGrowth(todayCount) {
+    const growthEl = document.getElementById('today-growth');
+    if (!growthEl) return;
+    
+    // Pour l'instant, simulation basée sur l'heure
+    // Dans une vraie implémentation, il faudrait comparer avec les données d'hier
+    const currentHour = new Date().getHours();
+    const expectedByNow = Math.round(todayCount * (24 / Math.max(currentHour, 1)));
+    const growth = todayCount > expectedByNow ? '+' + (todayCount - expectedByNow) : (todayCount - expectedByNow);
+    
+    if (growth > 0) {
+      growthEl.textContent = `+${growth}`;
+      growthEl.className = 'text-success fw-bold';
+    } else if (growth < 0) {
+      growthEl.textContent = growth;
+      growthEl.className = 'text-danger fw-bold';
+    } else {
+      growthEl.textContent = 'Stable';
+      growthEl.className = 'text-muted fw-bold';
+    }
+  }
+
+  // Nouvelle méthode pour mettre à jour le statut de monitoring
+  updateMonitoringStatus() {
+    const statusEl = document.getElementById('monitoring-status');
+    const progressEl = document.getElementById('monitoring-progress');
+    const performanceEl = document.getElementById('monitoring-performance');
+    
+    if (!statusEl) return;
+    
+    const folderCount = Object.keys(this.state.folderCategories).length;
+    
+    if (folderCount > 0 && this.state.isMonitoring) {
+      statusEl.innerHTML = `<span class="status-indicator status-connected me-1"></span>Actif`;
+      if (progressEl) {
+        progressEl.style.width = '100%';
+        progressEl.className = 'progress-bar bg-success';
+      }
+      if (performanceEl) {
+        performanceEl.textContent = 'Excellent';
+        performanceEl.className = 'fw-bold text-success';
+      }
+    } else if (folderCount > 0) {
+      statusEl.innerHTML = `<span class="status-indicator status-connecting me-1"></span>Initialisation...`;
+      if (progressEl) {
+        progressEl.style.width = '60%';
+        progressEl.className = 'progress-bar bg-warning';
+      }
+      if (performanceEl) {
+        performanceEl.textContent = 'En cours';
+        performanceEl.className = 'fw-bold text-warning';
+      }
+    } else {
+      statusEl.innerHTML = `<span class="status-indicator status-disconnected me-1"></span>Arrêté`;
+      if (progressEl) {
+        progressEl.style.width = '0%';
+        progressEl.className = 'progress-bar bg-danger';
+      }
+      if (performanceEl) {
+        performanceEl.textContent = 'Arrêté';
+        performanceEl.className = 'fw-bold text-danger';
+      }
     }
   }
 
@@ -933,48 +1401,705 @@ class MailMonitor {
 
     const folders = Object.entries(this.state.folderCategories);
     
+    // Mettre à jour le compteur dans l'en-tête
+    const countBadge = document.getElementById('monitored-folders-count');
+    if (countBadge) {
+      countBadge.textContent = folders.length;
+    }
+    
     if (folders.length === 0) {
       container.innerHTML = `
-        <div class="text-center text-muted py-4">
-          <i class="bi bi-folder-plus fs-1 mb-3"></i>
-          <p>Aucun dossier configuré</p>
-          <p class="small">Cliquez sur "Ajouter un dossier" pour commencer</p>
+        <div class="empty-state">
+          <i class="bi bi-folder-plus"></i>
+          <h4>Aucun dossier configuré</h4>
+          <p>Commencez par ajouter un dossier à surveiller</p>
+          <button class="btn btn-primary btn-modern mt-3" onclick="document.getElementById('add-folder').click()">
+            <i class="bi bi-plus-circle me-2"></i>Ajouter votre premier dossier
+          </button>
         </div>
       `;
       return;
     }
 
+    // Générer les cartes modernes pour chaque dossier
+    const foldersHtml = folders.map(([path, config]) => {
+      const categoryClass = this.getCategoryClass(config.category);
+      const categoryIcon = this.getCategoryIcon(config.category);
+      
+      return `
+        <div class="folder-card mb-3 animate-slide-up">
+          <div class="folder-header p-3">
+            <div class="d-flex justify-content-between align-items-start">
+              <div class="flex-grow-1">
+                <div class="d-flex align-items-center mb-2">
+                  <i class="bi bi-folder-fill text-warning me-2 fs-5"></i>
+                  <h6 class="mb-0 fw-semibold">${this.escapeHtml(config.name || 'Dossier sans nom')}</h6>
+                  <span class="badge ${categoryClass} modern ms-2">
+                    ${categoryIcon} ${this.escapeHtml(config.category)}
+                  </span>
+                </div>
+                <div class="folder-path">${this.escapeHtml(this.truncatePath(path))}</div>
+              </div>
+              <div class="dropdown">
+                <button class="btn btn-sm btn-outline-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown">
+                  <i class="bi bi-three-dots"></i>
+                </button>
+                <ul class="dropdown-menu dropdown-menu-end">
+                  <li>
+                    <button class="dropdown-item" onclick="app.editFolderCategory('${this.escapeHtml(path)}')">
+                      <i class="bi bi-pencil me-2"></i>Modifier la catégorie
+                    </button>
+                  </li>
+                  <li>
+                    <button class="dropdown-item" onclick="app.viewFolderStats('${this.escapeHtml(path)}')">
+                      <i class="bi bi-graph-up me-2"></i>Voir les statistiques
+                    </button>
+                  </li>
+                  <li><hr class="dropdown-divider"></li>
+                  <li>
+                    <button class="dropdown-item text-danger" onclick="app.removeFolderConfig('${this.escapeHtml(path)}')">
+                      <i class="bi bi-trash me-2"></i>Supprimer
+                    </button>
+                  </li>
+                </ul>
+              </div>
+            </div>
+          </div>
+          <div class="p-3 pt-0">
+            <div class="row g-3">
+              <div class="col-4">
+                <div class="text-center">
+                  <div class="h6 mb-1 text-primary">0</div>
+                  <small class="text-muted">Emails</small>
+                </div>
+              </div>
+              <div class="col-4">
+                <div class="text-center">
+                  <div class="h6 mb-1 text-success">0</div>
+                  <small class="text-muted">Traités</small>
+                </div>
+              </div>
+              <div class="col-4">
+                <div class="text-center">
+                  <div class="h6 mb-1 text-warning">0</div>
+                  <small class="text-muted">En attente</small>
+                </div>
+              </div>
+            </div>
+            <div class="mt-3">
+              <div class="d-flex justify-content-between align-items-center mb-1">
+                <small class="text-muted">Activité</small>
+                <small class="text-muted">Faible</small>
+              </div>
+              <div class="progress" style="height: 6px;">
+                <div class="progress-bar bg-success" role="progressbar" style="width: 25%"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      `;
+    }).join('');
+
     container.innerHTML = `
-      <div class="table-responsive">
-        <table class="table table-sm">
-          <thead>
-            <tr>
-              <th>Dossier</th>
-              <th>Catégorie</th>
-              <th>Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${folders.map(([path, config]) => `
-              <tr>
-                <td>
-                  <div class="fw-bold">${this.escapeHtml(config.name)}</div>
-                  <small class="text-muted">${this.escapeHtml(path)}</small>
-                </td>
-                <td>
-                  <span class="badge bg-primary">${this.escapeHtml(config.category)}</span>
-                </td>
-                <td>
-                  <button class="btn btn-sm btn-outline-danger" onclick="app.removeFolderConfig('${this.escapeHtml(path)}')">
-                    <i class="bi bi-trash"></i>
-                  </button>
-                </td>
-              </tr>
-            `).join('')}
-          </tbody>
-        </table>
+      <div class="folders-list">
+        ${foldersHtml}
       </div>
     `;
+  }
+
+  // Méthodes utilitaires pour le design moderne
+  getCategoryClass(category) {
+    switch(category) {
+      case 'Déclarations': return 'category-declarations';
+      case 'Règlements': return 'category-reglements';
+      case 'Mails simples': return 'category-simples';
+      default: return 'bg-secondary';
+    }
+  }
+
+  getCategoryIcon(category) {
+    switch(category) {
+      case 'Déclarations': return '📋';
+      case 'Règlements': return '💰';
+      case 'Mails simples': return '📧';
+      default: return '📁';
+    }
+  }
+
+  truncatePath(path, maxLength = 50) {
+    if (path.length <= maxLength) return path;
+    const parts = path.split('\\');
+    if (parts.length > 2) {
+      return `${parts[0]}\\...\\${parts[parts.length - 1]}`;
+    }
+    return path.substring(0, maxLength) + '...';
+  }
+
+  // === GESTION DES EMAILS AMÉLIORÉE ===
+  
+  /**
+   * Chargement des emails récents avec filtrage avancé
+   */
+  async loadRecentEmails() {
+    try {
+      // Log réduit - supprimé pour éviter le spam
+      // console.log('📧 Chargement des emails récents... (NOUVELLE VERSION)');
+      
+      const emails = await window.electronAPI.getRecentEmails();
+      console.log('📧 Emails reçus de l\'API:', emails);
+      
+      if (emails && Array.isArray(emails) && emails.length > 0) {
+        this.state.recentEmails = emails;
+        // Email update - log simplifié
+        // console.log('📧 État mis à jour avec', emails.length, 'emails');
+        
+        // Mettre à jour les statistiques des emails
+        this.updateEmailsStats();
+        
+        // Afficher les emails dans le tableau
+        this.displayEmailsTable();
+        
+        // Mettre à jour les filtres
+        this.updateEmailFilters();
+        
+        console.log(`✅ ${emails.length} emails chargés`);
+      } else {
+        console.warn('⚠️ Pas d\'emails trouvés');
+        this.state.recentEmails = [];
+        this.showEmptyEmailsState();
+      }
+    } catch (error) {
+      console.error('❌ Erreur lors du chargement des emails:', error);
+      this.showEmailsError();
+    }
+  }
+
+  /**
+   * Mise à jour des statistiques d'emails dans la section dédiée
+   */
+  updateEmailsStats() {
+    const emails = this.state.recentEmails;
+    if (!emails || emails.length === 0) return;
+
+    const today = new Date();
+    const startOfWeek = new Date(today);
+    startOfWeek.setDate(today.getDate() - today.getDay());
+    
+    const stats = {
+      total: emails.length,
+      unread: emails.filter(email => (!email.is_read && email.is_read !== undefined) || email.UnRead).length,
+      today: emails.filter(email => {
+        const emailDate = new Date(email.received_time || email.ReceivedTime);
+        return emailDate.toDateString() === today.toDateString();
+      }).length,
+      week: emails.filter(email => {
+        const emailDate = new Date(email.received_time || email.ReceivedTime);
+        return emailDate >= startOfWeek;
+      }).length
+    };
+
+    // Mettre à jour les compteurs
+    this.animateCounterUpdate('emails-stats-total', stats.total);
+    this.animateCounterUpdate('emails-stats-unread', stats.unread);
+    this.animateCounterUpdate('emails-stats-today', stats.today);
+    this.animateCounterUpdate('emails-stats-week', stats.week);
+
+    // Calcul du taux d'emails par heure (approximatif)
+    const hoursInDay = 24;
+    const emailsPerHour = stats.today > 0 ? Math.round(stats.today / new Date().getHours() || 1) : 0;
+    document.getElementById('emails-stats-rate').textContent = `${emailsPerHour}/h`;
+
+    // Dernière synchronisation
+    const lastSyncEl = document.getElementById('emails-stats-last-sync');
+    if (lastSyncEl) {
+      lastSyncEl.textContent = new Date().toLocaleTimeString();
+    }
+  }
+
+  /**
+   * Affichage du tableau des emails avec design moderne
+   */
+  displayEmailsTable() {
+    const tbody = document.getElementById('emails-table');
+    if (!tbody) return;
+
+    const emails = this.state.recentEmails;
+    
+    if (!emails || emails.length === 0) {
+      this.showEmptyEmailsState();
+      return;
+    }
+
+    const emailsHtml = emails.slice(0, 50).map(email => { // Limiter à 50 emails pour les performances
+      const receivedDate = new Date(email.received_time || email.ReceivedTime);
+      const isToday = receivedDate.toDateString() === new Date().toDateString();
+      const timeAgo = this.getTimeAgo(receivedDate);
+      
+      // Déterminer le dossier depuis le chemin
+      const folderName = this.extractFolderName(email.folder_name || email.FolderPath || 'Boîte de réception');
+      const folderCategory = this.getFolderCategory(email.folder_name || email.FolderPath);
+      
+      return `
+        <tr class="email-row ${!email.is_read && email.is_read !== undefined ? 'table-warning' : (email.UnRead ? 'table-warning' : '')}" data-email-id="${email.outlook_id || email.EntryID}">
+          <td class="ps-3">
+            <div class="d-flex flex-column">
+              <span class="fw-medium ${isToday ? 'text-primary' : ''}">${timeAgo}</span>
+              <small class="text-muted">${receivedDate.toLocaleDateString()}</small>
+            </div>
+          </td>
+          <td>
+            <div class="d-flex align-items-center">
+              <div class="me-2">
+                <div class="bg-primary rounded-circle d-flex align-items-center justify-content-center" 
+                     style="width: 32px; height: 32px; font-size: 0.8rem; color: white;">
+                  ${(email.sender_name || email.SenderName || email.sender_email || email.SenderEmailAddress || 'U').charAt(0).toUpperCase()}
+                </div>
+              </div>
+              <div>
+                <div class="fw-medium">${this.escapeHtml(email.sender_name || email.SenderName || email.sender_email || email.SenderEmailAddress || 'Expéditeur inconnu')}</div>
+                ${(email.sender_name || email.SenderName) ? `<small class="text-muted">${this.escapeHtml(email.sender_email || email.SenderEmailAddress || '')}</small>` : ''}
+              </div>
+            </div>
+          </td>
+          <td>
+            <div class="d-flex align-items-start">
+              ${(email.has_attachment || email.HasAttachments) ? '<i class="bi bi-paperclip text-muted me-2"></i>' : ''}
+              <div>
+                <div class="fw-medium text-truncate" style="max-width: 300px;" title="${this.escapeHtml(email.subject || email.Subject)}">
+                  ${this.escapeHtml(email.subject || email.Subject || 'Pas de sujet')}
+                </div>
+                ${(email.size_kb || email.Size) ? `<small class="text-muted">${this.formatFileSize((email.size_kb * 1024) || email.Size)}</small>` : ''}
+              </div>
+            </div>
+          </td>
+          <td>
+            <div class="d-flex align-items-center">
+              <span class="me-2">${this.getCategoryIcon(folderCategory)}</span>
+              <div>
+                <div class="fw-medium">${this.escapeHtml(folderName)}</div>
+                ${folderCategory ? `<small class="text-muted">${folderCategory}</small>` : ''}
+              </div>
+            </div>
+          </td>
+          <td>
+            <div class="d-flex align-items-center">
+              ${(!email.is_read && email.is_read !== undefined) || email.UnRead ? 
+                '<span class="badge bg-warning text-dark"><i class="bi bi-envelope me-1"></i>Non lu</span>' :
+                '<span class="badge bg-success"><i class="bi bi-envelope-open me-1"></i>Lu</span>'
+              }
+              ${(email.FlagStatus > 0) ? '<i class="bi bi-flag-fill text-danger ms-2" title="Marqué"></i>' : ''}
+            </div>
+          </td>
+        </tr>
+      `;
+    }).join('');
+
+    tbody.innerHTML = emailsHtml;
+    
+    // Mettre à jour les informations de pagination
+    this.updateEmailsPagination(emails.length);
+  }
+
+  /**
+   * Mise à jour des filtres d'emails
+   */
+  updateEmailFilters() {
+    const folderFilter = document.getElementById('folder-filter');
+    if (!folderFilter) return;
+
+    // Récupérer les dossiers uniques depuis les emails
+    const folders = [...new Set(this.state.recentEmails.map(email => 
+      this.extractFolderName(email.FolderPath || 'Boîte de réception')
+    ))];
+
+    // Mettre à jour les options du filtre de dossier
+    folderFilter.innerHTML = '<option value="">📁 Tous les dossiers</option>' +
+      folders.map(folder => `<option value="${this.escapeHtml(folder)}">${this.escapeHtml(folder)}</option>`).join('');
+  }
+
+  /**
+   * États d'affichage pour les emails
+   */
+  showEmptyEmailsState() {
+    const tbody = document.getElementById('emails-table');
+    if (!tbody) return;
+
+    tbody.innerHTML = `
+      <tr>
+        <td colspan="5" class="text-center text-muted py-5 border-0">
+          <div class="d-flex flex-column align-items-center">
+            <i class="bi bi-inbox display-1 text-muted mb-3"></i>
+            <h6 class="text-muted mb-2">Aucun email trouvé</h6>
+            <p class="text-muted mb-0 small">Les emails apparaîtront ici au fur et à mesure qu'ils sont reçus</p>
+          </div>
+        </td>
+      </tr>
+    `;
+  }
+
+  showEmailsError() {
+    const tbody = document.getElementById('emails-table');
+    if (!tbody) return;
+
+    tbody.innerHTML = `
+      <tr>
+        <td colspan="5" class="text-center text-muted py-5 border-0">
+          <div class="d-flex flex-column align-items-center">
+            <i class="bi bi-exclamation-triangle display-1 text-warning mb-3"></i>
+            <h6 class="text-muted mb-2">Erreur de chargement</h6>
+            <p class="text-muted mb-3 small">Impossible de charger les emails</p>
+            <button class="btn btn-primary btn-sm" onclick="mailMonitor.loadRecentEmails()">
+              <i class="bi bi-arrow-clockwise me-1"></i>Réessayer
+            </button>
+          </div>
+        </td>
+      </tr>
+    `;
+  }
+
+  /**
+   * Mise à jour des informations de pagination
+   */
+  updateEmailsPagination(totalCount) {
+    const startEl = document.getElementById('emails-range-start');
+    const endEl = document.getElementById('emails-range-end');
+    const totalEl = document.getElementById('emails-total-count');
+
+    if (startEl && endEl && totalEl) {
+      const displayed = Math.min(totalCount, 50);
+      startEl.textContent = totalCount > 0 ? '1' : '0';
+      endEl.textContent = displayed;
+      totalEl.textContent = totalCount;
+    }
+  }
+
+  // === MÉTHODES UTILITAIRES POUR EMAILS ===
+
+  /**
+   * Calculer le temps écoulé depuis la réception
+   */
+  getTimeAgo(date) {
+    const now = new Date();
+    const diffMs = now - date;
+    const diffMins = Math.floor(diffMs / 60000);
+    const diffHours = Math.floor(diffMins / 60);
+    const diffDays = Math.floor(diffHours / 24);
+
+    if (diffMins < 1) return 'À l\'instant';
+    if (diffMins < 60) return `${diffMins}min`;
+    if (diffHours < 24) return `${diffHours}h`;
+    if (diffDays < 7) return `${diffDays}j`;
+    return date.toLocaleDateString();
+  }
+
+  /**
+   * Extraire le nom du dossier depuis le chemin complet
+   */
+  extractFolderName(folderPath) {
+    if (!folderPath) return 'Boîte de réception';
+    const parts = folderPath.split('\\');
+    return parts[parts.length - 1] || 'Boîte de réception';
+  }
+
+  /**
+   * Obtenir la catégorie d'un dossier
+   */
+  getFolderCategory(folderPath) {
+    if (!folderPath || !this.state.folderCategories) return null;
+    const config = this.state.folderCategories[folderPath];
+    return config ? config.category : null;
+  }
+
+  /**
+   * Formater la taille des fichiers
+   */
+  formatFileSize(bytes) {
+    if (!bytes) return '';
+    const sizes = ['B', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(1024));
+    return Math.round(bytes / Math.pow(1024, i) * 100) / 100 + ' ' + sizes[i];
+  }
+
+  /**
+   * Échapper le HTML pour éviter les injections
+   */
+  escapeHtml(text) {
+    if (!text) return '';
+    const map = {
+      '&': '&amp;',
+      '<': '&lt;',
+      '>': '&gt;',
+      '"': '&quot;',
+      "'": '&#039;'
+    };
+    return text.replace(/[&<>"']/g, m => map[m]);
+  }
+
+  // === ACTIONS SUR LES EMAILS ===
+
+  /**
+   * Marquer un email comme lu
+   */
+  async markAsRead(emailId) {
+    try {
+      console.log('📖 Marquage email comme lu:', emailId);
+      // Cette fonctionnalité nécessiterait une implémentation côté serveur
+      this.showNotification('Action en cours', 'Marquage comme lu...', 'info');
+    } catch (error) {
+      console.error('❌ Erreur marquage comme lu:', error);
+      this.showNotification('Erreur', 'Impossible de marquer comme lu', 'danger');
+    }
+  }
+
+  /**
+   * Afficher les détails d'un email
+   */
+  async showEmailDetails(emailId) {
+    const email = this.state.recentEmails.find(e => e.EntryID === emailId);
+    if (!email) return;
+
+    const modalHtml = `
+      <div class="modal fade" id="emailDetailsModal" tabindex="-1">
+        <div class="modal-dialog modal-lg">
+          <div class="modal-content">
+            <div class="modal-header">
+              <h5 class="modal-title">
+                <i class="bi bi-envelope me-2"></i>Détails de l'email
+              </h5>
+              <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+              <div class="row g-3">
+                <div class="col-12">
+                  <label class="form-label fw-bold">Sujet</label>
+                  <p class="form-control-plaintext">${this.escapeHtml(email.Subject || 'Pas de sujet')}</p>
+                </div>
+                <div class="col-md-6">
+                  <label class="form-label fw-bold">Expéditeur</label>
+                  <p class="form-control-plaintext">${this.escapeHtml(email.SenderName || email.SenderEmailAddress || 'Inconnu')}</p>
+                </div>
+                <div class="col-md-6">
+                  <label class="form-label fw-bold">Date de réception</label>
+                  <p class="form-control-plaintext">${new Date(email.ReceivedTime).toLocaleString()}</p>
+                </div>
+                <div class="col-md-6">
+                  <label class="form-label fw-bold">Taille</label>
+                  <p class="form-control-plaintext">${this.formatFileSize(email.Size)}</p>
+                </div>
+                <div class="col-md-6">
+                  <label class="form-label fw-bold">Statut</label>
+                  <p class="form-control-plaintext">
+                    ${email.UnRead ? 
+                      '<span class="badge bg-warning text-dark">Non lu</span>' : 
+                      '<span class="badge bg-success">Lu</span>'
+                    }
+                    ${email.HasAttachments ? '<span class="badge bg-info ms-2">Pièces jointes</span>' : ''}
+                  </p>
+                </div>
+                <div class="col-12">
+                  <label class="form-label fw-bold">Dossier</label>
+                  <p class="form-control-plaintext">${this.escapeHtml(email.FolderPath || 'Boîte de réception')}</p>
+                </div>
+              </div>
+            </div>
+            <div class="modal-footer">
+              <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Fermer</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+
+    // Supprimer l'ancien modal s'il existe
+    const existingModal = document.getElementById('emailDetailsModal');
+    if (existingModal) existingModal.remove();
+
+    document.body.insertAdjacentHTML('beforeend', modalHtml);
+    const modal = new bootstrap.Modal(document.getElementById('emailDetailsModal'));
+    modal.show();
+  }
+
+  /**
+   * Déplacer un email vers la corbeille
+   */
+  async moveToTrash(emailId) {
+    if (!confirm('Êtes-vous sûr de vouloir supprimer cet email ?')) return;
+    
+    try {
+      console.log('🗑️ Suppression email:', emailId);
+      // Cette fonctionnalité nécessiterait une implémentation côté serveur
+      this.showNotification('Action en cours', 'Suppression...', 'info');
+    } catch (error) {
+      console.error('❌ Erreur suppression:', error);
+      this.showNotification('Erreur', 'Impossible de supprimer l\'email', 'danger');
+    }
+  }
+
+  /**
+   * Filtrage avancé des emails
+   */
+  filterEmails() {
+    const searchTerm = document.getElementById('email-search')?.value.toLowerCase() || '';
+    const folderFilter = document.getElementById('folder-filter')?.value || '';
+    const dateFilter = document.getElementById('date-filter')?.value || '';
+    const statusFilter = document.getElementById('status-filter')?.value || '';
+
+    let filteredEmails = [...this.state.recentEmails];
+
+    // Filtre par texte de recherche
+    if (searchTerm) {
+      filteredEmails = filteredEmails.filter(email => 
+        (email.SenderName || '').toLowerCase().includes(searchTerm) ||
+        (email.SenderEmailAddress || '').toLowerCase().includes(searchTerm) ||
+        (email.Subject || '').toLowerCase().includes(searchTerm)
+      );
+    }
+
+    // Filtre par dossier
+    if (folderFilter) {
+      filteredEmails = filteredEmails.filter(email => 
+        this.extractFolderName(email.FolderPath) === folderFilter
+      );
+    }
+
+    // Filtre par date
+    if (dateFilter) {
+      const now = new Date();
+      filteredEmails = filteredEmails.filter(email => {
+        const emailDate = new Date(email.ReceivedTime);
+        switch (dateFilter) {
+          case 'today':
+            return emailDate.toDateString() === now.toDateString();
+          case 'week':
+            const startOfWeek = new Date(now);
+            startOfWeek.setDate(now.getDate() - now.getDay());
+            return emailDate >= startOfWeek;
+          case 'month':
+            return emailDate.getMonth() === now.getMonth() && 
+                   emailDate.getFullYear() === now.getFullYear();
+          default:
+            return true;
+        }
+      });
+    }
+
+    // Filtre par statut
+    if (statusFilter) {
+      filteredEmails = filteredEmails.filter(email => {
+        switch (statusFilter) {
+          case 'unread':
+            return email.UnRead;
+          case 'read':
+            return !email.UnRead;
+          default:
+            return true;
+        }
+      });
+    }
+
+    // Mettre à jour l'affichage avec les emails filtrés
+    const originalEmails = this.state.recentEmails;
+    this.state.recentEmails = filteredEmails;
+    this.displayEmailsTable();
+    this.state.recentEmails = originalEmails; // Restaurer la liste complète
+
+    // Mettre à jour le compteur
+    this.updateEmailsPagination(filteredEmails.length);
+  }
+
+  /**
+   * Application de filtres rapides
+   */
+  applyQuickEmailFilter(filterId) {
+    // Réinitialiser les autres filtres
+    const filters = ['email-search', 'folder-filter', 'date-filter', 'status-filter'];
+    filters.forEach(id => {
+      const element = document.getElementById(id);
+      if (element) element.value = '';
+    });
+
+    // Appliquer le filtre rapide
+    switch (filterId) {
+      case 'filter-all':
+        this.displayEmailsTable();
+        break;
+      case 'filter-unread':
+        document.getElementById('status-filter').value = 'unread';
+        this.filterEmails();
+        break;
+      case 'filter-today':
+        document.getElementById('date-filter').value = 'today';
+        this.filterEmails();
+        break;
+    }
+  }
+
+  updateMonitoringStats(stats) {
+    if (!stats) return;
+
+    // Mettre à jour les compteurs principaux avec animations
+    this.animateCounterUpdate('total-folders', stats.total || 0);
+    this.animateCounterUpdate('active-folders', stats.active || 0);
+    this.animateCounterUpdate('declarations-count', stats.declarations || 0);
+    this.animateCounterUpdate('reglements-count', stats.reglements || 0);
+    this.animateCounterUpdate('simples-count', stats.simples || 0);
+
+    // Mettre à jour le badge du nombre de dossiers surveillés
+    const countBadge = document.getElementById('monitored-folders-count');
+    if (countBadge) {
+      countBadge.textContent = stats.total || 0;
+      countBadge.className = stats.total > 0 ? 'badge bg-primary rounded-pill' : 'badge bg-secondary rounded-pill';
+    }
+
+    // Calculer et mettre à jour l'utilisation du système
+    const totalFolders = stats.total || 0;
+    const activeFolders = stats.active || 0;
+    const usage = totalFolders > 0 ? Math.round((activeFolders / totalFolders) * 100) : 0;
+    
+    const systemUsage = document.getElementById('system-usage');
+    const systemProgress = document.getElementById('system-progress');
+    
+    if (systemUsage) systemUsage.textContent = `${usage}%`;
+    if (systemProgress) {
+      systemProgress.style.width = `${usage}%`;
+      // Changer la couleur selon l'utilisation
+      systemProgress.className = `progress-bar ${this.getUsageColorClass(usage)}`;
+    }
+  }
+
+  animateCounterUpdate(elementId, newValue) {
+    const element = document.getElementById(elementId);
+    if (!element) return;
+
+    const currentValue = parseInt(element.textContent) || 0;
+    if (currentValue === newValue) return;
+
+    // Animation simple de compteur
+    const duration = 500;
+    const start = performance.now();
+    const startValue = currentValue;
+    const difference = newValue - startValue;
+
+    const animate = (currentTime) => {
+      const elapsed = currentTime - start;
+      const progress = Math.min(elapsed / duration, 1);
+      const value = Math.round(startValue + (difference * progress));
+      
+      element.textContent = value;
+      
+      if (progress < 1) {
+        requestAnimationFrame(animate);
+      }
+    };
+
+    requestAnimationFrame(animate);
+  }
+
+  getUsageColorClass(usage) {
+    if (usage >= 80) return 'bg-danger';
+    if (usage >= 60) return 'bg-warning';
+    if (usage >= 40) return 'bg-info';
+    return 'bg-success';
   }
 
   updateMonitoringStatus(isRunning) {
@@ -984,32 +2109,91 @@ class MailMonitor {
     
     if (statusContainer) {
       const foldersCount = Object.keys(this.state.folderCategories).length;
+      const currentTime = new Date().toLocaleTimeString('fr-FR', { 
+        hour: '2-digit', 
+        minute: '2-digit',
+        second: '2-digit'
+      });
       
       if (isRunning) {
         statusContainer.innerHTML = `
-          <div class="d-flex align-items-center mb-3">
-            <span class="status-indicator status-connected me-2"></span>
-            <span class="fw-bold text-success">Actif</span>
+          <div class="d-flex align-items-center justify-content-between mb-3">
+            <div class="d-flex align-items-center">
+              <div class="status-indicator status-connected me-3"></div>
+              <div>
+                <div class="fw-bold text-success">Surveillance active</div>
+                <small class="text-muted">${foldersCount} dossier(s) surveillé(s)</small>
+              </div>
+            </div>
+            <i class="bi bi-play-circle-fill fs-3 text-success"></i>
           </div>
-          <small class="text-muted">${foldersCount} dossier(s) surveillé(s)</small>
-          <div class="mt-2">
-            <small class="text-muted">Synchronisation toutes les secondes</small>
+          <div class="bg-success bg-opacity-10 p-2 rounded-3 mb-3">
+            <div class="d-flex justify-content-between align-items-center">
+              <small class="text-success fw-medium">
+                <i class="bi bi-clock me-1"></i>Synchronisation active
+              </small>
+              <small class="text-success">${currentTime}</small>
+            </div>
           </div>
         `;
+        
+        // Mettre à jour les métriques de performance
+        this.updatePerformanceMetrics(true);
       } else {
         statusContainer.innerHTML = `
-          <div class="d-flex align-items-center mb-3">
-            <span class="status-indicator status-disconnected me-2"></span>
-            <span>Arrêté</span>
+          <div class="d-flex align-items-center justify-content-between mb-3">
+            <div class="d-flex align-items-center">
+              <div class="status-indicator status-disconnected me-3"></div>
+              <div>
+                <div class="fw-bold text-muted">Surveillance arrêtée</div>
+                <small class="text-muted">${foldersCount} dossier(s) configuré(s)</small>
+              </div>
+            </div>
+            <i class="bi bi-pause-circle fs-3 text-muted"></i>
           </div>
-          <small class="text-muted">${foldersCount} dossier(s) configuré(s)</small>
+          <div class="bg-light p-2 rounded-3 mb-3">
+            <div class="text-center">
+              <small class="text-muted">
+                <i class="bi bi-info-circle me-1"></i>Cliquez sur "Démarrer" pour activer la surveillance
+              </small>
+            </div>
+          </div>
         `;
+        
+        // Réinitialiser les métriques de performance
+        this.updatePerformanceMetrics(false);
       }
     }
     
     if (startBtn && stopBtn) {
-      startBtn.style.display = isRunning ? 'none' : 'inline-block';
-      stopBtn.style.display = isRunning ? 'inline-block' : 'none';
+      startBtn.style.display = isRunning ? 'none' : 'block';
+      stopBtn.style.display = isRunning ? 'block' : 'none';
+      
+      // Ajouter les classes modernes
+      startBtn.className = 'btn btn-success btn-lg btn-modern';
+      stopBtn.className = 'btn btn-danger btn-lg btn-modern';
+    }
+    
+    // Mettre à jour l'état global
+    this.state.isMonitoring = isRunning;
+  }
+
+  updatePerformanceMetrics(isActive) {
+    const syncFreq = document.getElementById('sync-frequency');
+    const lastSync = document.getElementById('last-sync');
+    const systemUsage = document.getElementById('system-usage');
+    const systemProgress = document.getElementById('system-progress');
+    
+    if (isActive) {
+      if (syncFreq) syncFreq.textContent = '60';
+      if (lastSync) lastSync.textContent = 'maintenant';
+      if (systemUsage) systemUsage.textContent = '25%';
+      if (systemProgress) systemProgress.style.width = '25%';
+    } else {
+      if (syncFreq) syncFreq.textContent = '--';
+      if (lastSync) lastSync.textContent = '--';
+      if (systemUsage) systemUsage.textContent = '0%';
+      if (systemProgress) systemProgress.style.width = '0%';
     }
   }
 
@@ -1042,20 +2226,35 @@ class MailMonitor {
 
   // === AFFICHAGE MÉTRIQUES VBA ===
   updateVBAMetricsDisplay(vbaMetrics) {
-    console.log('🎯 Mise à jour métriques VBA:', vbaMetrics);
+    // Log réduit pour métriques VBA
+    // console.log('🎯 Mise à jour métriques VBA:', vbaMetrics);
     
-    // Métriques quotidiennes (mise à jour des cartes principales)
+    // Mise à jour sécurisée des éléments (vérifier qu'ils existent)
+    const safeSetContent = (id, value) => {
+      const element = document.getElementById(id);
+      if (element) {
+        element.textContent = value || '--';
+      } else {
+        // Log uniquement en mode debug pour éléments manquants
+        // console.warn(`⚠️ Élément DOM manquant: ${id}`);
+      }
+    };
+    
+    // Métriques quotidiennes (utiliser les vrais ID du HTML)
     const daily = vbaMetrics.daily || {};
-    document.getElementById('emails-today').textContent = daily.emailsReceived || '--';
-    document.getElementById('emails-sent').textContent = daily.emailsProcessed || '--';
-    document.getElementById('emails-unread').textContent = daily.emailsUnread || '--';
+    safeSetContent('emails-today', daily.emailsReceived);
+    safeSetContent('emails-unread', daily.emailsUnread);
     
-    // Métriques hebdomadaires
+    // Note: emails-sent, stock-start, stock-end n'existent pas dans le DOM
+    // Utiliser les éléments existants ou ignorer ces mises à jour
+    
+    // Métriques hebdomadaires - mappées vers éléments existants
     const weekly = vbaMetrics.weekly || {};
-    document.getElementById('stock-start').textContent = weekly.stockStart || '--';
-    document.getElementById('stock-end').textContent = weekly.stockEnd || '--';
-    document.getElementById('weekly-arrivals').textContent = weekly.arrivals || '--';
-    document.getElementById('weekly-treatments').textContent = weekly.treatments || '--';
+    // Ces éléments n'existent pas dans le DOM actuel, on les ignore
+    // safeSetContent('stock-start', weekly.stockStart);
+    // safeSetContent('stock-end', weekly.stockEnd);
+    // safeSetContent('weekly-arrivals', weekly.arrivals);
+    // safeSetContent('weekly-treatments', weekly.treatments);
     
     // Évolution
     const evolution = weekly.evolution || 0;
@@ -1176,10 +2375,32 @@ class MailMonitor {
 
   // === ACTIONS ===
   async refreshFoldersDisplay() {
-    // Rafraîchir l'affichage des dossiers en rechargeant la boîte mail courante
-    const storeSelect = document.getElementById('store-select');
-    if (storeSelect && storeSelect.value) {
-      await this.loadFoldersForMailbox(storeSelect.value);
+    try {
+      // Dossiers refresh - log désactivé
+      // console.log('🔄 Actualisation de l\'affichage des dossiers...');
+      
+      // DEBUG: État avant rechargement
+      // État avant - log désactivé pour réduire le spam
+      // console.log('🔍 État AVANT rechargement:', Object.keys(this.state.folderCategories).length, 'dossiers');
+      
+      // Recharger la configuration depuis la base de données
+      await this.loadFoldersConfiguration();
+      
+      // DEBUG: État après rechargement
+      // État après - log désactivé pour réduire le spam
+      // console.log('🔍 État APRÈS rechargement:', Object.keys(this.state.folderCategories).length, 'dossiers');
+      console.log('🔍 Données complètes:', this.state.folderCategories);
+      
+      // Mettre à jour l'affichage moderne
+      this.updateFolderConfigDisplay();
+      
+      // Recharger les statistiques aussi
+      await this.loadStats();
+      
+      this.showNotification('Actualisation terminée', 'La liste des dossiers a été mise à jour', 'success');
+    } catch (error) {
+      console.error('❌ Erreur lors de l\'actualisation:', error);
+      this.showNotification('Erreur', 'Impossible d\'actualiser la liste', 'danger');
     }
   }
 
@@ -1371,6 +2592,7 @@ class MailMonitor {
 
   handleTabChange(target) {
     // Recharger les données spécifiques à l'onglet immédiatement
+    // Changement d'onglet - log conservé pour navigation
     console.log(`🔄 Changement d'onglet vers: ${target}`);
     
     switch (target) {
@@ -1584,6 +2806,467 @@ class MailMonitor {
     } else {
       // Fallback vers alert
       alert('Mail Monitor v1.0.0\n© 2025 Tanguy Raingeard - Tous droits réservés');
+    }
+  }
+
+  // === FONCTIONS SUIVI HEBDOMADAIRE ===
+
+  /**
+   * Initialise le suivi hebdomadaire
+   */
+  async initWeeklyTracking() {
+    console.log('📅 Initialisation du suivi hebdomadaire...');
+    
+    try {
+      // Charger les paramètres de suivi hebdomadaire
+      await this.loadWeeklySettings();
+      
+      // Charger les statistiques de la semaine actuelle
+      await this.loadCurrentWeekStats();
+      
+      // Charger l'historique
+      await this.loadWeeklyHistory();
+      
+      // Configurer les événements
+      this.setupWeeklyEventListeners();
+      
+      console.log('✅ Suivi hebdomadaire initialisé');
+    } catch (error) {
+      console.error('❌ Erreur lors de l\'initialisation du suivi hebdomadaire:', error);
+      this.showNotification('Erreur suivi hebdomadaire', error.message, 'danger');
+    }
+  }
+
+  /**
+   * Configure les événements pour le suivi hebdomadaire
+   */
+  setupWeeklyEventListeners() {
+    // Bouton traité par ADG
+    const adjustBtn = document.getElementById('add-manual-adjustment');
+    if (adjustBtn) {
+      adjustBtn.addEventListener('click', () => this.handleManualAdjustment());
+    }
+
+    // Bouton de sauvegarde des paramètres
+    const saveSettingsBtn = document.getElementById('save-weekly-settings');
+    if (saveSettingsBtn) {
+      saveSettingsBtn.addEventListener('click', () => this.saveWeeklySettings());
+    }
+
+    // Bouton d'ouverture des paramètres
+    const settingsBtn = document.getElementById('weekly-settings-btn');
+    if (settingsBtn) {
+      settingsBtn.addEventListener('click', () => this.openWeeklySettings());
+    }
+
+    // Actualisation automatique des stats hebdomadaires
+    setInterval(() => {
+      this.refreshCurrentWeekStats();
+    }, 30000); // Toutes les 30 secondes
+  }
+
+  /**
+   * Charge les statistiques de la semaine actuelle
+   */
+  async loadCurrentWeekStats() {
+    try {
+      // Log API weekly stats - simplifié
+      // console.log('📅 Appel API api-weekly-current-stats...');
+      const response = await window.electronAPI.invoke('api-weekly-current-stats');
+      console.log('📅 Réponse API reçue:', response);
+      
+      if (response.success) {
+        // Les données sont dans response.weekInfo et response.categories
+        const weekData = {
+          weekInfo: response.weekInfo,
+          categories: response.categories
+        };
+        console.log('📅 Données formatées pour affichage:', weekData);
+        this.updateCurrentWeekDisplay(weekData);
+      } else {
+        console.error('❌ Erreur lors du chargement des stats hebdomadaires:', response.error);
+        this.showWeeklyError(response.error);
+      }
+    } catch (error) {
+      console.error('❌ Erreur lors du chargement des stats hebdomadaires:', error);
+      this.showWeeklyError('Erreur de communication avec le serveur');
+    }
+  }
+
+  /**
+   * Met à jour l'affichage de la semaine actuelle
+   */
+  updateCurrentWeekDisplay(weekData) {
+    // Weekly stats update - log simplifié (conservé seulement pour erreurs importantes)
+    console.log('📅 Mise à jour des stats de la semaine actuelle:', weekData);
+
+    const weekInfo = weekData.weekInfo;
+    const categories = weekData.categories || {};
+
+    // Mettre à jour le titre de la semaine
+    const weekTitle = document.getElementById('current-week-title');
+    if (weekTitle && weekInfo) {
+      weekTitle.textContent = `${weekInfo.displayName} (${weekInfo.startDate} - ${weekInfo.endDate})`;
+    }
+
+    // Mettre à jour les statistiques par catégorie
+    const statsContainer = document.getElementById('current-week-stats');
+    if (statsContainer) {
+      let statsHtml = '';
+      
+      if (Object.keys(categories).length > 0) {
+        // Générer le HTML pour chaque catégorie
+        for (const [category, catStats] of Object.entries(categories)) {
+          const treatmentRate = catStats.received > 0 ? (catStats.treated / catStats.received * 100).toFixed(1) : 0;
+          
+          statsHtml += `
+            <div class="col-lg-4 col-md-6">
+              <div class="card border-0 bg-light h-100">
+                <div class="card-body p-3">
+                  <h6 class="card-title mb-3 fw-bold text-primary">${category}</h6>
+                  <div class="row g-2 text-center">
+                    <div class="col-6">
+                      <div class="h5 mb-1 text-primary">${catStats.received}</div>
+                      <small class="text-muted">Reçus</small>
+                    </div>
+                    <div class="col-6">
+                      <div class="h5 mb-1 text-success">${catStats.treated}</div>
+                      <small class="text-muted">Traités</small>
+                    </div>
+                  </div>
+                  <div class="row g-2 text-center mt-2">
+                    <div class="col-6">
+                      <div class="h6 mb-1 text-info">${catStats.adjustments}</div>
+                      <small class="text-muted">Traité par ADG</small>
+                    </div>
+                    <div class="col-6">
+                      <div class="h6 mb-1 text-secondary">${catStats.total}</div>
+                      <small class="text-muted">Total</small>
+                    </div>
+                  </div>
+                  <div class="mt-2">
+                    <small class="text-muted">Taux de traitement: ${treatmentRate}%</small>
+                  </div>
+                </div>
+              </div>
+            </div>
+          `;
+        }
+      }
+      
+      if (statsHtml === '') {
+        statsHtml = `
+          <div class="col-12 text-center text-muted">
+            <i class="bi bi-calendar-x fs-1 mb-3"></i>
+            <p>Aucune donnée pour cette semaine</p>
+          </div>
+        `;
+      }
+      
+      statsContainer.innerHTML = statsHtml;
+    }
+
+    // Retirer l'état de chargement
+    const loadingElement = document.querySelector('#current-week-stats .spinner-border');
+    if (loadingElement) {
+      loadingElement.parentElement.style.display = 'none';
+    }
+  }
+
+  /**
+   * Affiche une erreur dans l'onglet hebdomadaire
+   */
+  showWeeklyError(errorMessage) {
+    // Retirer l'état de chargement
+    const loadingElement = document.querySelector('#weekly-tab .loading-state');
+    if (loadingElement) {
+      loadingElement.style.display = 'none';
+    }
+    
+    // Afficher l'erreur
+    const statsContainer = document.getElementById('weekly-categories-stats');
+    if (statsContainer) {
+      statsContainer.innerHTML = `
+        <div class="alert alert-danger" role="alert">
+          <i class="fas fa-exclamation-triangle me-2"></i>
+          Erreur de chargement: ${errorMessage}
+        </div>
+      `;
+    }
+  }
+
+  /**
+   * Rafraîchit les statistiques de la semaine actuelle
+   */
+  async refreshCurrentWeekStats() {
+    const weeklyTab = document.getElementById('weekly-tab');
+    if (weeklyTab && weeklyTab.classList.contains('active')) {
+      await this.loadCurrentWeekStats();
+    }
+  }
+
+  /**
+   * Gère les données traitées par ADG
+   */
+  async handleManualAdjustment() {
+    const form = document.getElementById('manual-adjustment-form');
+    const formData = new FormData(form);
+    
+    const adjustmentData = {
+      category: formData.get('adjustment-category'),
+      quantity: parseInt(formData.get('adjustment-quantity')),
+      type: formData.get('adjustment-type'),
+      description: formData.get('adjustment-description') || ''
+    };
+
+    // Validation
+    if (!adjustmentData.category || !adjustmentData.quantity || adjustmentData.quantity <= 0) {
+      this.showNotification('Erreur', 'Veuillez remplir tous les champs requis', 'warning');
+      return;
+    }
+
+    try {
+      const response = await window.electronAPI.invoke('api-weekly-adjust-count', adjustmentData);
+      
+      if (response.success) {
+        this.showNotification('Données ajoutées', 
+          `${adjustmentData.quantity} ${adjustmentData.type} ajouté(s) pour ${adjustmentData.category}`, 
+          'success'
+        );
+        
+        // Réinitialiser le formulaire
+        form.reset();
+        
+        // Recharger les statistiques
+        await this.loadCurrentWeekStats();
+        await this.loadWeeklyHistory();
+        
+      } else {
+        this.showNotification('Erreur', response.error, 'danger');
+      }
+    } catch (error) {
+      console.error('Erreur lors de l\'ajout de données par ADG:', error);
+      this.showNotification('Erreur', 'Impossible d\'ajouter les données', 'danger');
+    }
+  }
+
+  /**
+   * Charge l'historique hebdomadaire
+   */
+  async loadWeeklyHistory() {
+    try {
+      const response = await window.electronAPI.invoke('api-weekly-history', { limit: 10 });
+      if (response.success) {
+        this.updateWeeklyHistoryDisplay(response.data);
+      } else {
+        console.error('Erreur lors du chargement de l\'historique:', response.error);
+      }
+    } catch (error) {
+      console.error('Erreur lors du chargement de l\'historique:', error);
+    }
+  }
+
+  /**
+   * Met à jour l'affichage de l'historique
+   */
+  updateWeeklyHistoryDisplay(historyData) {
+    const historyTable = document.getElementById('weekly-history-table');
+    const loadingElement = document.getElementById('weekly-loading');
+    const noDataElement = document.getElementById('weekly-no-data');
+    
+    if (!historyTable) return;
+
+    const tbody = historyTable.querySelector('tbody');
+    if (!tbody) return;
+
+    // Masquer l'indicateur de chargement
+    if (loadingElement) {
+      loadingElement.classList.add('d-none');
+    }
+
+    let historyHtml = '';
+    
+    if (historyData.length === 0) {
+      // Afficher le message "aucune donnée" et masquer le tableau
+      if (noDataElement) {
+        noDataElement.classList.remove('d-none');
+      }
+      historyTable.style.display = 'none';
+      return;
+    } else {
+      // Masquer le message "aucune donnée" et afficher le tableau
+      if (noDataElement) {
+        noDataElement.classList.add('d-none');
+      }
+      historyTable.style.display = 'table';
+      
+      for (const week of historyData) {
+        // Calculer le total des stocks pour la semaine
+        const totalStock = week.categories.reduce((sum, category) => sum + category.stockEndWeek, 0);
+        
+        // Créer le contenu d'évolution avec design 2025
+        const evolutionHtml = this.createEvolutionDisplay(week.evolution);
+        
+        // Créer un ID unique pour la semaine pour gérer le survol
+        const weekId = `week-${week.weekDisplay.replace(/[^a-zA-Z0-9]/g, '-')}`;
+        
+        // Ligne pour la semaine avec les 3 catégories
+        week.categories.forEach((category, index) => {
+          const isFirstRow = index === 0;
+          
+          historyHtml += `
+            <tr class="${isFirstRow ? 'week-separator' : ''} week-group" data-week-id="${weekId}">`;
+          
+          // Cellules fusionnées seulement sur la première ligne
+          if (isFirstRow) {
+            historyHtml += `
+              <td rowspan="3" class="fw-bold text-primary align-middle text-center" style="vertical-align: middle !important;">${week.weekDisplay}</td>
+              <td rowspan="3" class="fw-semibold text-muted align-middle text-center" style="vertical-align: middle !important;">${week.dateRange}</td>`;
+          }
+          
+          historyHtml += `
+              <td class="fw-medium">${category.name}</td>
+              <td class="text-center"><span class="badge bg-primary rounded-pill">${category.received}</span></td>
+              <td class="text-center"><span class="badge bg-success rounded-pill">${category.treated}</span></td>
+              <td class="text-center"><span class="badge bg-info rounded-pill">${category.adjustments}</span></td>
+              <td class="text-center"><span class="badge bg-warning rounded-pill">${category.stockEndWeek}</span></td>`;
+          
+          // Cellules fusionnées pour Total Stock et Évolution seulement sur la première ligne
+          if (isFirstRow) {
+            historyHtml += `
+              <td rowspan="3" class="text-center align-middle" style="vertical-align: middle !important;"><span class="badge bg-dark rounded-pill fs-6">${totalStock}</span></td>
+              <td rowspan="3" class="text-center align-middle" style="vertical-align: middle !important;">${evolutionHtml}</td>`;
+          }
+          
+          historyHtml += `
+            </tr>
+          `;
+        });
+      }
+    }
+    
+    tbody.innerHTML = historyHtml;
+    
+    // Ajouter les événements de survol pour les semaines complètes
+    this.addWeekHoverEvents();
+  }
+
+  /**
+   * Ajoute les événements de survol pour les semaines complètes
+   */
+  addWeekHoverEvents() {
+    const weekRows = document.querySelectorAll('.week-group');
+    
+    weekRows.forEach(row => {
+      const weekId = row.getAttribute('data-week-id');
+      
+      row.addEventListener('mouseenter', () => {
+        // Surligner toutes les lignes de cette semaine
+        const weekElements = document.querySelectorAll(`[data-week-id="${weekId}"]`);
+        weekElements.forEach(element => element.classList.add('week-hover'));
+      });
+      
+      row.addEventListener('mouseleave', () => {
+        // Retirer le surlignage de toutes les lignes de cette semaine
+        const weekElements = document.querySelectorAll(`[data-week-id="${weekId}"]`);
+        weekElements.forEach(element => element.classList.remove('week-hover'));
+      });
+    });
+  }
+
+  /**
+   * Crée l'affichage d'évolution avec design 2025
+   */
+  createEvolutionDisplay(evolution) {
+    if (!evolution || evolution.trend === 'stable') {
+      return `
+        <div class="d-flex align-items-center justify-content-center">
+          <div class="evolution-indicator stable">
+            <i class="bi bi-dash-lg"></i>
+          </div>
+          <span class="ms-2 small text-muted">Stable</span>
+        </div>
+      `;
+    }
+    
+    const isPositive = evolution.trend === 'up';
+    const icon = isPositive ? 'bi-arrow-up-right' : 'bi-arrow-down-right';
+    const colorClass = isPositive ? 'text-success' : 'text-danger';
+    const bgClass = isPositive ? 'bg-success' : 'bg-danger';
+    const sign = isPositive ? '+' : '';
+    
+    return `
+      <div class="d-flex align-items-center justify-content-center">
+        <div class="evolution-indicator ${isPositive ? 'positive' : 'negative'}">
+          <i class="bi ${icon}"></i>
+        </div>
+        <div class="ms-2 text-start">
+          <div class="small fw-bold ${colorClass}">${sign}${evolution.absolute}</div>
+          <div class="tiny text-muted">${sign}${evolution.percent.toFixed(1)}%</div>
+        </div>
+      </div>
+    `;
+  }
+
+  /**
+   * Ouvre la modal des paramètres hebdomadaires
+   */
+  async openWeeklySettings() {
+    await this.loadWeeklySettings();
+    const modal = new bootstrap.Modal(document.getElementById('weeklySettingsModal'));
+    modal.show();
+  }
+
+  /**
+   * Charge les paramètres de suivi hebdomadaire
+   */
+  async loadWeeklySettings() {
+    try {
+      const response = await window.electronAPI.invoke('api-settings-count-read-as-treated');
+      if (response.success) {
+        const checkbox = document.getElementById('count-read-as-treated');
+        if (checkbox) {
+          checkbox.checked = response.data.countReadAsTreated || false;
+        }
+      }
+    } catch (error) {
+      console.error('Erreur lors du chargement des paramètres:', error);
+    }
+  }
+
+  /**
+   * Sauvegarde les paramètres de suivi hebdomadaire
+   */
+  async saveWeeklySettings() {
+    try {
+      const checkbox = document.getElementById('count-read-as-treated');
+      const countReadAsTreated = checkbox ? checkbox.checked : false;
+
+      const response = await window.electronAPI.invoke('api-settings-count-read-as-treated', {
+        countReadAsTreated
+      });
+
+      if (response.success) {
+        this.showNotification('Paramètres sauvegardés', 
+          'Les paramètres du suivi hebdomadaire ont été mis à jour', 
+          'success'
+        );
+        
+        // Fermer la modal
+        const modal = bootstrap.Modal.getInstance(document.getElementById('weeklySettingsModal'));
+        if (modal) {
+          modal.hide();
+        }
+        
+        // Recharger les statistiques pour appliquer les nouveaux paramètres
+        await this.loadCurrentWeekStats();
+        
+      } else {
+        this.showNotification('Erreur', response.error, 'danger');
+      }
+    } catch (error) {
+      console.error('Erreur lors de la sauvegarde des paramètres:', error);
+      this.showNotification('Erreur', 'Impossible de sauvegarder les paramètres', 'danger');
     }
   }
 }

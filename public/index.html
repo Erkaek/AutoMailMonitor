@@ -104,11 +104,91 @@
       height: 12px;
       border-radius: 50%;
       display: inline-block;
+      animation: pulse 2s infinite;
     }
     
     .status-connected { background-color: #198754; }
     .status-disconnected { background-color: #dc3545; }
-    .status-connecting { background-color: #ffc107; }
+    .status-connecting { 
+      background-color: #ffc107; 
+      animation: pulse 1s infinite;
+    }
+
+    @keyframes pulse {
+      0% { opacity: 1; }
+      50% { opacity: 0.5; }
+      100% { opacity: 1; }
+    }
+
+    /* Animations pour les compteurs */
+    .counter-animate {
+      transition: all 0.3s ease-in-out;
+      position: relative;
+    }
+    
+    .counter-animate.updating {
+      animation: counterUpdate 0.5s ease-in-out;
+    }
+    
+    @keyframes counterUpdate {
+      0% { transform: scale(1); }
+      50% { transform: scale(1.05); color: var(--bs-primary); }
+      100% { transform: scale(1); }
+    }
+    
+    /* Cartes statistiques améliorées */
+    .stat-card {
+      transition: all 0.3s ease;
+      border-left: 4px solid transparent;
+    }
+    
+    .stat-card:hover {
+      transform: translateY(-2px);
+      border-left: 4px solid var(--bs-primary);
+    }
+    
+    /* Grille de dossiers responsive */
+    #folders-stats-grid .folder-stat-card {
+      background: linear-gradient(135deg, #f8f9fa 0%, #ffffff 100%);
+      border-radius: 12px;
+      border: 1px solid #e9ecef;
+      transition: all 0.3s ease;
+      position: relative;
+      overflow: hidden;
+    }
+    
+    #folders-stats-grid .folder-stat-card:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+    }
+    
+    #folders-stats-grid .folder-stat-card::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 3px;
+      background: var(--bs-primary);
+      opacity: 0;
+      transition: opacity 0.3s ease;
+    }
+    
+    #folders-stats-grid .folder-stat-card:hover::before {
+      opacity: 1;
+    }
+    
+    /* Indicateurs de performance */
+    .performance-indicator {
+      font-size: 0.875rem;
+      padding: 0.25rem 0.5rem;
+      border-radius: 6px;
+      font-weight: 500;
+    }
+    
+    .performance-excellent { background-color: #d1e7dd; color: #0f5132; }
+    .performance-good { background-color: #fff3cd; color: #664d03; }
+    .performance-warning { background-color: #f8d7da; color: #721c24; }
     
     /* Styles pour le footer copyright */
     footer {
@@ -153,7 +233,7 @@
   <!-- Sidebar -->
   <nav class="sidebar position-fixed top-0 start-0 text-white p-3">
     <div class="d-flex align-items-center mb-4">
-      <i class="bi bi-envelope-check fs-2 me-2"></i>
+  <img src="../resources/new%20logo/logo_32x32.png" alt="Logo" width="28" height="28" class="me-2" style="border-radius:6px; box-shadow:0 1px 3px rgba(0,0,0,0.2);" />
       <div>
         <h5 class="mb-0">Mail Monitor</h5>
         <small class="opacity-75">Surveillance Outlook</small>
@@ -178,6 +258,11 @@
       <li class="nav-item mb-2">
         <a class="nav-link text-white" href="#" data-bs-toggle="pill" data-bs-target="#emails">
           <i class="bi bi-envelope me-2"></i>Emails récents
+        </a>
+      </li>
+      <li class="nav-item mb-2">
+        <a class="nav-link text-white" href="#" data-bs-toggle="pill" data-bs-target="#weekly">
+          <i class="bi bi-calendar-week me-2"></i>Suivi hebdomadaire
         </a>
       </li>
       <li class="nav-item mb-2">
@@ -209,7 +294,7 @@
         <div class="col">
           <div class="d-flex justify-content-between align-items-center">
             <div>
-              <h2 class="mb-1">Mail Monitor</h2>
+              <h2 class="mb-1 d-flex align-items-center gap-2"><img src="../resources/new%20logo/logo_32x32.png" alt="Logo" width="24" height="24" style="border-radius:4px; box-shadow:0 1px 2px rgba(0,0,0,0.15);" /> Mail Monitor</h2>
               <p class="text-muted mb-0">Surveillance intelligente de vos emails Outlook</p>
             </div>
             <div class="text-end">
@@ -225,83 +310,107 @@
         
         <!-- Dashboard Tab -->
         <div class="tab-pane fade show active" id="dashboard">
-          <!-- Métriques quotidiennes principales -->
+          <!-- Métriques principales temps réel -->
           <div class="row g-4 mb-4">
-            <div class="col-md-4">
+            <div class="col-lg-3 col-md-6">
               <div class="card stat-card h-100 border-0 shadow-sm">
                 <div class="card-body text-center">
-                  <i class="bi bi-envelope-plus text-primary fs-1 mb-3"></i>
-                  <h3 class="mb-2" id="emails-today">--</h3>
-                  <p class="text-muted mb-0">Emails reçus aujourd'hui</p>
+                  <i class="bi bi-inbox text-primary fs-1 mb-3"></i>
+                  <h3 class="mb-2 counter-animate" id="total-emails">--</h3>
+                  <p class="text-muted mb-1">Total des emails</p>
+                  <small class="text-success"><i class="bi bi-arrow-clockwise me-1"></i>Temps réel</small>
                 </div>
               </div>
             </div>
-            <div class="col-md-4">
-              <div class="card stat-card h-100 border-0 shadow-sm">
-                <div class="card-body text-center">
-                  <i class="bi bi-check-circle text-success fs-1 mb-3"></i>
-                  <h3 class="mb-2" id="emails-sent">--</h3>
-                  <p class="text-muted mb-0">Emails traités</p>
-                </div>
-              </div>
-            </div>
-            <div class="col-md-4">
+            <div class="col-lg-3 col-md-6">
               <div class="card stat-card h-100 border-0 shadow-sm">
                 <div class="card-body text-center">
                   <i class="bi bi-envelope-exclamation text-warning fs-1 mb-3"></i>
-                  <h3 class="mb-2" id="emails-unread">--</h3>
-                  <p class="text-muted mb-0">Non lus</p>
+                  <h3 class="mb-2 counter-animate" id="emails-unread">--</h3>
+                  <p class="text-muted mb-1">Non lus</p>
+                  <small class="text-muted"><span id="unread-percentage">--%</span> du total</small>
+                </div>
+              </div>
+            </div>
+            <div class="col-lg-3 col-md-6">
+              <div class="card stat-card h-100 border-0 shadow-sm">
+                <div class="card-body text-center">
+                  <i class="bi bi-envelope-plus text-success fs-1 mb-3"></i>
+                  <h3 class="mb-2 counter-animate" id="emails-today">--</h3>
+                  <p class="text-muted mb-1">Reçus aujourd'hui</p>
+                  <small class="text-info"><span id="today-growth">--</span> vs hier</small>
+                </div>
+              </div>
+            </div>
+            <div class="col-lg-3 col-md-6">
+              <div class="card stat-card h-100 border-0 shadow-sm">
+                <div class="card-body text-center">
+                  <i class="bi bi-folder2-open text-info fs-1 mb-3"></i>
+                  <h3 class="mb-2 counter-animate" id="monitored-folders">--</h3>
+                  <p class="text-muted mb-1">Dossiers surveillés</p>
+                  <small id="monitoring-status" class="text-muted">
+                    <span class="status-indicator status-connecting me-1"></span>Initialisation...
+                  </small>
                 </div>
               </div>
             </div>
           </div>
           
-          <!-- Métriques hebdomadaires VBA -->
+          <!-- Répartition par dossiers surveillés -->
           <div class="row g-4 mb-4">
-            <div class="col-lg-8">
+            <div class="col-12">
               <div class="card border-0 shadow-sm">
-                <div class="card-header bg-white">
-                  <h5 class="mb-0"><i class="bi bi-calendar-week me-2"></i>Suivi hebdomadaire (compatible VBA)</h5>
+                <div class="card-header bg-white d-flex justify-content-between align-items-center">
+                  <h5 class="mb-0"><i class="bi bi-pie-chart me-2"></i>Répartition par dossiers</h5>
+                  <div class="badge bg-primary" id="total-folders-badge">0 dossiers</div>
                 </div>
                 <div class="card-body">
-                  <div class="row g-3">
-                    <div class="col-md-3">
-                      <div class="text-center">
-                        <div class="fs-4 fw-bold text-info" id="stock-start">--</div>
-                        <small class="text-muted">Stock début</small>
-                      </div>
+                  <div class="row g-3" id="folders-stats-grid">
+                    <div class="col-12 text-center text-muted py-4">
+                      <div class="spinner-border spinner-border-sm me-2" role="status"></div>
+                      Chargement des dossiers...
                     </div>
-                    <div class="col-md-3">
-                      <div class="text-center">
-                        <div class="fs-4 fw-bold text-primary" id="stock-end">--</div>
-                        <small class="text-muted">Stock fin</small>
-                      </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+          
+          <!-- Analyse temporelle -->
+          <div class="row g-4">
+            <div class="col-lg-8">
+              <div class="card border-0 shadow-sm">
+                <div class="card-header bg-white d-flex justify-content-between align-items-center">
+                  <h5 class="mb-0"><i class="bi bi-graph-up me-2"></i>Activité des dernières 24h</h5>
+                  <small class="text-muted">Mise à jour: <span id="activity-last-update">--</span></small>
+                </div>
+                <div class="card-body">
+                  <div class="row g-4">
+                    <div class="col-md-4 text-center">
+                      <div class="fs-2 fw-bold text-primary mb-2" id="activity-total">--</div>
+                      <p class="text-muted mb-0">Total reçus</p>
                     </div>
-                    <div class="col-md-3">
-                      <div class="text-center">
-                        <div class="fs-4 fw-bold" id="stock-evolution">--</div>
-                        <small class="text-muted">Évolution</small>
-                      </div>
+                    <div class="col-md-4 text-center">
+                      <div class="fs-2 fw-bold text-success mb-2" id="activity-read">--</div>
+                      <p class="text-muted mb-0">Lus</p>
                     </div>
-                    <div class="col-md-3">
-                      <div class="text-center">
-                        <div class="fs-5 text-muted" id="week-number">--</div>
-                        <small class="text-muted">Semaine</small>
-                      </div>
+                    <div class="col-md-4 text-center">
+                      <div class="fs-2 fw-bold text-warning mb-2" id="activity-pending">--</div>
+                      <p class="text-muted mb-0">En attente</p>
                     </div>
                   </div>
                   <hr>
                   <div class="row g-3">
                     <div class="col-md-6">
-                      <div class="text-center">
-                        <div class="fs-5 fw-bold text-success" id="weekly-arrivals">--</div>
-                        <small class="text-muted">Arrivées cette semaine</small>
+                      <div class="d-flex justify-content-between">
+                        <span class="text-muted">Emails/heure moyenne:</span>
+                        <span class="fw-bold" id="emails-per-hour">--</span>
                       </div>
                     </div>
                     <div class="col-md-6">
-                      <div class="text-center">
-                        <div class="fs-5 fw-bold text-danger" id="weekly-treatments">--</div>
-                        <small class="text-muted">Traitements cette semaine</small>
+                      <div class="d-flex justify-content-between">
+                        <span class="text-muted">Pic d'activité:</span>
+                        <span class="fw-bold" id="peak-activity">--</span>
                       </div>
                     </div>
                   </div>
@@ -311,65 +420,29 @@
             <div class="col-lg-4">
               <div class="card border-0 shadow-sm">
                 <div class="card-header bg-white">
-                  <h5 class="mb-0"><i class="bi bi-activity me-2"></i>Évolution</h5>
+                  <h5 class="mb-0"><i class="bi bi-speedometer2 me-2"></i>Performance système</h5>
                 </div>
                 <div class="card-body">
+                  <div class="mb-3">
+                    <div class="d-flex justify-content-between mb-1">
+                      <span class="text-muted">Synchronisation</span>
+                      <span class="text-success fw-bold">Temps réel</span>
+                    </div>
+                    <div class="progress" style="height: 8px;">
+                      <div class="progress-bar bg-success" style="width: 100%"></div>
+                    </div>
+                  </div>
+                  <div class="mb-3">
+                    <div class="d-flex justify-content-between mb-1">
+                      <span class="text-muted">Monitoring</span>
+                      <span id="monitoring-performance" class="fw-bold">--</span>
+                    </div>
+                    <div class="progress" style="height: 8px;">
+                      <div id="monitoring-progress" class="progress-bar" style="width: 0%"></div>
+                    </div>
+                  </div>
                   <div class="text-center">
-                    <div class="fs-3 fw-bold mb-2" id="evolution-percentage">--</div>
-                    <p class="text-muted mb-3">vs semaine précédente</p>
-                    <div id="evolution-indicator" class="badge bg-secondary">Stable</div>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-          
-          <div class="row g-4">
-            <div class="col-12">
-              <div class="card border-0 shadow-sm">
-                <div class="card-header bg-white">
-                  <h5 class="mb-0"><i class="bi bi-list-ul me-2"></i>Compteurs VBA par catégorie</h5>
-                </div>
-                <div class="card-body">
-                  <div class="row g-3">
-                    <div class="col-lg-3 col-md-6">
-                      <div class="text-center p-3 border rounded">
-                        <i class="bi bi-file-earmark-text text-danger fs-2 mb-2"></i>
-                        <h4 class="mb-1" id="declarations-count">--</h4>
-                        <p class="text-muted mb-0">Déclarations</p>
-                        <small class="text-muted" id="declarations-unread">-- non lus</small>
-                      </div>
-                    </div>
-                    <div class="col-lg-3 col-md-6">
-                      <div class="text-center p-3 border rounded">
-                        <i class="bi bi-credit-card text-success fs-2 mb-2"></i>
-                        <h4 class="mb-1" id="reglements-count">--</h4>
-                        <p class="text-muted mb-0">Règlements</p>
-                        <small class="text-muted" id="reglements-unread">-- non lus</small>
-                      </div>
-                    </div>
-                    <div class="col-lg-3 col-md-6">
-                      <div class="text-center p-3 border rounded">
-                        <i class="bi bi-envelope text-info fs-2 mb-2"></i>
-                        <h4 class="mb-1" id="mails-simples-count">--</h4>
-                        <p class="text-muted mb-0">Mails simples</p>
-                        <small class="text-muted" id="mails-simples-unread">-- non lus</small>
-                      </div>
-                    </div>
-                    <div class="col-lg-3 col-md-6">
-                      <div class="text-center p-3 border rounded">
-                        <i class="bi bi-folder text-secondary fs-2 mb-2"></i>
-                        <h4 class="mb-1" id="autres-count">--</h4>
-                        <p class="text-muted mb-0">Autres</p>
-                        <small class="text-muted" id="autres-unread">-- non lus</small>
-                      </div>
-                    </div>
-                  </div>
-                  <div id="vba-category-summary" class="mt-3">
-                    <div class="text-center text-muted py-2">
-                      <div class="spinner-border spinner-border-sm me-2" role="status"></div>
-                      Chargement des métriques VBA...
-                    </div>
+                    <small class="text-muted">Dernière vérification: <span id="last-check">--</span></small>
                   </div>
                 </div>
               </div>
@@ -379,32 +452,367 @@
 
         <!-- Emails Tab -->
         <div class="tab-pane fade" id="emails">
-          <div class="card border-0 shadow-sm">
-            <div class="card-header bg-white">
-              <h5 class="mb-0"><i class="bi bi-envelope me-2"></i>Emails récents</h5>
-              <small class="text-muted">Mise à jour automatique</small>
+          <!-- Header moderne avec statistiques rapides -->
+          <div class="row g-4 mb-4">
+            <div class="col-12">
+              <div class="d-flex justify-content-between align-items-center">
+                <div>
+                  <h2 class="h4 mb-1 fw-bold">
+                    <i class="bi bi-envelope-open me-2 text-primary"></i>
+                    Emails récents
+                  </h2>
+                  <p class="text-muted mb-0">Historique complet des emails reçus et traités</p>
+                </div>
+                <div class="d-flex gap-2">
+                  <button class="btn btn-outline-primary btn-sm" id="refresh-emails">
+                    <i class="bi bi-arrow-clockwise me-1"></i>Actualiser
+                  </button>
+                  <div class="btn-group" role="group">
+                    <input type="radio" class="btn-check" name="email-filter" id="filter-all" checked>
+                    <label class="btn btn-outline-secondary btn-sm" for="filter-all">Tous</label>
+                    <input type="radio" class="btn-check" name="email-filter" id="filter-unread">
+                    <label class="btn btn-outline-secondary btn-sm" for="filter-unread">Non lus</label>
+                    <input type="radio" class="btn-check" name="email-filter" id="filter-today">
+                    <label class="btn btn-outline-secondary btn-sm" for="filter-today">Aujourd'hui</label>
+                  </div>
+                </div>
+              </div>
             </div>
+          </div>
+
+          <!-- Statistiques rapides des emails -->
+          <div class="row g-3 mb-4">
+            <div class="col-lg-2 col-md-4 col-sm-6">
+              <div class="card border-0 bg-light h-100">
+                <div class="card-body text-center p-3">
+                  <i class="bi bi-inbox text-primary fs-4 mb-2"></i>
+                  <div class="h5 mb-1 counter-animate" id="emails-stats-total">--</div>
+                  <small class="text-muted">Total</small>
+                </div>
+              </div>
+            </div>
+            <div class="col-lg-2 col-md-4 col-sm-6">
+              <div class="card border-0 bg-light h-100">
+                <div class="card-body text-center p-3">
+                  <i class="bi bi-envelope-exclamation text-warning fs-4 mb-2"></i>
+                  <div class="h5 mb-1 counter-animate" id="emails-stats-unread">--</div>
+                  <small class="text-muted">Non lus</small>
+                </div>
+              </div>
+            </div>
+            <div class="col-lg-2 col-md-4 col-sm-6">
+              <div class="card border-0 bg-light h-100">
+                <div class="card-body text-center p-3">
+                  <i class="bi bi-calendar-day text-success fs-4 mb-2"></i>
+                  <div class="h5 mb-1 counter-animate" id="emails-stats-today">--</div>
+                  <small class="text-muted">Aujourd'hui</small>
+                </div>
+              </div>
+            </div>
+            <div class="col-lg-2 col-md-4 col-sm-6">
+              <div class="card border-0 bg-light h-100">
+                <div class="card-body text-center p-3">
+                  <i class="bi bi-calendar-week text-info fs-4 mb-2"></i>
+                  <div class="h5 mb-1 counter-animate" id="emails-stats-week">--</div>
+                  <small class="text-muted">Cette semaine</small>
+                </div>
+              </div>
+            </div>
+            <div class="col-lg-2 col-md-4 col-sm-6">
+              <div class="card border-0 bg-light h-100">
+                <div class="card-body text-center p-3">
+                  <i class="bi bi-clock text-secondary fs-4 mb-2"></i>
+                  <div class="h6 mb-1" id="emails-stats-last-sync">--</div>
+                  <small class="text-muted">Dernière sync</small>
+                </div>
+              </div>
+            </div>
+            <div class="col-lg-2 col-md-4 col-sm-6">
+              <div class="card border-0 bg-light h-100">
+                <div class="card-body text-center p-3">
+                  <i class="bi bi-speedometer text-primary fs-4 mb-2"></i>
+                  <div class="h6 mb-1" id="emails-stats-rate">--/h</div>
+                  <small class="text-muted">Moyenne</small>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Liste principale des emails -->
+          <div class="card border-0 shadow-sm">
+            <div class="card-header bg-gradient" style="background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);">
+              <div class="row align-items-center">
+                <div class="col">
+                  <h5 class="mb-0 fw-semibold">
+                    <i class="bi bi-list-ul me-2 text-primary"></i>
+                    Liste des emails
+                  </h5>
+                </div>
+                <div class="col-auto">
+                  <div class="d-flex align-items-center">
+                    <span class="status-indicator status-connected me-2"></span>
+                    <small class="text-success fw-medium">Temps réel</small>
+                  </div>
+                </div>
+              </div>
+            </div>
+            
+            <!-- Barre de recherche et filtres -->
+            <div class="card-body border-bottom bg-light p-3">
+              <div class="row g-3">
+                <div class="col-md-4">
+                  <div class="input-group">
+                    <span class="input-group-text bg-white border-end-0">
+                      <i class="bi bi-search text-muted"></i>
+                    </span>
+                    <input type="text" class="form-control border-start-0" id="email-search" 
+                           placeholder="Rechercher par expéditeur, sujet..." style="border-left: none !important;">
+                  </div>
+                </div>
+                <div class="col-md-3">
+                  <select class="form-select" id="folder-filter">
+                    <option value="">📁 Tous les dossiers</option>
+                  </select>
+                </div>
+                <div class="col-md-3">
+                  <select class="form-select" id="date-filter">
+                    <option value="">📅 Toutes les dates</option>
+                    <option value="today">Aujourd'hui</option>
+                    <option value="week">Cette semaine</option>
+                    <option value="month">Ce mois</option>
+                  </select>
+                </div>
+                <div class="col-md-2">
+                  <select class="form-select" id="status-filter">
+                    <option value="">📋 Tous les statuts</option>
+                    <option value="unread">Non lus</option>
+                    <option value="read">Lus</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+            
             <div class="card-body p-0">
               <div class="table-responsive">
                 <table class="table table-hover mb-0">
-                  <thead class="table-light">
+                  <thead class="table-light sticky-top">
                     <tr>
-                      <th>Date</th>
-                      <th>Expéditeur</th>
-                      <th>Sujet</th>
-                      <th>Dossier</th>
-                      <th>Statut</th>
+                      <th class="border-0 ps-3">
+                        <div class="d-flex align-items-center">
+                          <i class="bi bi-calendar me-2 text-muted"></i>Date
+                        </div>
+                      </th>
+                      <th class="border-0">
+                        <div class="d-flex align-items-center">
+                          <i class="bi bi-person me-2 text-muted"></i>Expéditeur
+                        </div>
+                      </th>
+                      <th class="border-0">
+                        <div class="d-flex align-items-center">
+                          <i class="bi bi-chat-quote me-2 text-muted"></i>Sujet
+                        </div>
+                      </th>
+                      <th class="border-0">
+                        <div class="d-flex align-items-center">
+                          <i class="bi bi-folder me-2 text-muted"></i>Dossier
+                        </div>
+                      </th>
+                      <th class="border-0">
+                        <div class="d-flex align-items-center">
+                          <i class="bi bi-check-circle me-2 text-muted"></i>Statut
+                        </div>
+                      </th>
                     </tr>
                   </thead>
                   <tbody id="emails-table">
                     <tr>
-                      <td colspan="5" class="text-center text-muted py-4">
-                        <div class="spinner-border spinner-border-sm me-2" role="status"></div>
-                        Chargement des emails...
+                      <td colspan="5" class="text-center text-muted py-5 border-0">
+                        <div class="d-flex flex-column align-items-center">
+                          <div class="spinner-border text-primary mb-3" role="status">
+                            <span class="visually-hidden">Chargement...</span>
+                          </div>
+                          <h6 class="text-muted mb-2">Chargement des emails...</h6>
+                          <p class="text-muted mb-0 small">Récupération des données depuis Outlook</p>
+                        </div>
                       </td>
                     </tr>
                   </tbody>
                 </table>
+              </div>
+              
+              <!-- Pagination -->
+              <div class="d-flex justify-content-between align-items-center p-3 border-top bg-light">
+                <div class="text-muted small">
+                  Affichage de <span id="emails-range-start">0</span> à <span id="emails-range-end">0</span> 
+                  sur <span id="emails-total-count">0</span> emails
+                </div>
+                <nav>
+                  <ul class="pagination pagination-sm mb-0">
+                    <li class="page-item disabled" id="prev-page">
+                      <a class="page-link" href="#"><i class="bi bi-chevron-left"></i></a>
+                    </li>
+                    <li class="page-item active">
+                      <a class="page-link" href="#">1</a>
+                    </li>
+                    <li class="page-item" id="next-page">
+                      <a class="page-link" href="#"><i class="bi bi-chevron-right"></i></a>
+                    </li>
+                  </ul>
+                </nav>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Weekly Stats Tab (Nouveau) -->
+        <div class="tab-pane fade" id="weekly">
+          <!-- Header section -->
+          <div class="row g-4 mb-4">
+            <div class="col-12">
+              <div class="d-flex justify-content-between align-items-center">
+                <div>
+                  <h2 class="h4 mb-1 fw-bold">
+                    <i class="bi bi-calendar-week me-2 text-primary"></i>
+                    Suivi hebdomadaire
+                  </h2>
+                  <p class="text-muted mb-0">Comptabilisation des emails par semaine ISO et type de dossier</p>
+                </div>
+                <div class="d-flex gap-2">
+                  <button class="btn btn-outline-primary btn-sm" id="refresh-weekly">
+                    <i class="bi bi-arrow-clockwise me-1"></i>Actualiser
+                  </button>
+                  <button class="btn btn-outline-secondary btn-sm" data-bs-toggle="modal" data-bs-target="#weeklySettingsModal">
+                    <i class="bi bi-gear me-1"></i>Paramètres
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Statistiques de la semaine courante -->
+          <div class="row g-3 mb-4">
+            <div class="col-12">
+              <div class="card border-0 shadow-sm">
+                <div class="card-header bg-primary text-white">
+                  <h6 class="card-title mb-0 fw-semibold">
+                    <i class="bi bi-calendar-check me-2"></i>
+                    Semaine courante: <span id="current-week-title">S-- - ----</span>
+                  </h6>
+                </div>
+                <div class="card-body">
+                  <div class="row g-3" id="current-week-stats">
+                    <!-- Les stats par catégorie seront chargées ici -->
+                    <div class="col-12 text-center text-muted">
+                      <div class="spinner-border spinner-border-sm me-2"></div>
+                      Chargement des statistiques...
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Traité par ADG -->
+          <div class="row g-3 mb-4">
+            <div class="col-12">
+              <div class="card border-0 shadow-sm">
+                <div class="card-header bg-light">
+                  <h6 class="card-title mb-0 fw-semibold">
+                    <i class="bi bi-plus-circle me-2"></i>
+                    Traité par ADG
+                  </h6>
+                  <small class="text-muted">Ajouter du courrier papier, appels téléphoniques, etc.</small>
+                </div>
+                <div class="card-body">
+                  <form id="manual-adjustment-form" class="row g-3">
+                    <div class="col-md-3">
+                      <label for="adjustment-category" class="form-label">Catégorie</label>
+                      <select class="form-select" id="adjustment-category" required>
+                        <option value="">Sélectionner...</option>
+                        <option value="Déclarations">Déclarations</option>
+                        <option value="mails_simples">Mail simple</option>
+                        <option value="Règlements">Règlements</option>
+                      </select>
+                    </div>
+                    <div class="col-md-2">
+                      <label for="adjustment-value" class="form-label">Quantité</label>
+                      <input type="number" class="form-control" id="adjustment-value" placeholder="ex: 5" required>
+                    </div>
+                    <div class="col-md-3">
+                      <label for="adjustment-type" class="form-label">Type</label>
+                      <select class="form-select" id="adjustment-type" required>
+                        <option value="manual_adjustments">Traité par ADG</option>
+                        <option value="emails_received">Reçu</option>
+                        <option value="emails_treated">Traité</option>
+                      </select>
+                    </div>
+                    <div class="col-md-2">
+                      <label class="form-label">&nbsp;</label>
+                      <button type="submit" class="btn btn-primary d-block">
+                        <i class="bi bi-plus-lg me-1"></i>Ajouter
+                      </button>
+                    </div>
+                    <div class="col-md-2">
+                      <label class="form-label">&nbsp;</label>
+                      <button type="button" class="btn btn-outline-danger d-block" id="negative-adjustment">
+                        <i class="bi bi-dash-lg me-1"></i>Retirer
+                      </button>
+                    </div>
+                  </form>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Historique des semaines -->
+          <div class="row g-3">
+            <div class="col-12">
+              <div class="card border-0 shadow-sm">
+                <div class="card-header bg-light d-flex justify-content-between align-items-center">
+                  <h6 class="card-title mb-0 fw-semibold">
+                    <i class="bi bi-table me-2"></i>
+                    Historique des semaines
+                  </h6>
+                  <small class="text-muted">
+                    <i class="bi bi-info-circle me-1"></i>
+                    Mise à jour en temps réel
+                  </small>
+                </div>
+                <div class="card-body">
+                  <div class="table-responsive">
+                    <table class="table table-hover align-middle mb-0" id="weekly-history-table">
+                      <thead class="table-light">
+                        <tr>
+                          <th scope="col" class="border-0 fw-semibold">Semaine</th>
+                          <th scope="col" class="border-0 fw-semibold">Période</th>
+                          <th scope="col" class="border-0 fw-semibold">Catégorie</th>
+                          <th scope="col" class="border-0 fw-semibold text-center">Reçus</th>
+                          <th scope="col" class="border-0 fw-semibold text-center">Traités</th>
+                          <th scope="col" class="border-0 fw-semibold text-center">Traité par ADG</th>
+                          <th scope="col" class="border-0 fw-semibold text-center">Stock fin de semaine</th>
+                          <th scope="col" class="border-0 fw-semibold text-center">Total Stock</th>
+                          <th scope="col" class="border-0 fw-semibold text-center">Évolution S-1</th>
+                        </tr>
+                      </thead>
+                      <tbody id="weekly-history-body">
+                        <!-- L'historique sera chargé ici -->
+                      </tbody>
+                    </table>
+                  </div>
+                  
+                  <div id="weekly-loading" class="text-center py-5">
+                    <div class="spinner-border text-primary" role="status">
+                      <span class="visually-hidden">Chargement...</span>
+                    </div>
+                    <p class="text-muted mt-3">Chargement de l'historique...</p>
+                  </div>
+                  
+                  <div id="weekly-no-data" class="text-center py-5 d-none">
+                    <i class="bi bi-calendar-x text-muted fs-1 mb-3"></i>
+                    <h6 class="text-muted">Aucune donnée hebdomadaire</h6>
+                    <p class="text-muted mb-0">Les statistiques apparaîtront dès la réception d'emails</p>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
@@ -413,112 +821,195 @@
         <!-- Monitoring Tab -->
         <div class="tab-pane fade" id="monitoring">
           <div class="row g-4">
+            <!-- Header moderne avec actions -->
+            <div class="col-12">
+              <div class="d-flex justify-content-between align-items-center mb-4">
+                <div>
+                  <h2 class="h4 mb-1 fw-bold">
+                    <i class="bi bi-eye-fill me-2 text-primary"></i>
+                    Surveillance des dossiers
+                  </h2>
+                  <p class="text-muted mb-0">Gérez et surveillez vos dossiers Outlook en temps réel</p>
+                </div>
+                <div class="d-flex gap-2">
+                  <button class="btn btn-outline-primary btn-sm" id="refresh-folders">
+                    <i class="bi bi-arrow-clockwise me-1"></i>Actualiser
+                  </button>
+                  <button class="btn btn-primary btn-sm" id="add-folder">
+                    <i class="bi bi-plus-circle me-1"></i>Ajouter un dossier
+                  </button>
+                </div>
+              </div>
+            </div>
+
             <!-- Gestion des dossiers monitorés -->
             <div class="col-lg-8">
               <div class="card border-0 shadow-sm">
-                <div class="card-header bg-white d-flex justify-content-between align-items-center">
-                  <h5 class="mb-0"><i class="bi bi-folder-check me-2"></i>Dossiers monitorés</h5>
-                  <div class="d-flex gap-2">
-                    <button class="btn btn-outline-primary btn-sm" id="refresh-folders">
-                      <i class="bi bi-arrow-clockwise me-1"></i>Actualiser
-                    </button>
-                    <button class="btn btn-primary btn-sm" id="add-folder">
-                      <i class="bi bi-plus me-1"></i>Ajouter un dossier
-                    </button>
+                <div class="card-header bg-gradient" style="background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);">
+                  <div class="row align-items-center">
+                    <div class="col">
+                      <h5 class="mb-0 fw-semibold">
+                        <i class="bi bi-folder-check me-2 text-primary"></i>
+                        Dossiers surveillés
+                      </h5>
+                    </div>
+                    <div class="col-auto">
+                      <span class="badge bg-primary rounded-pill" id="monitored-folders-count">0</span>
+                    </div>
                   </div>
                 </div>
-                <div class="card-body">
-                  <div class="alert alert-info">
-                    <i class="bi bi-info-circle me-2"></i>
-                    Voici la liste des dossiers actuellement surveillés. Vous pouvez modifier leur catégorie ou les supprimer du monitoring.
-                  </div>
-                  
-                  <!-- Filtre et recherche -->
-                  <div class="row mb-3">
-                    <div class="col-md-6">
-                      <div class="input-group">
-                        <span class="input-group-text"><i class="bi bi-search"></i></span>
-                        <input type="text" class="form-control" id="folder-search" placeholder="Rechercher un dossier...">
+                <div class="card-body p-0">
+                  <!-- Barre de filtres moderne -->
+                  <div class="p-3 border-bottom bg-light">
+                    <div class="row g-3">
+                      <div class="col-md-6">
+                        <div class="input-group">
+                          <span class="input-group-text bg-white border-end-0">
+                            <i class="bi bi-search text-muted"></i>
+                          </span>
+                          <input type="text" class="form-control border-start-0" id="folder-search" 
+                                 placeholder="Rechercher un dossier..." style="border-left: none !important;">
+                        </div>
+                      </div>
+                      <div class="col-md-6">
+                        <select class="form-select" id="category-filter">
+                          <option value="">🏷️ Toutes les catégories</option>
+                          <option value="Déclarations">📋 Déclarations</option>
+                          <option value="Règlements">💰 Règlements</option>
+                          <option value="Mails simples">📧 Mails simples</option>
+                        </select>
                       </div>
                     </div>
-                    <div class="col-md-6">
-                      <select class="form-select" id="category-filter">
-                        <option value="">Toutes les catégories</option>
-                        <option value="Déclarations">Déclarations</option>
-                        <option value="Règlements">Règlements</option>
-                        <option value="Mails simples">Mails simples</option>
-                      </select>
-                    </div>
                   </div>
                   
-                  <!-- Vue hiérarchique des dossiers -->
-                  <div id="folders-tree" class="border rounded p-3">
-                    <div class="text-center text-muted py-4">
-                      <div class="spinner-border spinner-border-sm me-2" role="status"></div>
-                      Chargement des dossiers...
+                  <!-- Liste moderne des dossiers -->
+                  <div id="folders-tree" class="p-3">
+                    <div class="d-flex justify-content-center align-items-center py-5">
+                      <div class="text-center">
+                        <div class="spinner-border text-primary mb-3" role="status">
+                          <span class="visually-hidden">Chargement...</span>
+                        </div>
+                        <p class="text-muted mb-0">Chargement des dossiers...</p>
+                      </div>
                     </div>
                   </div>
                 </div>
               </div>
             </div>
 
-            <!-- Statut et actions -->
+            <!-- Panneau de contrôle -->
             <div class="col-lg-4">
-              <!-- Statut du monitoring -->
+              <!-- Statut du monitoring avec design moderne -->
               <div class="card border-0 shadow-sm mb-4">
-                <div class="card-header bg-white">
-                  <h5 class="mb-0"><i class="bi bi-activity me-2"></i>Statut du monitoring</h5>
+                <div class="card-header bg-gradient" style="background: linear-gradient(135deg, #198754 0%, #20c997 100%); color: white;">
+                  <h5 class="mb-0 fw-semibold">
+                    <i class="bi bi-activity me-2"></i>Statut du système
+                  </h5>
                 </div>
                 <div class="card-body">
                   <div id="monitoring-status">
-                    <div class="d-flex align-items-center mb-3">
-                      <span class="status-indicator status-disconnected me-2"></span>
-                      <span>Arrêté</span>
+                    <div class="d-flex align-items-center justify-content-between mb-3">
+                      <div class="d-flex align-items-center">
+                        <div class="status-indicator status-disconnected me-3"></div>
+                        <div>
+                          <div class="fw-bold">Arrêté</div>
+                          <small class="text-muted">Aucun dossier surveillé</small>
+                        </div>
+                      </div>
+                      <i class="bi bi-pause-circle fs-3 text-muted"></i>
                     </div>
-                    <small class="text-muted">Aucun dossier surveillé</small>
                   </div>
                   
                   <div class="d-grid gap-2 mt-3">
-                    <button class="btn btn-success" id="start-monitoring" style="display: inline-block;">
-                      <i class="bi bi-play-fill me-2"></i>Démarrer
+                    <button class="btn btn-success btn-lg" id="start-monitoring" style="display: inline-block;">
+                      <i class="bi bi-play-fill me-2"></i>Démarrer la surveillance
                     </button>
-                    <button class="btn btn-danger" id="stop-monitoring" style="display: none;">
-                      <i class="bi bi-stop-fill me-2"></i>Arrêter
+                    <button class="btn btn-danger btn-lg" id="stop-monitoring" style="display: none;">
+                      <i class="bi bi-stop-fill me-2"></i>Arrêter la surveillance
                     </button>
+                  </div>
+                  
+                  <!-- Indicateurs de performance -->
+                  <div class="mt-4 pt-3 border-top">
+                    <div class="row text-center g-3">
+                      <div class="col-6">
+                        <div class="performance-metric">
+                          <div class="h5 mb-1 text-success" id="sync-frequency">--</div>
+                          <small class="text-muted">Sync/min</small>
+                        </div>
+                      </div>
+                      <div class="col-6">
+                        <div class="performance-metric">
+                          <div class="h5 mb-1 text-info" id="last-sync">--</div>
+                          <small class="text-muted">Dernière sync</small>
+                        </div>
+                      </div>
+                    </div>
                   </div>
                 </div>
               </div>
 
-              <!-- Statistiques rapides -->
+              <!-- Statistiques modernes -->
               <div class="card border-0 shadow-sm">
-                <div class="card-header bg-white">
-                  <h5 class="mb-0"><i class="bi bi-bar-chart me-2"></i>Statistiques</h5>
+                <div class="card-header bg-gradient" style="background: linear-gradient(135deg, #6f42c1 0%, #8b5cf6 100%); color: white;">
+                  <h5 class="mb-0 fw-semibold">
+                    <i class="bi bi-graph-up me-2"></i>Statistiques en temps réel
+                  </h5>
                 </div>
                 <div class="card-body">
                   <div id="monitoring-stats">
-                    <div class="row text-center">
+                    <!-- Statistiques principales -->
+                    <div class="row g-3 mb-4">
                       <div class="col-6">
-                        <div class="h4 mb-0 text-primary" id="total-folders">0</div>
-                        <small class="text-muted">Dossiers</small>
+                        <div class="stat-card bg-primary bg-opacity-10 p-3 rounded-3 text-center">
+                          <div class="h3 mb-1 text-primary fw-bold" id="total-folders">0</div>
+                          <div class="small text-muted fw-medium">Dossiers configurés</div>
+                        </div>
                       </div>
                       <div class="col-6">
-                        <div class="h4 mb-0 text-success" id="active-folders">0</div>
-                        <small class="text-muted">Actifs</small>
+                        <div class="stat-card bg-success bg-opacity-10 p-3 rounded-3 text-center">
+                          <div class="h3 mb-1 text-success fw-bold" id="active-folders">0</div>
+                          <div class="small text-muted fw-medium">Dossiers actifs</div>
+                        </div>
                       </div>
                     </div>
-                    <hr>
-                    <div class="row text-center">
-                      <div class="col-4">
-                        <div class="h6 mb-0 text-info" id="declarations-count">0</div>
-                        <small class="text-muted">Déclarations</small>
+                    
+                    <!-- Répartition par catégories -->
+                    <div class="mb-3">
+                      <h6 class="fw-semibold mb-3">Répartition par catégories</h6>
+                      <div class="category-stats">
+                        <div class="d-flex justify-content-between align-items-center py-2 border-bottom">
+                          <div class="d-flex align-items-center">
+                            <div class="category-dot bg-info me-2"></div>
+                            <span class="small">Déclarations</span>
+                          </div>
+                          <span class="badge bg-info rounded-pill" id="declarations-count">0</span>
+                        </div>
+                        <div class="d-flex justify-content-between align-items-center py-2 border-bottom">
+                          <div class="d-flex align-items-center">
+                            <div class="category-dot bg-warning me-2"></div>
+                            <span class="small">Règlements</span>
+                          </div>
+                          <span class="badge bg-warning rounded-pill" id="reglements-count">0</span>
+                        </div>
+                        <div class="d-flex justify-content-between align-items-center py-2">
+                          <div class="d-flex align-items-center">
+                            <div class="category-dot bg-secondary me-2"></div>
+                            <span class="small">Mails simples</span>
+                          </div>
+                          <span class="badge bg-secondary rounded-pill" id="simples-count">0</span>
+                        </div>
                       </div>
-                      <div class="col-4">
-                        <div class="h6 mb-0 text-warning" id="reglements-count">0</div>
-                        <small class="text-muted">Règlements</small>
+                    </div>
+                    
+                    <!-- Barre de progression globale -->
+                    <div class="mt-4 pt-3 border-top">
+                      <div class="d-flex justify-content-between align-items-center mb-2">
+                        <small class="text-muted fw-medium">Utilisation du système</small>
+                        <small class="text-muted" id="system-usage">---%</small>
                       </div>
-                      <div class="col-4">
-                        <div class="h6 mb-0 text-secondary" id="simples-count">0</div>
-                        <small class="text-muted">Simples</small>
+                      <div class="progress" style="height: 8px;">
+                        <div class="progress-bar bg-gradient" role="progressbar" style="width: 0%; background: linear-gradient(90deg, #0d6efd, #6610f2);" id="system-progress"></div>
                       </div>
                     </div>
                   </div>
@@ -649,6 +1140,49 @@
         <div class="modal-footer">
           <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Annuler</button>
           <button type="button" class="btn btn-primary" id="save-folder">Ajouter</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal pour les paramètres hebdomadaires -->
+  <div class="modal fade" id="weeklySettingsModal" tabindex="-1" aria-labelledby="weeklySettingsModalLabel" aria-hidden="true">
+    <div class="modal-dialog">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title" id="weeklySettingsModalLabel">
+            <i class="bi bi-gear me-2"></i>Paramètres du suivi hebdomadaire
+          </h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+        </div>
+        <div class="modal-body">
+          <form id="weekly-settings-form">
+            <div class="mb-3">
+              <label class="form-label fw-semibold">Comptabilisation des emails traités</label>
+              <div class="form-check">
+                <input class="form-check-input" type="checkbox" id="count-read-as-treated">
+                <label class="form-check-label" for="count-read-as-treated">
+                  Compter les emails "lus" comme "traités"
+                </label>
+              </div>
+              <small class="form-text text-muted">
+                Si activé, chaque email marqué comme "lu" sera automatiquement comptabilisé comme "traité" dans les statistiques hebdomadaires.
+              </small>
+            </div>
+            
+            <div class="mb-3">
+              <label class="form-label fw-semibold">Informations</label>
+              <div class="bg-light p-3 rounded">
+                <p class="mb-2"><strong>Semaines ISO :</strong> Les semaines suivent la norme ISO 8601 (lundi-dimanche)</p>
+                <p class="mb-2"><strong>Catégories :</strong> Les emails sont automatiquement classés selon leur dossier</p>
+                <p class="mb-0"><strong>Traité par ADG :</strong> Vous pouvez ajouter manuellement du courrier papier, appels, etc.</p>
+              </div>
+            </div>
+          </form>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Annuler</button>
+          <button type="button" class="btn btn-primary" id="save-weekly-settings">Sauvegarder</button>
         </div>
       </div>
     </div>

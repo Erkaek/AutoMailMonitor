@@ -4,10 +4,16 @@
   "description": "Application de monitoring des emails Outlook avec interface moderne",
   "main": "src/main/index.js",
   "scripts": {
+    "prestart": "node scripts/build-native.js",
     "start": "npx electron .",
     "dev": "set NODE_ENV=development && npx electron .",
     "build": "electron-builder",
-    "test": "vitest"
+    "build-win": "electron-builder --win",
+    "build-exe": "node scripts/build-exe.js",
+    "test": "vitest",
+    "rebuild": "node scripts/build-native.js",
+    "fix-sqlite": "node scripts/build-native.js",
+    "postinstall": "node scripts/build-native.js"
   },
   "keywords": [
     "electron",
@@ -23,18 +29,20 @@
   "license": "UNLICENSED",
   "copyright": "Copyright (c) 2025 Tanguy Raingeard. Tous droits réservés.",
   "dependencies": {
+    "@azure/msal-node": "^3.7.0",
+    "@microsoft/microsoft-graph-client": "^3.0.7",
+    "axios": "^1.11.0",
     "better-sqlite3": "^12.2.0",
     "bootstrap": "^5.3.0",
     "chart.js": "^4.0.0",
-    "edge-js": "^24.0.4",
     "electron": "^37.2.5",
     "exceljs": "^4.3.0",
     "express": "^4.21.2",
-    "node-cache": "^5.1.2",
-    "sqlite3": "^5.1.7"
+    "node-cache": "^5.1.2"
   },
   "devDependencies": {
     "electron-builder": "^25.1.8",
+    "electron-rebuild": "^3.2.9",
     "playwright": "^1.38.0",
     "vitest": "^3.2.4"
   },
@@ -47,10 +55,26 @@
     "files": [
       "src/**/*",
       "public/**/*",
-      "package.json"
+      "data/**/*",
+      "config/**/*",
+  "resources/new logo/**/*",
+      "package.json",
+      "node_modules/better-sqlite3/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "node_modules/better-sqlite3/build/Release/",
+        "to": "app.asar.unpacked/node_modules/better-sqlite3/build/Release/",
+        "filter": ["**/*"]
+      }
     ],
     "win": {
-      "target": "nsis"
+      "target": "nsis",
+      "icon": "resources/new logo/logo.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
     }
   }
 }

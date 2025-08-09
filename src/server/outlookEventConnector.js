@@ -183,32 +183,107 @@ class OutlookEventConnector extends EventEmitter {
           Write-Host "EVENT_ITEMSEND:$timestamp"
         }
         
-        # Événements sur les dossiers
-        $inbox = $namespace.GetDefaultFolder(6) # olFolderInbox
+        # Événements sur les dossiers - CONFIGURATION POUR TOUS LES DOSSIERS SURVEILLÉS
         
-        Register-ObjectEvent -InputObject $inbox.Items -EventName "ItemAdd" -Action {
-          param($item)
-          $timestamp = Get-Date -Format "yyyy-MM-ddTHH:mm:ss.fffZ"
-          $entryId = ""
-          try { $entryId = $item.EntryID } catch { }
-          Write-Host "EVENT_ITEMADD:$timestamp:$entryId"
-        }
+        # Liste des dossiers à surveiller (récupérés depuis la configuration)
+        $foldersToMonitor = @(
+          "erkaekanon@outlook.com\\Boîte de réception",
+          "erkaekanon@outlook.com\\Boîte de réception\\testA", 
+          "erkaekanon@outlook.com\\Boîte de réception\\test",
+          "erkaekanon@outlook.com\\Boîte de réception\\test\\test-1",
+          "erkaekanon@outlook.com\\Boîte de réception\\testA\\test-c"
+        )
         
-        Register-ObjectEvent -InputObject $inbox.Items -EventName "ItemChange" -Action {
-          param($item)
-          $timestamp = Get-Date -Format "yyyy-MM-ddTHH:mm:ss.fffZ"
-          $entryId = ""
-          $unread = $false
-          try { 
-            $entryId = $item.EntryID 
-            $unread = $item.UnRead
-          } catch { }
-          Write-Host "EVENT_ITEMCHANGE:$timestamp:$entryId:$unread"
-        }
-        
-        Register-ObjectEvent -InputObject $inbox.Items -EventName "ItemRemove" -Action {
-          $timestamp = Get-Date -Format "yyyy-MM-ddTHH:mm:ss.fffZ"
-          Write-Host "EVENT_ITEMREMOVE:$timestamp"
+        # Configuration des événements pour chaque dossier
+        foreach ($folderPath in $foldersToMonitor) {
+          try {
+            Write-Host "🎧 Configuration événements pour: $folderPath"
+            
+            # Navigation vers le dossier par son chemin
+            $folder = $null
+            $pathParts = $folderPath -split "\\\\"
+            
+            if ($pathParts.Length -ge 2) {
+              $storeName = $pathParts[0]
+              $folderNames = $pathParts[1..($pathParts.Length-1)]
+              
+              # Trouver le store
+              $targetStore = $null
+              foreach ($store in $namespace.Stores) {
+                if ($store.DisplayName -eq $storeName) {
+                  $targetStore = $store
+                  break
+                }
+              }
+              
+              if ($targetStore) {
+                $currentFolder = $targetStore.GetRootFolder()
+                
+                # Naviguer dans l'arborescence
+                foreach ($folderName in $folderNames) {
+                  $found = $false
+                  foreach ($subfolder in $currentFolder.Folders) {
+                    if ($subfolder.Name -eq $folderName) {
+                      $currentFolder = $subfolder
+                      $found = $true
+                      break
+                    }
+                  }
+                  if (-not $found) {
+                    Write-Host "⚠️ Dossier non trouvé: $folderName dans $folderPath"
+                    break
+                  }
+                }
+                
+                if ($found -or $folderNames.Length -eq 1) {
+                  $folder = $currentFolder
+                }
+              }
+            }
+            
+            if ($folder) {
+              Write-Host "✅ Dossier trouvé: $($folder.Name) - Configuration événements..."
+              
+              # Événements pour ce dossier spécifique
+              Register-ObjectEvent -InputObject $folder.Items -EventName "ItemAdd" -Action {
+                param($item)
+                $timestamp = Get-Date -Format "yyyy-MM-ddTHH:mm:ss.fffZ"
+                $entryId = ""
+                $folderPath = ""
+                try { 
+                  $entryId = $item.EntryID 
+                  $folderPath = $item.Parent.FolderPath
+                } catch { }
+                Write-Host "EVENT_ITEMADD:$timestamp:$entryId:$folderPath"
+              }
+              
+              Register-ObjectEvent -InputObject $folder.Items -EventName "ItemChange" -Action {
+                param($item)
+                $timestamp = Get-Date -Format "yyyy-MM-ddTHH:mm:ss.fffZ"
+                $entryId = ""
+                $unread = $false
+                $folderPath = ""
+                try { 
+                  $entryId = $item.EntryID 
+                  $unread = $item.UnRead
+                  $folderPath = $item.Parent.FolderPath
+                } catch { }
+                Write-Host "EVENT_ITEMCHANGE:$timestamp:$entryId:$unread:$folderPath"
+              }
+              
+              Register-ObjectEvent -InputObject $folder.Items -EventName "ItemRemove" -Action {
+                $timestamp = Get-Date -Format "yyyy-MM-ddTHH:mm:ss.fffZ"
+                Write-Host "EVENT_ITEMREMOVE:$timestamp:$using:folderPath"
+              }
+              
+              Write-Host "🔔 Événements configurés pour: $($folder.Name)"
+            } else {
+              Write-Host "❌ Impossible de trouver le dossier: $folderPath"
+            }
+            
+          } catch {
+            Write-Host "❌ Erreur configuration événements pour $folderPath : $($_.Exception.Message)"
+          }
         }
         
         Write-Host "EVENT_LISTENERS_READY"
@@ -272,20 +347,23 @@ class OutlookEventConnector extends EventEmitter {
             
           case 'EVENT_ITEMADD':
             const entryId = parts[2] || '';
-            this.log(`➕ Email ajouté: ${entryId}`);
-            this.emit('itemAdd', { timestamp, entryId });
+            const folderPath = parts[3] || '';
+            this.log(`➕ Email ajouté: ${entryId} dans ${folderPath}`);
+            this.emit('itemAdd', { timestamp, entryId, folderPath });
             break;
             
           case 'EVENT_ITEMCHANGE':
             const itemId = parts[2] || '';
             const unread = parts[3] === 'True';
-            this.log(`📝 Email modifié: ${itemId} (non-lu: ${unread})`);
-            this.emit('itemChange', { timestamp, entryId: itemId, unread });
+            const changeFolderPath = parts[4] || '';
+            this.log(`📝 Email modifié: ${itemId} (non-lu: ${unread}) dans ${changeFolderPath}`);
+            this.emit('itemChange', { timestamp, entryId: itemId, unread, folderPath: changeFolderPath });
             break;
             
           case 'EVENT_ITEMREMOVE':
-            this.log(`🗑️ Email supprimé à ${timestamp}`);
-            this.emit('itemRemove', { timestamp });
+            const removeFolderPath = parts[2] || '';
+            this.log(`🗑️ Email supprimé à ${timestamp} dans ${removeFolderPath}`);
+            this.emit('itemRemove', { timestamp, folderPath: removeFolderPath });
             break;
             
           case 'EVENT_LISTENERS_READY':

@@ -119,7 +119,8 @@ class DatabaseService {
   async initialize() {
     // Protection contre les multiples initialisations simultanées
     if (this.isInitialized) {
-      console.log('✅ Base de données déjà initialisée - skip');
+      // Log supprimé pour éviter le spam
+      // console.log('✅ Base de données déjà initialisée - skip');
       return;
     }
     
@@ -1113,11 +1114,11 @@ class DatabaseService {
     return new Promise((resolve, reject) => {
       const sql = `
         INSERT INTO emails (
-          outlook_id, subject, sender_name, sender_email, 
+          outlook_id, subject, sender_name, sender_email, recipient_email,
           received_time, size_kb, is_read, importance,
           folder_name, category, has_attachment,
           created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
       `;
       
       const params = [
@@ -1125,6 +1126,7 @@ class DatabaseService {
         emailData.Subject || '(Sans objet)',
         emailData.SenderName || 'Inconnu',
         emailData.SenderEmailAddress || '',
+        emailData.RecipientEmailAddress || '',
         emailData.ReceivedTime,
         Math.round((emailData.Size || 0) / 1024), // Convertir en KB
         emailData.UnRead ? 0 : 1, // UnRead = true signifie is_read = 0
@@ -1244,6 +1246,64 @@ class DatabaseService {
       folderName: folderEmails.FolderName,
       folderPath: folderEmails.FolderPath
     };
+  }
+
+  /**
+   * NOUVEAU: Traite les changements d'emails détectés par le polling intelligent
+   */
+  async processPollingEmailChange(emailUpdateData) {
+    try {
+      console.log(`🔄 [DATABASE] Traitement changement polling: ${emailUpdateData.subject}`);
+      
+      // Vérifier d'abord si l'email existe en base
+      const existingEmail = await this.getEmailByOutlookId(emailUpdateData.messageId);
+      
+      if (!existingEmail) {
+        console.log(`⚠️ [DATABASE] Email non trouvé en base: ${emailUpdateData.messageId} - ${emailUpdateData.subject}`);
+        // Si l'email n'existe pas, on pourrait le créer ici ou l'ignorer
+        return { updated: false, reason: 'Email non trouvé en base' };
+      }
+
+      // Préparer les données de mise à jour
+      const updateData = {};
+      
+      // Mise à jour du statut lu/non lu si c'est le changement détecté
+      if (emailUpdateData.changes && emailUpdateData.changes.includes('MarkedRead')) {
+        updateData.is_read = true;
+        console.log(`📖 [DATABASE] Marquage comme lu: ${emailUpdateData.subject}`);
+      } else if (emailUpdateData.changes && emailUpdateData.changes.includes('MarkedUnread')) {
+        updateData.is_read = false;
+        console.log(`📬 [DATABASE] Marquage comme non lu: ${emailUpdateData.subject}`);
+      } else if (emailUpdateData.isRead !== undefined) {
+        updateData.is_read = emailUpdateData.isRead;
+        console.log(`📝 [DATABASE] Mise à jour statut lecture: ${emailUpdateData.subject} -> ${emailUpdateData.isRead ? 'Lu' : 'Non lu'}`);
+      }
+
+      // Si aucune modification détectée, pas de mise à jour nécessaire
+      if (Object.keys(updateData).length === 0) {
+        console.log(`ℹ️ [DATABASE] Aucune modification à appliquer: ${emailUpdateData.subject}`);
+        return { updated: false, reason: 'Aucune modification détectée' };
+      }
+
+      // Effectuer la mise à jour
+      const changes = await this.updateEmailStatus(emailUpdateData.messageId, updateData);
+      
+      if (changes > 0) {
+        console.log(`✅ [DATABASE] Email mis à jour: ${emailUpdateData.subject} (${changes} changements)`);
+        return { 
+          updated: true, 
+          changes: changes,
+          emailData: { ...existingEmail, ...updateData }
+        };
+      } else {
+        console.log(`⚠️ [DATABASE] Aucun changement effectué: ${emailUpdateData.subject}`);
+        return { updated: false, reason: 'Aucun changement en base' };
+      }
+
+    } catch (error) {
+      console.error(`❌ [DATABASE] Erreur traitement changement polling:`, error);
+      throw error;
+    }
   }
 
   /**
@@ -1651,20 +1711,22 @@ class DatabaseService {
     return new Promise((resolve, reject) => {
       const sql = `
         INSERT INTO emails (
-          outlook_id, subject, sender_email, received_time, 
-          is_read, size, folder_path, folder_type, 
+          outlook_id, subject, sender_name, sender_email, recipient_email,
+          received_time, is_read, size_kb, folder_name, folder_type, 
           is_treated, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `;
       
       const values = [
         emailRecord.entry_id || emailRecord.outlook_id,
         emailRecord.subject,
-        emailRecord.sender || emailRecord.sender_email,
+        emailRecord.sender_name || emailRecord.sender,
+        emailRecord.sender_email || emailRecord.sender,
+        emailRecord.recipient_email || emailRecord.recipient || '',
         emailRecord.received_time,
         emailRecord.is_read ? 1 : 0,
         emailRecord.size,
-        emailRecord.folder_path,
+        emailRecord.folder_name || emailRecord.folder_path,
         emailRecord.folder_type,
         emailRecord.is_treated ? 1 : 0,
         emailRecord.created_at
@@ -1822,11 +1884,11 @@ class DatabaseService {
     
     const sql = `
       INSERT INTO emails (
-        outlook_id, subject, sender_name, sender_email, 
+        outlook_id, subject, sender_name, sender_email, recipient_email,
         received_time, folder_name, category, is_read, 
         has_attachment, body_preview, importance, event_type,
         created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
     `;
     
     const params = [
@@ -1834,6 +1896,7 @@ class DatabaseService {
       outlookEmail.Subject || 'Sans objet',
       outlookEmail.SenderName || 'Inconnu',
       outlookEmail.SenderEmailAddress || '',
+      outlookEmail.RecipientEmailAddress || '',
       outlookEmail.ReceivedTime ? new Date(outlookEmail.ReceivedTime).toISOString() : null,
       outlookEmail.Parent?.Name || 'Boîte de réception',
       category,
