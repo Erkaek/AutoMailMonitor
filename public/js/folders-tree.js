@@ -136,11 +136,11 @@ class FoldersTreeManager {
     
     if (this.folders.size === 0) {
       console.log('🎨 Aucun dossier à afficher - message vide');
-      this.container.innerHTML = `
+    this.container.innerHTML = `
         <div class="text-center text-muted py-4">
           <i class="bi bi-folder-x display-6 mb-3"></i>
           <p>Aucun dossier configuré</p>
-          <button class="btn btn-outline-primary btn-sm" onclick="foldersTree.showAddFolderModal()">
+      <button class="btn btn-outline-primary btn-sm" onclick="window.foldersTree && window.foldersTree.showAddFolderModal()">
             <i class="bi bi-plus me-1"></i>Ajouter un dossier
           </button>
         </div>
@@ -538,9 +538,9 @@ class FoldersTreeManager {
 }
 
 // Initialiser le gestionnaire de dossiers quand le DOM est prêt
-let foldersTree;
+// Expose l'instance sur window pour les handlers inline (ex: bouton "Ajouter un dossier" en état vide)
 document.addEventListener('DOMContentLoaded', () => {
-  foldersTree = new FoldersTreeManager();
+  window.foldersTree = new FoldersTreeManager();
 });
 
 // Export pour utilisation dans d'autres modules

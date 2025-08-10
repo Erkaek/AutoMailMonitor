@@ -699,11 +699,14 @@
             <!-- Gestion des dossiers monitorés -->
             <div class="col-lg-8">
               <div class="card border-0 shadow-sm card-modern">
-                <div class="card-header bg-gradient">
+                <div class="card-header bg-gradient d-flex justify-content-between align-items-center">
                   <h5 class="mb-0 fw-semibold d-flex align-items-center gap-2">
                     <i class="bi bi-folder2-open"></i>
                     Dossiers surveillés
                   </h5>
+                  <button class="btn btn-primary btn-sm" id="add-folder" type="button">
+                    <i class="bi bi-plus-lg me-1"></i> Ajouter un dossier
+                  </button>
                 </div>
                 <div class="card-body p-0 d-flex flex-column">
                   <!-- Barre de filtres moderne -->
@@ -744,7 +747,10 @@
                         <div class="spinner-border text-primary mb-3" role="status">
                           <span class="visually-hidden">Chargement...</span>
                         </div>
-                        <p class="text-muted mb-0">Chargement des dossiers...</p>
+                        <p class="text-muted mb-2">Chargement des dossiers...</p>
+                        <button class="btn btn-outline-primary btn-sm" type="button" onclick="window.foldersTree && window.foldersTree.showAddFolderModal()">
+                          <i class="bi bi-plus me-1"></i>Ajouter votre premier dossier
+                        </button>
                       </div>
                     </div>
                   </div>
