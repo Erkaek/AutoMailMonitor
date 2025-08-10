@@ -59,6 +59,15 @@ Paramètres clés (package.json):
 - publish: GitHub (owner: Erkaek, repo: AutoMailMonitor)
 - win.target: nsis
 
+### Signature Windows (certificat)
+
+- Par défaut sur CI, si aucun certificat n'est fourni, un certificat d'authenticode auto-signé est généré et utilisé pour signer l'installeur et l'exécutable.
+  - Cela évite les alertes "Éditeur inconnu" (binaire non signé), mais RESTE non approuvé par SmartScreen/Defender (avertissement possible à l'installation).
+  - Pour une confiance complète, fournissez un certificat d'éditeur émis par une AC :
+    - Secrets requis dans le repo: `CODE_SIGNING_CERT_BASE64` (PFX en base64) et `CODE_SIGNING_CERT_PASSWORD`.
+    - Le workflow CI utilise automatiquement ces secrets pour signer avec l'AC.
+  - Aucun changement de code n'est nécessaire; electron-builder consomme `CSC_LINK`/`CSC_KEY_PASSWORD` injectés par le workflow.
+
 ## 🔄 Mises à jour
 
 - Application packagée: auto-update via GitHub Releases.

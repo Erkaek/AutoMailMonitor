@@ -39,6 +39,33 @@ jobs:
             echo "No PRIVATE_UPDATER_TOKEN env provided; skipping token injection"
           fi
 
+      - name: Prepare Windows code signing certificate (optional)
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          if ($env:CODE_SIGNING_CERT_BASE64 -and $env:CODE_SIGNING_CERT_PASSWORD) {
+            Write-Host "Decoding code signing certificate..."
+            $pfxPath = "$env:RUNNER_TEMP\\codesign.pfx"
+            [IO.File]::WriteAllBytes($pfxPath, [Convert]::FromBase64String($env:CODE_SIGNING_CERT_BASE64))
+            echo "CSC_LINK=$pfxPath" | Out-File -FilePath $env:GITHUB_ENV -Append
+            echo "CSC_KEY_PASSWORD=$env:CODE_SIGNING_CERT_PASSWORD" | Out-File -FilePath $env:GITHUB_ENV -Append
+            echo "WIN_CSC_LINK=$pfxPath" | Out-File -FilePath $env:GITHUB_ENV -Append
+            echo "WIN_CSC_KEY_PASSWORD=$env:CODE_SIGNING_CERT_PASSWORD" | Out-File -FilePath $env:GITHUB_ENV -Append
+            Write-Host "Code signing variables exported"
+          } else {
+            Write-Host "No code signing secrets provided; generating a temporary self-signed code signing cert (NOT TRUSTED by SmartScreen)."
+            $cert = New-SelfSignedCertificate -Type CodeSigningCert -Subject "CN=Mail Monitor Dev (Self-Signed)" -CertStoreLocation "Cert:\CurrentUser\My" -NotAfter (Get-Date).AddYears(3)
+            $pfxPath = "$env:RUNNER_TEMP\\selfsigned_codesign.pfx"
+            $pwdPlain = [Guid]::NewGuid().ToString()
+            $pwd = ConvertTo-SecureString -String $pwdPlain -Force -AsPlainText
+            Export-PfxCertificate -Cert $cert -FilePath $pfxPath -Password $pwd | Out-Null
+            echo "CSC_LINK=$pfxPath" | Out-File -FilePath $env:GITHUB_ENV -Append
+            echo "CSC_KEY_PASSWORD=$pwdPlain" | Out-File -FilePath $env:GITHUB_ENV -Append
+            echo "WIN_CSC_LINK=$pfxPath" | Out-File -FilePath $env:GITHUB_ENV -Append
+            echo "WIN_CSC_KEY_PASSWORD=$pwdPlain" | Out-File -FilePath $env:GITHUB_ENV -Append
+            Write-Host "Self-signed cert generated and exported for build signing."
+          }
+
       - name: Check if version changed
         shell: bash
         id: check_version
