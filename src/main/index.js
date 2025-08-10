@@ -3,8 +3,11 @@
  * Corrected version avec protection contre multiples démarrages
  */
 
-const { app, BrowserWindow, Tray, Menu, ipcMain, nativeImage } = require('electron');
+const { app, BrowserWindow, Tray, Menu, ipcMain, nativeImage, dialog: electronDialog } = require('electron');
+const { autoUpdater } = require('electron-updater');
 const path = require('path');
+const fs = require('fs');
+const { exec } = require('child_process');
 // CORRECTION: Utiliser le connecteur optimisé 
 const outlookConnector = require('../server/outlookConnector');
 // OPTIMIZED: Utiliser le service de base de données optimisé
@@ -74,10 +77,128 @@ let tray = null;
 // Configuration de l'application
 const APP_CONFIG = {
   width: 1200,
-  height: 800,
-  minWidth: 800,
-  minHeight: 600
+  height: 800
 };
+
+// Auto-update configuration
+autoUpdater.autoDownload = true;
+autoUpdater.autoInstallOnAppQuit = true;
+
+function setupAutoUpdater() {
+  autoUpdater.on('error', (err) => {
+    logClean('⚠️ Mise à jour: erreur: ' + (err?.message || String(err)));
+  });
+  autoUpdater.on('update-available', (info) => {
+    logClean('🔔 Mise à jour disponible: v' + info?.version);
+  });
+  autoUpdater.on('update-not-available', () => {
+    logClean('ℹ️ Aucune mise à jour disponible');
+  });
+  autoUpdater.on('download-progress', (p) => {
+    logClean(`⬇️ Téléchargement mise à jour: ${Math.floor(p.percent)}%`);
+  });
+  autoUpdater.on('update-downloaded', async (info) => {
+    try {
+      const result = await electronDialog.showMessageBox({
+        type: 'info',
+        title: 'Mise à jour prête',
+        message: `La version ${info.version} a été téléchargée. Redémarrer pour l’installer ?`,
+        buttons: ['Redémarrer maintenant', 'Plus tard'],
+        cancelId: 1,
+        defaultId: 0
+      });
+      if (result.response === 0) {
+        autoUpdater.quitAndInstall();
+      }
+    } catch {}
+  });
+}
+
+// IPC: fournir la version de l'application au renderer (source unique: package.json via app.getVersion())
+ipcMain.handle('app-get-version', async () => {
+  try {
+    return app.getVersion();
+  } catch {
+    return null;
+  }
+});
+
+// --- Vérification Git en mode développement (source clonée) ---
+function isDevEnvironment() {
+  // Packagé => pas de .git, on évite les appels Git
+  return !app.isPackaged;
+}
+
+function runGit(cmd, cwd) {
+  return new Promise((resolve) => {
+    exec(cmd, { cwd, windowsHide: true }, (error, stdout, stderr) => {
+      resolve({ error, stdout: (stdout || '').trim(), stderr: (stderr || '').trim() });
+    });
+  });
+}
+
+async function checkDevGitUpdatesOnStartup() {
+  try {
+    if (!isDevEnvironment()) return; // seulement en dev
+    const repoRoot = path.join(__dirname, '../../');
+    const gitDir = path.join(repoRoot, '.git');
+    if (!fs.existsSync(gitDir)) return;
+
+    // Récupère la branche courante
+    const headRes = await runGit('git rev-parse --abbrev-ref HEAD', repoRoot);
+    if (headRes.error || !headRes.stdout) return;
+    const branch = headRes.stdout;
+
+    // Fetch silencieux
+    await runGit('git fetch --all --prune --quiet', repoRoot);
+
+    // Compare HEAD avec remote
+    const aheadRes = await runGit(`git rev-list --count HEAD..origin/${branch}`, repoRoot);
+    if (aheadRes.error) return;
+    const ahead = parseInt(aheadRes.stdout || '0', 10) || 0;
+    if (ahead <= 0) return; // rien à mettre à jour
+
+    const result = await electronDialog.showMessageBox({
+      type: 'question',
+      title: 'Mise à jour du code disponible',
+      message: `Des changements distants ont été détectés sur la branche ${branch}. Voulez-vous récupérer les dernières modifications ?`,
+      buttons: ['Mettre à jour maintenant', 'Plus tard'],
+      cancelId: 1,
+      defaultId: 0,
+      noLink: true
+    });
+
+    if (result.response !== 0) return;
+
+    // Tente un pull sécurisé
+    const pullRes = await runGit('git pull --rebase --autostash', repoRoot);
+    if (pullRes.error) {
+      await electronDialog.showMessageBox({
+        type: 'error',
+        title: 'Échec de la mise à jour',
+        message: 'Le pull Git a échoué. Consultez la console pour les détails.',
+        detail: (pullRes.stderr || pullRes.stdout || '').slice(0, 4000),
+        buttons: ['OK']
+      });
+      return;
+    }
+
+    const restart = await electronDialog.showMessageBox({
+      type: 'info',
+      title: 'Mise à jour appliquée',
+      message: 'Le code a été mis à jour depuis le dépôt. Redémarrer l’application pour prendre en compte les changements ?',
+      buttons: ['Redémarrer maintenant', 'Plus tard'],
+      cancelId: 1,
+      defaultId: 0
+    });
+    if (restart.response === 0) {
+      app.relaunch();
+      app.exit(0);
+    }
+  } catch (e) {
+    logClean('⚠️ Verification Git dev: erreur ' + (e?.message || String(e)));
+  }
+}
 
   // Gestion des erreurs non capturees
 process.on('uncaughtException', (error) => {
@@ -100,7 +221,7 @@ function createLoadingWindow() {
     resizable: true, // Permettre le redimensionnement
     center: true,
     show: false,
-    transparent: true, // Fenêtre transparente
+  transparent: true, // fenêtre sans cadre, fond transparent (custom UI)
   icon: path.join(__dirname, '../../resources', 'new logo', 'logo.ico'),
     title: 'Mail Monitor - Initialisation',
     webPreferences: {
@@ -118,6 +239,15 @@ function createLoadingWindow() {
     initializeOutlook();
   });
 
+
+app.on('ready', () => {
+  setupAutoUpdater();
+  // Vérifie à froid puis toutes les 30 minutes
+  setTimeout(() => autoUpdater.checkForUpdatesAndNotify().catch(() => {}), 5000);
+  setInterval(() => autoUpdater.checkForUpdatesAndNotify().catch(() => {}), 30 * 60 * 1000);
+  // En mode dev: vérifie s'il y a des commits distants et propose un pull
+  setTimeout(() => { checkDevGitUpdatesOnStartup(); }, 3000);
+});
   loadingWindow.on('closed', () => {
     loadingWindow = null;
   });
@@ -215,24 +345,74 @@ function createWindow() {
   mainWindow = new BrowserWindow({
     width: APP_CONFIG.width,
     height: APP_CONFIG.height,
-    minWidth: APP_CONFIG.minWidth,
-    minHeight: APP_CONFIG.minHeight,
   icon: path.join(__dirname, '../../resources', 'new logo', 'logo.ico'),
     title: 'Mail Monitor - Surveillance Outlook',
   show: false,
-  frame: false, // Supprime la barre d'outils/du titre native Windows
-  titleBarStyle: 'hidden', // Barre de titre cachée (on utilise la barre personnalisée)
-  autoHideMenuBar: true,
+  frame: true, // Réactive la barre d'outils/titre native Windows
+  titleBarStyle: 'default',
+  autoHideMenuBar: false,
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
       enableRemoteModule: false,
+      devTools: true,
       preload: path.join(__dirname, 'preload.js')
     }
   });
 
-  // Supprimer tout menu d'application pour une UI sans barre de menu
-  try { Menu.setApplicationMenu(null); } catch (_) {}
+  // Menu application avec outils de debug
+  try {
+    const isMac = process.platform === 'darwin';
+    const template = [
+      // macOS app menu
+      ...(isMac ? [{
+        label: app.name,
+        submenu: [
+          { role: 'about' },
+          { type: 'separator' },
+          { role: 'services' },
+          { type: 'separator' },
+          { role: 'hide' },
+          { role: 'hideOthers' },
+          { role: 'unhide' },
+          { type: 'separator' },
+          { role: 'quit' }
+        ]
+      }] : []),
+      {
+        label: 'Fichier',
+        submenu: [
+          ...(isMac ? [] : [{ role: 'quit', label: 'Quitter' }])
+        ]
+      },
+      {
+        label: 'Affichage',
+        submenu: [
+          { role: 'reload', label: 'Recharger' },
+          { role: 'forceReload', label: 'Forcer le rechargement' },
+          { type: 'separator' },
+          { role: 'toggleDevTools', label: 'Outils de développement', accelerator: 'F12' },
+          { type: 'separator' },
+          { role: 'resetZoom', label: 'Zoom 100%' },
+          { role: 'zoomIn', label: 'Zoom +' },
+          { role: 'zoomOut', label: 'Zoom -' },
+          { type: 'separator' },
+          { role: 'togglefullscreen', label: 'Plein écran' }
+        ]
+      },
+      {
+        label: 'Fenêtre',
+        submenu: [
+          { role: 'minimize', label: 'Réduire' },
+          { role: 'close', label: 'Fermer la fenêtre' }
+        ]
+      }
+    ];
+    const menu = Menu.buildFromTemplate(template);
+    Menu.setApplicationMenu(menu);
+  } catch (e) {
+    console.warn('Menu non défini:', e?.message);
+  }
 
   mainWindow.loadFile(path.join(__dirname, '../../public/index.html'));
 
@@ -251,6 +431,18 @@ function createWindow() {
       mainWindow.hide();
     }
   });
+
+  // Clic droit -> Inspecter l'élément
+  try {
+    mainWindow.webContents.on('context-menu', (_event, params) => {
+      Menu.buildFromTemplate([
+        { label: 'Inspecter l\'élément', click: () => mainWindow.webContents.inspectElement(params.x, params.y) },
+        { type: 'separator' },
+        { role: 'copy', label: 'Copier' },
+        { role: 'paste', label: 'Coller' }
+      ]).popup();
+    });
+  } catch {}
 
   return mainWindow;
 }
@@ -595,7 +787,7 @@ ipcMain.on('resize-loading-window', (event, { width, height }) => {
 
     // Réduire le bruit de logs: ne pas logger chaque redimensionnement
     loadingWindow.setSize(finalWidth, finalHeight);
-    loadingWindow.center(); // Recentrer après redimensionnement
+  // Ne pas recentrer la fenêtre pour préserver la position définie par l'utilisateur
   }
 });
 
@@ -604,21 +796,21 @@ ipcMain.handle('api-settings-folders-load', async () => {
   try {
     console.log('📁 Chargement de la configuration des dossiers depuis la BDD...');
     
-    const databaseService = require('../services/optimizedDatabaseService');
-    await databaseService.initialize();
+  const databaseService = require('../services/optimizedDatabaseService');
+  await databaseService.initialize();
     
     // CORRECTION: Invalider le cache pour forcer un rechargement des données récentes
     databaseService.cache.del('folders_config');
     
     // Récupérer la configuration depuis la base de données uniquement
-    const foldersConfig = databaseService.getFoldersConfiguration();
+  const foldersConfig = databaseService.getFoldersConfiguration();
     
     // Convertir le format tableau en format objet pour l'interface
     const folderCategories = {};
     if (Array.isArray(foldersConfig)) {
       foldersConfig.forEach(folder => {
         // CORRECTION: Utiliser les vrais noms des propriétés de la BDD
-        folderCategories[folder.folder_name] = {
+        folderCategories[folder.folder_path] = {
           category: folder.category,
           name: folder.folder_name
         };
@@ -648,11 +840,8 @@ ipcMain.handle('api-settings-folders', async (event, data) => {
   try {
     console.log('💾 Sauvegarde de la configuration des dossiers en BDD uniquement...');
     
-    // Ancien require supprimé, utiliser global.databaseService
-    await global.databaseService.initialize();
-    
-    // Sauvegarder UNIQUEMENT dans la base de données (pas de JSON)
-    await global.databaseService.saveFoldersConfiguration(data);
+  // Sauvegarder UNIQUEMENT dans la base de données (pas de JSON)
+  const res = await global.databaseService.saveFoldersConfiguration(data);
     console.log('✅ Configuration dossiers sauvegardée exclusivement en base de données');
     
     // Redémarrer automatiquement le monitoring si des dossiers sont configurés
@@ -660,21 +849,22 @@ ipcMain.handle('api-settings-folders', async (event, data) => {
                    (typeof data === 'object' && Object.keys(data).length > 0);
                    
     if (global.unifiedMonitoringService && hasData) {
-      console.log('🔄 Redémarrage automatique du service unifié avec sync PowerShell...');
-      try {
-        // Arrêter d'abord le monitoring existant
-        if (global.unifiedMonitoringService.isMonitoring) {
-          await global.unifiedMonitoringService.stopMonitoring();
+      console.log('🔄 Programmation du redémarrage du service unifié en arrière-plan...');
+      // Redémarrer en arrière-plan pour ne pas bloquer la réponse IPC
+      setTimeout(async () => {
+        try {
+          if (global.unifiedMonitoringService.isMonitoring) {
+            await global.unifiedMonitoringService.stopMonitoring();
+          }
+          await global.unifiedMonitoringService.initialize();
+          console.log('✅ Service unifié redémarré (arrière-plan)');
+        } catch (error) {
+          console.error('❌ Erreur redémarrage service unifié (arrière-plan):', error);
         }
-        // Réinitialiser le service (déclenchera la sync PowerShell automatiquement)
-        await global.unifiedMonitoringService.initialize();
-        console.log('✅ Service unifié redémarré automatiquement avec sync PowerShell');
-      } catch (error) {
-        console.error('❌ Erreur redémarrage service unifié:', error);
-      }
+      }, 0);
     }
     
-    return { success: true };
+  return { success: true, result: res };
   } catch (error) {
     console.error('❌ Erreur sauvegarde configuration dossiers:', error);
     return { success: false, error: error.message };
@@ -737,6 +927,19 @@ ipcMain.handle('api-folders-tree', async () => {
   }
 });
 
+// Statistiques par dossier depuis la base de données (inclut unreadCount)
+ipcMain.handle('api-database-folder-stats', async () => {
+  try {
+    const databaseService = require('../services/optimizedDatabaseService');
+    await databaseService.initialize();
+    const stats = databaseService.getFolderStats();
+    return { success: true, stats };
+  } catch (error) {
+    console.error('❌ [IPC] Erreur api-database-folder-stats:', error);
+    return { success: false, error: error.message, stats: [] };
+  }
+});
+
 // Ajouter un dossier au monitoring
 ipcMain.handle('api-folders-add', async (event, { folderPath, category }) => {
   try {
@@ -746,39 +949,91 @@ ipcMain.handle('api-folders-add', async (event, { folderPath, category }) => {
 
     await databaseService.initialize();
 
-    // Vérifier que le dossier existe dans Outlook
-    const folderExists = await outlookConnector.folderExists(folderPath);
-    if (!folderExists) {
-      throw new Error('Dossier non trouvé dans Outlook');
+    // Tenter de récupérer l'arborescence complète et d'ajouter tous les enfants
+    const toInsert = [];
+    try {
+      // Récupérer toute la structure pour tous les stores afin de localiser le chemin
+      const mailboxes = await outlookConnector.getFolderStructure?.('');
+
+      // Recherche récursive d'un nœud par FolderPath
+      const findNode = (folders, targetPath) => {
+        if (!Array.isArray(folders)) return null;
+        for (const f of folders) {
+          if (f.FolderPath === targetPath) return f;
+          const sub = findNode(f.SubFolders, targetPath);
+          if (sub) return sub;
+        }
+        return null;
+      };
+      // Aplatir un nœud et tous ses enfants en { path, name }
+      const flatten = (node, acc = []) => {
+        if (!node) return acc;
+        acc.push({ path: node.FolderPath, name: node.Name });
+        if (Array.isArray(node.SubFolders)) {
+          for (const sf of node.SubFolders) flatten(sf, acc);
+        }
+        return acc;
+      };
+
+      let node = null;
+      if (Array.isArray(mailboxes)) {
+        for (const mb of mailboxes) {
+          if (mb && Array.isArray(mb.SubFolders)) {
+            const found = findNode(mb.SubFolders, folderPath);
+            if (found) { node = found; break; }
+          }
+        }
+      }
+
+      if (node) {
+        const all = flatten(node, []);
+        toInsert.push(...all);
+      } else {
+        // Fallback: insérer seulement le dossier demandé
+        toInsert.push({ path: folderPath, name: extractFolderName(folderPath) });
+      }
+    } catch (e) {
+      console.warn('⚠️ Impossible de récupérer la structure complète, insertion simple:', e?.message || e);
+      toInsert.push({ path: folderPath, name: extractFolderName(folderPath) });
     }
 
-    // Ajouter directement à la base de données optimisée
-    const folderName = extractFolderName(folderPath);
-    await databaseService.addFolderConfiguration(folderPath, category, folderName);
+    // Insérer tous les dossiers (OR REPLACE évite les doublons)
+    let inserted = 0;
+    for (const item of toInsert) {
+      try {
+        await databaseService.addFolderConfiguration(item.path, category, item.name);
+        inserted++;
+      } catch (e) {
+        console.error('❌ Erreur insertion dossier enfant:', item.path, e.message || e);
+      }
+    }
     
     // OPTIMIZED: Invalidation intelligente du cache
     cacheService.invalidateFoldersConfig();
     
-    console.log(`✅ Dossier ${folderPath} ajouté au monitoring en BDD`);
+    console.log(`✅ ${inserted} dossier(s) ajouté(s) au monitoring (incl. sous-dossiers)`);
 
-    // Redémarrer le monitoring pour prendre en compte le nouveau dossier
+    // Redémarrer le monitoring en arrière-plan pour prendre en compte le nouveau dossier
     if (global.unifiedMonitoringService) {
-      try {
-        if (global.unifiedMonitoringService.isMonitoring) {
-          await global.unifiedMonitoringService.stopMonitoring();
+      setTimeout(async () => {
+        try {
+          if (global.unifiedMonitoringService.isMonitoring) {
+            await global.unifiedMonitoringService.stopMonitoring();
+          }
+          await global.unifiedMonitoringService.initialize();
+          console.log('🔄 Service unifié redémarré pour le nouveau dossier (arrière-plan)');
+        } catch (error) {
+          console.error('⚠️ Erreur redémarrage monitoring (arrière-plan):', error);
         }
-        await global.unifiedMonitoringService.initialize();
-        console.log('🔄 Service unifié redémarré pour le nouveau dossier');
-      } catch (error) {
-        console.error('⚠️ Erreur redémarrage monitoring:', error);
-      }
+      }, 0);
     }
 
     return {
       success: true,
-      message: 'Dossier ajouté au monitoring',
+      message: `Dossier ajouté (avec sous-dossiers): ${inserted} élément(s)`,
       folderPath: folderPath,
-      category: category
+      category: category,
+      count: inserted
     };
 
   } catch (error) {
@@ -806,17 +1061,19 @@ ipcMain.handle('api-folders-update-category', async (event, { folderPath, catego
 
     console.log(`✅ Catégorie de ${folderPath} mise à jour: ${category}`);
 
-    // Redémarrer le monitoring pour prendre en compte le changement
+    // Redémarrer le monitoring en arrière-plan pour prendre en compte le changement
     if (global.unifiedMonitoringService) {
-      try {
-        if (global.unifiedMonitoringService.isMonitoring) {
-          await global.unifiedMonitoringService.stopMonitoring();
+      setTimeout(async () => {
+        try {
+          if (global.unifiedMonitoringService.isMonitoring) {
+            await global.unifiedMonitoringService.stopMonitoring();
+          }
+          await global.unifiedMonitoringService.initialize();
+          console.log('🔄 Service unifié redémarré pour changement de catégorie (arrière-plan)');
+        } catch (error) {
+          console.error('⚠️ Erreur redémarrage monitoring (arrière-plan):', error);
         }
-        await global.unifiedMonitoringService.initialize();
-        console.log('🔄 Service unifié redémarré pour changement de catégorie');
-      } catch (error) {
-        console.error('⚠️ Erreur redémarrage monitoring:', error);
-      }
+      }, 0);
     }
 
     return {
@@ -1741,6 +1998,57 @@ ipcMain.handle('api-weekly-adjust-count', async (event, { weekIdentifier, folder
   }
 });
 
+// ======================== WEEKLY COMMENTS IPC ========================
+ipcMain.handle('api-weekly-comments-add', async (event, payload) => {
+  try {
+    await databaseService.initialize();
+    const res = databaseService.addWeeklyComment(payload || {});
+    return res;
+  } catch (e) {
+    return { success: false, error: e.message };
+  }
+});
+
+ipcMain.handle('api-weekly-comments-list', async (event, { week_identifier }) => {
+  try {
+    await databaseService.initialize();
+    const res = databaseService.getWeeklyComments(week_identifier);
+    return res;
+  } catch (e) {
+    return { success: false, rows: [], error: e.message };
+  }
+});
+
+ipcMain.handle('api-weekly-comments-update', async (event, { id, comment_text, category }) => {
+  try {
+    await databaseService.initialize();
+    const res = databaseService.updateWeeklyComment(id, comment_text, category);
+    return res;
+  } catch (e) {
+    return { success: false, error: e.message };
+  }
+});
+
+ipcMain.handle('api-weekly-comments-delete', async (event, { id }) => {
+  try {
+    await databaseService.initialize();
+    const res = databaseService.deleteWeeklyComment(id);
+    return res;
+  } catch (e) {
+    return { success: false, error: e.message };
+  }
+});
+
+ipcMain.handle('api-weekly-weeks-list', async (event, { limit = 52 } = {}) => {
+  try {
+    await databaseService.initialize();
+    const res = databaseService.listDistinctWeeks(limit);
+    return res;
+  } catch (e) {
+    return { success: false, rows: [], error: e.message };
+  }
+});
+
 // API pour sauvegarder un mapping de dossier personnalisé
 ipcMain.handle('api-folder-mapping-save', async (event, { originalPath, mappedCategory, displayName }) => {
   try {
@@ -1786,22 +2094,30 @@ ipcMain.handle('api-settings-count-read-as-treated', async (event, { value } = {
     if (global.unifiedMonitoringService && global.unifiedMonitoringService.dbService) {
       
       if (value !== undefined) {
-        // Sauvegarder le paramètre
-        const success = global.unifiedMonitoringService.dbService.setAppSetting('count_read_as_treated', value.toString());
-        console.log(`⚙️ [IPC] Paramètre "mail lu = traité" défini: ${value}`);
+        // Normaliser en booléen puis sauvegarder le paramètre
+        const boolVal = (typeof value === 'string') ? (value.toLowerCase() === 'true') : !!value;
+        const success = global.unifiedMonitoringService.dbService.saveAppSetting
+          ? !!global.unifiedMonitoringService.dbService.saveAppSetting('count_read_as_treated', boolVal)
+          : global.unifiedMonitoringService.dbService.setAppSetting('count_read_as_treated', boolVal);
+        console.log(`⚙️ [IPC] Paramètre "mail lu = traité" défini: ${boolVal}`);
         
         return {
           success: success,
-          value: value,
+          value: boolVal,
           message: success ? 'Paramètre sauvegardé' : 'Échec de la sauvegarde'
         };
       } else {
         // Récupérer le paramètre
-        const currentValue = global.unifiedMonitoringService.dbService.getAppSetting('count_read_as_treated', 'false');
+        const currentValueRaw = global.unifiedMonitoringService.dbService.getAppSetting('count_read_as_treated', 'false');
+        const currentBool = (typeof currentValueRaw === 'boolean')
+          ? currentValueRaw
+          : (typeof currentValueRaw === 'string')
+            ? (currentValueRaw.toLowerCase() === 'true')
+            : !!currentValueRaw;
         
         return {
           success: true,
-          value: currentValue === 'true'
+          value: currentBool
         };
       }
     }
@@ -1948,15 +2264,8 @@ ipcMain.handle('window-minimize', async () => {
 ipcMain.handle('api-outlook-mailboxes', async () => {
   console.log('🔹 Demande de récupération des boîtes mail');
   try {
-    if (!outlookConnector || !outlookConnector.isOutlookConnected) {
-      return { 
-        success: false, 
-        error: 'Outlook non connecté',
-        mailboxes: [] 
-      };
-    }
-    
-    const mailboxes = await outlookConnector.getMailboxes();
+  // Tenter de récupérer les boîtes même si non marqué "connecté" (le connecteur gère ensureConnected)
+  const mailboxes = await outlookConnector.getMailboxes?.();
     console.log('📊 DEBUG - Boîtes mail récupérées:', JSON.stringify(mailboxes, null, 2));
     return { 
       success: true, 
@@ -1976,15 +2285,8 @@ ipcMain.handle('api-outlook-mailboxes', async () => {
 ipcMain.handle('api-outlook-folder-structure', async (event, storeId) => {
   console.log(`🔹 Demande de structure des dossiers pour store: ${storeId}`);
   try {
-    if (!outlookConnector || !outlookConnector.isOutlookConnected) {
-      return { 
-        success: false, 
-        error: 'Outlook non connecté',
-        folders: [] 
-      };
-    }
-    
-    const folders = await outlookConnector.getFolderStructure(storeId);
+  // Ne pas bloquer sur l'état "connecté"; le connecteur tentera une connexion légère si besoin
+  const folders = await outlookConnector.getFolderStructure?.(storeId);
     console.log('📊 DEBUG - Structure des dossiers récupérée:', JSON.stringify(folders, null, 2));
     return { 
       success: true, 

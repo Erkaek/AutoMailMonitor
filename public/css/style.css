@@ -29,6 +29,20 @@
   --shadow: 0 0.5rem 1rem rgba(0, 0, 0, 0.15);
   --shadow-lg: 0 1rem 3rem rgba(0, 0, 0, 0.175);
   --transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  /* Electron titlebar height */
+  --titlebar-height: 40px;
+.folder-card .btn-outline-primary {
+  border-color: var(--bs-primary);
+}
+.folder-card .btn-outline-danger {
+  border-color: var(--bs-danger);
+  color: var(--bs-danger);
+}
+.folder-card .btn-outline-danger:focus,
+.folder-card .btn-outline-danger:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 0.2rem rgba(220, 53, 69, 0.25);
+}
 }
 
 /* Reset et base */
@@ -46,6 +60,237 @@ body {
   padding: 0;
   overflow-x: hidden;
 }
+
+/* App frame: custom titlebar + sidebar + main content */
+html, body { height: 100%; overflow: hidden; }
+
+/* Désactivée si barre native Electron active */
+.custom-titlebar { display: none; }
+
+.titlebar-title { display: flex; align-items: center; gap: 8px; }
+.titlebar-controls { display: flex; gap: 5px; -webkit-app-region: no-drag; }
+.titlebar-btn { width: 30px; height: 30px; border: none; background: transparent; color: white; border-radius: 4px; display: flex; align-items: center; justify-content: center; font-size: 12px; transition: background-color 0.2s; cursor: pointer; }
+.titlebar-btn:hover { background: rgba(255, 255, 255, 0.1); }
+.titlebar-btn.close:hover { background: #dc3545; }
+.titlebar-btn.minimize:hover { background: rgba(255, 255, 255, 0.15); }
+
+.sidebar {
+  width: var(--sidebar-width);
+  min-height: 100vh;
+  background: linear-gradient(180deg, var(--primary) 0%, rgba(13, 110, 253, 0.8) 100%);
+  margin-top: 0;
+  max-width: var(--sidebar-width);
+  overflow: hidden;
+}
+
+.main-content {
+  margin-left: var(--sidebar-width);
+  margin-top: 0;
+  height: 100vh;
+  /* Use percentage-based width to avoid 100vw scrollbar overflow issues */
+  width: calc(100% - var(--sidebar-width));
+  max-width: 100%;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.sidebar .nav-link.active { background-color: rgba(255, 255, 255, 0.2) !important; border-radius: 0.375rem; }
+
+@media (max-width: 768px) {
+  .sidebar { width: 100%; position: relative; }
+  .main-content { margin-left: 0; width: 100%; }
+}
+
+/* Compact layout and internal scroll panes */
+.container-fluid { padding-left: 0 !important; padding-right: 0 !important; }
+.row { --bs-gutter-x: .5rem; --bs-gutter-y: .5rem; }
+/* Make the main container a flex column so the header takes natural height and tabs fill the rest */
+.main-content > .container-fluid { flex: 1 1 auto; display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
+.tab-content { flex: 1 1 auto; min-height: 0; overflow: hidden; display: flex; flex-direction: column; }
+/* Respect Bootstrap tab visibility: hide inactive panes, show active as flex column */
+.tab-pane { flex: 1 1 auto; min-height: 0; overflow: hidden; }
+.tab-pane:not(.active) { display: none !important; }
+.tab-pane.active { display: flex; flex-direction: column; overflow-y: hidden; }
+.pane-scroll { flex: 1 1 auto; min-height: 0; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable both-edges; padding-bottom: 0.75rem; }
+.main-content .row.mb-4 { margin-bottom: 0.5rem !important; }
+.main-content .row.mb-4 h2 { font-size: 1.1rem; }
+.main-content .row.mb-4 p { margin-bottom: 0; }
+footer { padding-left: .75rem; padding-right: .75rem; background: transparent; }
+
+/* Overflow safeguards */
+body, .main-content, .tab-content, .tab-pane, .pane-scroll { max-width: 100%; overflow-x: hidden; }
+img, svg, canvas, video { max-width: 100%; height: auto; }
+.table-responsive { overflow-x: auto; overflow-y: hidden; }
+.row > [class^="col"], .row > [class*=" col"], .d-flex > * { min-width: 0; }
+.folder-path, #folders-tree, #emails-table td, #weekly-history-table td { word-break: break-word; overflow-wrap: anywhere; }
+
+/* Global scrollbar defaults (fallback) */
+*::-webkit-scrollbar { width: 12px; height: 12px; }
+*::-webkit-scrollbar-corner { background: transparent; }
+* { scrollbar-width: thin; scrollbar-color: rgba(13,110,253,.5) #eff2f6; }
+
+/* 2025 modern scrollbars for main panes (brand-aligned) */
+.tab-pane::-webkit-scrollbar, .pane-scroll::-webkit-scrollbar { width: 12px; height: 12px; }
+.tab-pane::-webkit-scrollbar-track, .pane-scroll::-webkit-scrollbar-track {
+  background: #eff2f6;
+  border-radius: 999px;
+  box-shadow: inset 0 0 0 1px rgba(0,0,0,0.02);
+}
+.tab-pane::-webkit-scrollbar-thumb, .pane-scroll::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, #4da3ff, #6dd6ff);
+  border-radius: 999px;
+  border: 3px solid #eff2f6;
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,0.35), 0 1px 2px rgba(13,110,253,0.2);
+}
+.tab-pane::-webkit-scrollbar-thumb:hover, .pane-scroll::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(180deg, #3b8cf0, #5fc7ff);
+}
+.tab-pane::-webkit-scrollbar-thumb:active, .pane-scroll::-webkit-scrollbar-thumb:active {
+  background: linear-gradient(180deg, #2f79e0, #4fb9fb);
+}
+.tab-pane, .pane-scroll { scrollbar-width: thin; scrollbar-color: rgba(77,163,255,.75) #eff2f6; }
+
+/* Apply same look to key scroll areas */
+#monitoring #folders-tree::-webkit-scrollbar,
+.table-responsive::-webkit-scrollbar,
+.modal .modal-body::-webkit-scrollbar { width: 12px; height: 12px; }
+
+#monitoring #folders-tree::-webkit-scrollbar-track,
+.table-responsive::-webkit-scrollbar-track,
+.modal .modal-body::-webkit-scrollbar-track { background: #eff2f6; border-radius: 999px; }
+
+#monitoring #folders-tree::-webkit-scrollbar-thumb,
+.table-responsive::-webkit-scrollbar-thumb,
+.modal .modal-body::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, #4da3ff, #6dd6ff);
+  border-radius: 999px;
+  border: 3px solid #eff2f6;
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,0.35);
+}
+
+#monitoring #folders-tree,
+.table-responsive,
+.modal .modal-body { scrollbar-width: thin; scrollbar-color: rgba(77,163,255,.75) #eff2f6; }
+
+/* --- Pane fill rules to use the full viewport height --- */
+/* Emails: single scroll area is the pane-scroll */
+#emails .pane-scroll { display: flex; flex-direction: column; overflow-x: hidden; overflow-y: auto; }
+#emails .pane-scroll > .card { flex: 0 0 auto; display: flex; flex-direction: column; min-height: 0; }
+#emails .pane-scroll > .card > .card-body.p-0 { flex: 1 1 auto; display: flex; flex-direction: column; min-height: 0; }
+#emails .pane-scroll > .card > .card-body.p-0 > .table-responsive { flex: 1 1 auto; min-height: 0; overflow-y: visible; }
+
+/* Weekly: single scroll area is the pane-scroll */
+#weekly .pane-scroll { display: flex; flex-direction: column; overflow-x: hidden; overflow-y: auto; }
+#weekly .pane-scroll > .tab-content { flex: 1 1 auto; display: flex; flex-direction: column; min-height: 0; }
+#weekly .pane-scroll > .tab-content > .tab-pane { flex: 1 1 auto; min-height: 0; }
+#weekly .pane-scroll > .tab-content > .tab-pane.active { display: flex; flex-direction: column; }
+#weekly #weekly-sub-history .card { flex: 1 1 auto; display: flex; flex-direction: column; min-height: 0; }
+#weekly #weekly-sub-history .card .card-body { flex: 1 1 auto; display: flex; flex-direction: column; min-height: 0; }
+#weekly #weekly-sub-history .card .card-body .table-responsive { flex: 1 1 auto; min-height: 0; overflow-y: visible; }
+
+/* Personal performance: allow long tables/sections to scroll while header KPIs stay visible */
+#personal-performance .pane-scroll { display: flex; flex-direction: column; }
+#personal-performance .pane-scroll > .row.g-4:last-of-type { flex: 1 1 auto; min-height: 0; }
+#personal-performance .pane-scroll > .row.g-4:last-of-type .card { height: 100%; display: flex; flex-direction: column; }
+#personal-performance .pane-scroll > .row.g-4:last-of-type .card .card-body { flex: 1 1 auto; min-height: 0; overflow-y: visible; }
+
+/* Settings: stretch the settings card and scroll inside its body */
+#settings .pane-scroll { display: flex; flex-direction: column; }
+#settings .pane-scroll > .card { flex: 1 1 auto; display: flex; flex-direction: column; min-height: 0; }
+#settings .pane-scroll > .card > .card-body { flex: 1 1 auto; min-height: 0; overflow-y: visible; }
+
+/* Import activity: stretch card and let the inner body scroll if content is long */
+#import-activity .pane-scroll { display: flex; flex-direction: column; }
+#import-activity .pane-scroll > .row.g-4 { flex: 1 1 auto; min-height: 0; }
+#import-activity .pane-scroll > .row.g-4 > .col-12 > .card { height: 100%; display: flex; flex-direction: column; }
+#import-activity .pane-scroll > .row.g-4 > .col-12 > .card > .card-body { flex: 1 1 auto; min-height: 0; overflow-y: visible; }
+
+/* Dashboard: single scroll area is the pane-scroll */
+#dashboard .pane-scroll { display: flex; flex-direction: column; overflow-x: hidden; overflow-y: auto; padding-bottom: 1rem; }
+/* 1ère rangée = métriques (auto); 2ème rangée = Répartition (flex:1); 3ème rangée = Analyse (auto) */
+#dashboard .pane-scroll > .row.g-4.mb-4:nth-of-type(2) { flex: 0 0 auto; min-height: 0; }
+#dashboard .pane-scroll > .row.g-4.mb-4:nth-of-type(2) > .col-12 > .card { height: auto; display: block; }
+#dashboard .pane-scroll > .row.g-4.mb-4:nth-of-type(2) > .col-12 > .card > .card-body { flex: initial; min-height: 0; overflow-y: visible; }
+
+/* Counter animation */
+.counter-animate { transition: all 0.3s ease-in-out; position: relative; }
+.counter-animate.updating { animation: counterUpdate 0.5s ease-in-out; }
+@keyframes counterUpdate { 0% { transform: scale(1); } 50% { transform: scale(1.05); color: var(--primary); } 100% { transform: scale(1); } }
+
+/* Dashboard folder repartition cards */
+#folders-stats-grid .folder-stat-card { background: linear-gradient(135deg, #f8f9fa 0%, #ffffff 100%); border-radius: 12px; border: 1px solid #e9ecef; transition: all 0.3s ease; position: relative; overflow: hidden; }
+#folders-stats-grid .folder-stat-card:hover { transform: translateY(-2px); box-shadow: 0 4px 15px rgba(0,0,0,0.1); }
+#folders-stats-grid .folder-stat-card::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 3px; background: var(--primary); opacity: 0; transition: opacity 0.3s ease; }
+#folders-stats-grid .folder-stat-card:hover::before { opacity: 1; }
+
+/* Modern chips */
+.chip { display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px; border-radius: 999px; font-size: 12px; font-weight: 600; background: #f1f3f5; color: #495057; }
+.chip i { font-size: 14px; }
+.chip-success { background: #e6f4ea; color: #0f5132; }
+.chip-info { background: #e7f1ff; color: #084298; }
+
+/* Card modern */
+.card-modern { border: 1px solid #e9ecef; border-radius: 14px; box-shadow: 0 6px 20px rgba(0,0,0,0.06); overflow: hidden; }
+
+/* Monitoring: layout constraints and dense list */
+#monitoring .pane-scroll { display: flex; flex-direction: column; }
+#monitoring .row.g-4 { flex: 1 1 auto; min-height: 0; }
+#monitoring .col-lg-8 { display: flex; flex-direction: column; min-height: 0; }
+#monitoring .col-lg-8 .card-modern { flex: 1 1 auto; display: flex; flex-direction: column; min-height: 0; }
+#monitoring .col-lg-8 .card-modern .card-body { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; overflow-y: visible; overflow-x: hidden; }
+#monitoring .sticky-filter { position: sticky; top: 0; z-index: 20; background: #f8f9fa; padding: .4rem .6rem !important; }
+#monitoring .sticky-filter .mt-2 { margin-top: .35rem !important; }
+#monitoring .sticky-filter .chip { padding: 3px 6px; font-size: 10px; gap: 4px; }
+#monitoring .sticky-filter .row { --bs-gutter-x: .5rem; --bs-gutter-y: .5rem; }
+#monitoring .sticky-filter small { display: none; }
+#monitoring .sticky-filter .mt-2.d-flex { flex-wrap: nowrap !important; overflow-x: auto; overflow-y: hidden; white-space: nowrap; gap: .35rem !important; }
+#monitoring .sticky-filter .form-control, #monitoring .sticky-filter .form-select { padding-top: .25rem; padding-bottom: .25rem; font-size: .9rem; }
+
+#monitoring #folders-tree { padding: .5rem !important; overflow-y: auto; overflow-x: hidden; flex: 1 1 auto; min-height: 0; }
+#monitoring #folders-tree .folders-tree { display: block; }
+#monitoring #folders-tree .folder-node { margin: 0; }
+#monitoring #folders-tree .folder-item { display: flex; align-items: center; gap: .5rem; padding: .25rem .4rem; border-radius: 8px; line-height: 1.2; cursor: pointer; }
+#monitoring #folders-tree .folder-item:hover { background: #f8f9fa; }
+#monitoring #folders-tree .folder-item.selected { background: #e7f1ff; }
+#monitoring #folders-tree .folder-icon { width: 18px; flex: 0 0 18px; display:flex; align-items:center; justify-content:center; color:#6c757d; }
+#monitoring #folders-tree .folder-icon .bi { font-size: .9rem; }
+#monitoring #folders-tree .folder-name { flex: 1 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: .9rem; }
+#monitoring #folders-tree .category-badge { font-size: 10px; padding: 2px 6px; border-radius: 999px; white-space: nowrap; }
+#monitoring #folders-tree .badge { padding: 2px 6px; font-size: 10px; }
+#monitoring #folders-tree .monitoring-indicator { width: 6px; height: 6px; border-radius: 50%; background: #0d6efd; margin-left: 2px; }
+#monitoring #folders-tree .monitoring-indicator.active { box-shadow: 0 0 0 2px rgba(13,110,253,.15); }
+#monitoring #folders-tree .folder-actions { margin-left: .25rem; display: flex; align-items: center; gap: .25rem; }
+#monitoring #folders-tree .folder-actions .btn { padding: 2px 6px; line-height: 1; border-radius: 6px; }
+#monitoring #folders-tree .folder-actions .btn .bi { font-size: .85rem; }
+#monitoring #folders-tree .folder-children { margin-left: 14px; padding-left: 8px; border-left: 1px dashed #e5e7eb; }
+#monitoring #folders-tree .folder-children.collapsed { display: none; }
+#monitoring #folders-tree > * { margin-bottom: .5rem; }
+#monitoring #folders-tree .card, #monitoring #folders-tree .folder-card { border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,.04); }
+#monitoring #folders-tree .card .card-header, #monitoring #folders-tree .folder-card .folder-header { padding: .4rem .6rem !important; }
+#monitoring #folders-tree .card .card-body, #monitoring #folders-tree .folder-card .p-3 { padding: .4rem .6rem !important; }
+#monitoring #folders-tree .card .card-footer { padding: .35rem .6rem !important; }
+#monitoring #folders-tree .bi { font-size: .95rem; }
+#monitoring #folders-tree h5, #monitoring #folders-tree h6 { font-size: .95rem; margin-bottom: .15rem; }
+#monitoring #folders-tree .folder-path, #monitoring #folders-tree small { font-size: .8rem; line-height: 1.15; }
+#monitoring #folders-tree .row { --bs-gutter-x: .5rem; --bs-gutter-y: .2rem; }
+#monitoring #folders-tree .progress { height: 5px; }
+#monitoring #folders-tree p { margin-bottom: .25rem; }
+
+/* Selection styles for folders */
+.folder-line { transition: background-color .15s ease, color .15s ease; }
+.folder-selectable:hover { background-color: rgba(13,110,253, .08); }
+.folder-selectable.bg-primary { background-color: var(--primary) !important; color: #fff !important; }
+.folder-selectable.bg-primary .folder-name,
+.folder-selectable.bg-primary i,
+.folder-selectable.bg-primary .bi,
+.folder-selectable.bg-primary span { color: #fff !important; }
+.folder-selectable.bg-primary .badge { background-color: rgba(255,255,255,.25) !important; color: #fff !important; }
+.folder-selectable.bg-primary .bi-folder { color: #fff !important; }
+
+/* Misc */
+.bg-glass { background: rgba(255,255,255,0.7); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); }
+.status-indicator.status-connecting { background-color: #ffc107; animation: pulse 1s infinite; }
 
 /* Layout principal */
 
@@ -92,6 +337,7 @@ body {
 .bg-gradient {
   position: relative;
   overflow: hidden;
+  z-index: 0; /* create stacking context so ::before stays behind content */
 }
 
 .bg-gradient::before {
@@ -103,6 +349,7 @@ body {
   bottom: 0;
   background: linear-gradient(45deg, rgba(255,255,255,0.1) 0%, rgba(255,255,255,0.05) 100%);
   pointer-events: none;
+  z-index: -1;
 }
 
 /* Liste moderne des dossiers */
@@ -320,6 +567,8 @@ body {
   );
   background-size: 1rem 1rem;
   animation: progressStripes 1s linear infinite;
+  pointer-events: none;
+  z-index: 0;
 }
 
 @keyframes progressStripes {
@@ -661,6 +910,8 @@ body {
   padding: 1.5rem 0;
   box-shadow: var(--shadow);
   position: fixed;
+  /* With native toolbar active, occupy full height */
+  margin-top: 0;
   height: 100vh;
   overflow-y: auto;
   z-index: 1000;
@@ -691,17 +942,17 @@ body {
 }
 
 /* Navigation */
-.nav {
+.sidebar .nav {
   list-style: none;
   padding: 0;
   margin: 0;
 }
 
-.nav-item {
+.sidebar .nav-item {
   margin-bottom: 0.25rem;
 }
 
-.nav-link {
+.sidebar .nav-link {
   display: flex;
   align-items: center;
   padding: 0.875rem 1.5rem;
@@ -713,35 +964,50 @@ body {
   overflow: hidden;
 }
 
-.nav-link::before {
+.sidebar .nav-link::before {
   content: '';
   position: absolute;
   top: 0;
   left: 0;
   width: 0;
   height: 100%;
-  background: rgba(255, 255, 255, 0.1);
-  transition: var(--transition);
-  z-index: -1;
+  background-size: 1rem 1rem;
+  animation: progressStripes 1s linear infinite;
+  pointer-events: none;
+  z-index: 0;
 }
-
-.nav-link:hover::before,
-.nav-link.active::before {
-  width: 100%;
-}
-
-.nav-link:hover,
-.nav-link.active {
+.sidebar .nav-link:hover,
+.sidebar .nav-link.active {
   color: white;
   border-left-color: rgba(255, 255, 255, 0.5);
   background: rgba(255, 255, 255, 0.1);
 }
 
-.nav-link i {
+.sidebar .nav-link i {
   width: 20px;
   text-align: center;
   margin-right: 0.75rem;
   font-size: 1.1rem;
+}
+.modern-subtabs {
+  background: var(--gray-100);
+  border: 1px solid var(--gray-200);
+  border-radius: 0.5rem;
+  padding: 0.25rem;
+}
+
+.modern-subtabs .nav-link {
+  color: var(--gray-700);
+  border-radius: 0.375rem;
+}
+
+.modern-subtabs .nav-link:hover {
+  background: var(--gray-200);
+}
+
+.modern-subtabs .nav-link.active {
+  background: var(--primary);
+  color: #fff;
 }
 
 /* Contenu principal */
@@ -750,7 +1016,34 @@ body {
   margin-left: var(--sidebar-width);
   padding: 2rem;
   transition: var(--transition);
+  width: calc(100% - var(--sidebar-width));
+  max-width: 100%;
 }
+
+/* Collapse behavior */
+body.sidebar-collapsed .sidebar { transform: translateX(-100%); }
+body.sidebar-collapsed .main-content { margin-left: 0; width: 100%; }
+
+/* Floating sidebar toggle button */
+.sidebar-toggle-fab {
+  position: fixed;
+  left: 12px;
+  bottom: 16px;
+  width: 40px;
+  height: 40px;
+  display: none; /* hidden by default */
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 10px;
+  background: var(--primary);
+  color: #fff;
+  box-shadow: 0 6px 18px rgba(13,110,253,.35);
+  z-index: 1100;
+}
+
+body.sidebar-collapsed .sidebar-toggle-fab { display: inline-flex; }
+@media (max-width: 1100px) { .sidebar-toggle-fab { display: inline-flex; } }
 
 /* Header */
 .header {
@@ -857,17 +1150,17 @@ body {
   letter-spacing: 0.5px;
 }
 
-/* Contenu des onglets */
+/* Contenu des onglets - rendre transparent et sans carte pour éviter "bloc dans le bloc" */
 .tab-content {
-  background: white;
-  border-radius: var(--border-radius);
-  box-shadow: var(--shadow-sm);
-  border: 1px solid var(--gray-200);
+  background: transparent;
+  border-radius: 0;
+  box-shadow: none;
+  border: 0;
   overflow: hidden;
 }
 
 .tab-pane {
-  padding: 2rem;
+  padding: 0; /* Le contenu gère déjà ses propres marges/paddings via les cartes locales */
 }
 
 /* Graphiques */
@@ -1041,6 +1334,7 @@ body {
 .folder-tree {
   font-family: 'Segoe UI', system-ui, sans-serif;
   font-size: 14px;
+  -webkit-user-select: none;
   user-select: none;
   max-height: 500px;
   overflow-y: auto;
@@ -1341,4 +1635,16 @@ body {
   .tiny {
     font-size: 0.6rem;
   }
+}
+
+/* Monitoring: reactivate vertical scrollbar on the tab (single outer scroll) */
+/* Disable inner scrollbars so .pane-scroll handles the scrolling */
+#monitoring .col-lg-8 .card-modern .card-body {
+  overflow-y: visible !important;
+  overflow-x: hidden;
+}
+
+#monitoring #folders-tree {
+  overflow-y: visible !important;
+  overflow-x: hidden;
 }

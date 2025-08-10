@@ -36,7 +36,6 @@ class OutlookConnector extends EventEmitter {
     // Données en cache
     this.folders = new Map();
     this.stats = new Map();
-    
     // Auto-connexion
     this.autoConnect();
   }
@@ -47,19 +46,16 @@ class OutlookConnector extends EventEmitter {
   async autoConnect() {
     try {
       console.log('[AUTO-CONNECT] Tentative de connexion automatique Graph API...');
-      
-      if (this.isOutlookConnected || this.connectionState === 'connecting') {
-        console.log('[AUTO-CONNECT] Connexion déjà en cours/établie');
-        return;
-      }
-
-      if (this.useGraphAPI) {
-        await this.connectToGraphAPI();
-      } else {
-        console.log('⚠️ Graph API non disponible - mode dégradé');
-        this.connectionState = 'error';
-      }
-      
+        // En mode dégradé, considérer Outlook comme "connecté" si le processus est disponible
+        const isRunning = await this.checkOutlookProcess();
+        if (isRunning) {
+          this.isOutlookConnected = true;
+          this.connectionState = 'connected';
+          this.emit('connected');
+          console.log('✅ Mode dégradé actif: Outlook détecté, fonctionnalités de base disponibles');
+        } else {
+          this.connectionState = 'error';
+        }
     } catch (error) {
       console.error('[AUTO-CONNECT] Erreur:', error.message);
       this.connectionState = 'error';
@@ -378,6 +374,323 @@ class OutlookConnector extends EventEmitter {
   }
 
   /**
+   * S'assure qu'Outlook est prêt, même en mode dégradé
+   */
+  async ensureConnected() {
+    if (this.isOutlookConnected) return true;
+    // Tenter une connexion légère (process + lancement si nécessaire)
+    let isRunning = await this.checkOutlookProcess();
+    if (!isRunning) {
+      try {
+        await this.launchOutlook();
+        await this.waitForOutlookReady();
+        isRunning = true;
+      } catch (e) {
+        this.connectionState = 'error';
+        this.lastError = e;
+        console.error('❌ ensureConnected: Outlook indisponible:', e.message);
+        return false;
+      }
+    }
+    this.isOutlookConnected = true;
+    this.connectionState = 'connected';
+    this.emit('connected');
+    return true;
+  }
+
+  /**
+   * Récupère la liste des boîtes mail (Stores) dans Outlook via COM
+   * Retour: Array<{ Name, StoreID, FoldersCount, IsDefault, SmtpAddress? }>
+   */
+  async getMailboxes() {
+    try {
+      const ok = await this.ensureConnected();
+      if (!ok) {
+        return [];
+      }
+
+      const script = `
+        # Force UTF-8 output to preserve accents/diacritics
+        $enc = New-Object System.Text.UTF8Encoding $false
+        [Console]::OutputEncoding = $enc
+        $OutputEncoding = $enc
+
+        try {
+          $ErrorActionPreference = 'SilentlyContinue'
+          $outlook = New-Object -ComObject Outlook.Application
+          $ns = $outlook.GetNamespace("MAPI")
+          $accounts = $null
+          try { $accounts = $outlook.Session.Accounts } catch {}
+
+          # Utiliser une map pour dédupliquer par StoreID
+          $storeMap = @{}
+
+          # 1) Énumération standard des Stores
+          foreach ($store in $ns.Stores) {
+            try {
+              $root = $store.GetRootFolder()
+              $name = $store.DisplayName
+              $storeId = $store.StoreID
+              $isDefault = $storeId -eq $ns.DefaultStore.StoreID
+              $foldersCount = 0
+              try { $foldersCount = $root.Folders.Count } catch {}
+
+              $storeMap[$storeId] = @{
+                Name = $name
+                StoreID = $storeId
+                FoldersCount = $foldersCount
+                IsDefault = $isDefault
+                SmtpAddress = $null
+                ExchangeStoreType = $store.ExchangeStoreType
+                FilePath = $store.FilePath
+              }
+            } catch {}
+          }
+
+          # 2) Fallback: énumérer Namespace.Folders pour récupérer des Stores supplémentaires
+          foreach ($topFolder in $ns.Folders) {
+            try {
+              $st = $topFolder.Store
+              if ($st -ne $null) {
+                $storeId = $st.StoreID
+                if (-not $storeMap.ContainsKey($storeId)) {
+                  $root = $st.GetRootFolder()
+                  $name = $st.DisplayName
+                  $isDefault = $storeId -eq $ns.DefaultStore.StoreID
+                  $foldersCount = 0
+                  try { $foldersCount = $root.Folders.Count } catch {}
+                  $storeMap[$storeId] = @{
+                    Name = $name
+                    StoreID = $storeId
+                    FoldersCount = $foldersCount
+                    IsDefault = $isDefault
+                    SmtpAddress = $null
+                    ExchangeStoreType = $st.ExchangeStoreType
+                    FilePath = $st.FilePath
+                  }
+                }
+              }
+            } catch {}
+          }
+
+          # 3) Enrichir avec les comptes: associer SMTP par DeliveryStore si possible
+          if ($accounts -ne $null) {
+            foreach ($acc in $accounts) {
+              $smtp = $null
+              try { $smtp = $acc.SmtpAddress } catch {}
+              try {
+                $delStore = $acc.DeliveryStore
+                if ($delStore -ne $null) {
+                  $sid = $delStore.StoreID
+                  if ($storeMap.ContainsKey($sid)) { $storeMap[$sid].SmtpAddress = $smtp }
+                }
+              } catch {}
+              # Si non mappé via DeliveryStore, essayer par nom approchant
+              foreach ($key in $storeMap.Keys) {
+                if (-not $storeMap[$key].SmtpAddress) {
+                  $name = $storeMap[$key].Name
+                  try { if ($smtp -and ($acc.DisplayName -eq $name -or $name -like "*$($acc.DisplayName)*")) { $storeMap[$key].SmtpAddress = $smtp } } catch {}
+                }
+              }
+            }
+          }
+
+          $stores = @()
+          foreach ($k in $storeMap.Keys) { $stores += $storeMap[$k] }
+          $res = @{ success = $true; mailboxes = $stores } | ConvertTo-Json -Depth 12 -Compress
+          Write-Output $res
+        } catch {
+          $err = $_.Exception.Message
+          $res = @{ success = $false; error = $err; mailboxes = @() } | ConvertTo-Json -Depth 3 -Compress
+          Write-Output $res
+        }
+      `;
+
+      let result = await this.executePowerShellScript(script);
+      if (!result.success) {
+        // Retry in 32-bit if first attempt fails
+        result = await this.executePowerShellScript(script, 15000, { force32Bit: true });
+      }
+      if (!result.success) {
+        throw new Error(result.error || 'Échec récupération boîtes mail');
+      }
+      let json;
+      try { json = JSON.parse(result.output || '{}'); } catch (_) { json = {}; }
+      let mailboxes = Array.isArray(json.mailboxes) ? json.mailboxes : [];
+      if (mailboxes.length === 0) {
+        // Retry parsing or force 32-bit once more if not yet
+        const res32 = await this.executePowerShellScript(script, 15000, { force32Bit: true });
+        if (res32.success) {
+          try {
+            const j2 = JSON.parse(res32.output || '{}');
+            mailboxes = Array.isArray(j2.mailboxes) ? j2.mailboxes : mailboxes;
+          } catch {}
+        }
+      }
+      return mailboxes;
+    } catch (error) {
+      console.error('❌ Erreur getMailboxes:', error.message);
+      return [];
+    }
+  }
+
+  /**
+   * Récupère la structure des dossiers pour un Store donné
+   * Retour: Array<{ Name, StoreID, SubFolders: Folder[] }>
+   */
+  async getFolderStructure(storeId) {
+    try {
+      const ok = await this.ensureConnected();
+      if (!ok) {
+        return [];
+      }
+
+      // Échapper les guillemets pour insertion dans le script
+      const safeStoreId = String(storeId || '').replace(/`/g, '``').replace(/"/g, '\"');
+
+      const script = `
+        # Force UTF-8 output to preserve accents/diacritics
+        $enc = New-Object System.Text.UTF8Encoding $false
+        [Console]::OutputEncoding = $enc
+        $OutputEncoding = $enc
+
+        try {
+          $outlook = New-Object -ComObject Outlook.Application
+          $ns = $outlook.GetNamespace("MAPI")
+          $accounts = $null
+          try { $accounts = $outlook.Session.Accounts } catch {}
+
+          function Get-FolderTree {
+            param([object]$folder, [string]$prefixPath, [string]$mailboxName)
+            $currentPath = if ($prefixPath -and $prefixPath.Trim() -ne "") { "$prefixPath\\$($folder.Name)" } else { "$mailboxName\\$($folder.Name)" }
+            $children = @()
+            try {
+              foreach ($sf in $folder.Folders) {
+                $children += (Get-FolderTree -folder $sf -prefixPath $currentPath -mailboxName $mailboxName)
+              }
+            } catch {}
+            $unread = 0
+            try { $unread = $folder.UnReadItemCount } catch {}
+            $total = 0
+            try { $total = $folder.Items.Count } catch {}
+            return @{
+              Name = $folder.Name
+              FolderPath = $currentPath
+              UnreadCount = $unread
+              TotalCount = $total
+              SubFolders = $children
+            }
+          }
+
+          if ("${safeStoreId}" -eq "") {
+            # Retourner l'arborescence de toutes les boîtes pour permettre la sélection côté UI
+            $mbs = @()
+            foreach ($st in $ns.Stores) {
+              try {
+                $root = $st.GetRootFolder()
+                $mailboxName = $st.DisplayName
+                # Tenter de trouver une adresse SMTP correspondante
+                $smtp = $null
+        if ($accounts -ne $null) {
+                  foreach ($acc in $accounts) {
+          if ($acc.SmtpAddress -and ($acc.DisplayName -eq $mailboxName -or $mailboxName -like "*$($acc.DisplayName)*")) {
+                      $smtp = $acc.SmtpAddress
+                      break
+                    }
+                  }
+                }
+                $tree = @()
+                foreach ($sf in $root.Folders) {
+                  $tree += (Get-FolderTree -folder $sf -prefixPath $mailboxName -mailboxName $mailboxName)
+                }
+                $mb = @{
+                  Name = $mailboxName
+                  StoreID = $st.StoreID
+                  SmtpAddress = $smtp
+                  SubFolders = $tree
+                }
+                $mbs += $mb
+              } catch {}
+            }
+            $res = @{ success = $true; folders = $mbs } | ConvertTo-Json -Depth 24 -Compress
+            Write-Output $res
+            return
+          }
+
+          # Sélection ciblée d'un Store
+          $target = $null
+          foreach ($st in $ns.Stores) {
+            if ($st.StoreID -eq "${safeStoreId}" -or $st.DisplayName -eq "${safeStoreId}" -or $st.DisplayName -like "*${safeStoreId}*") {
+              $target = $st
+              break
+            }
+          }
+          if (-not $target) { $target = $ns.DefaultStore }
+
+          $root = $target.GetRootFolder()
+          $mailboxName = $target.DisplayName
+          # Tenter de trouver une adresse SMTP correspondante
+          $smtp = $null
+          try {
+            $accounts = $outlook.Session.Accounts
+            foreach ($acc in $accounts) {
+              if ($acc.SmtpAddress -and ($acc.DisplayName -eq $mailboxName -or $mailboxName -like "*$($acc.DisplayName)*")) {
+                $smtp = $acc.SmtpAddress
+                break
+              }
+            }
+          } catch {}
+          $tree = @()
+          try {
+            foreach ($sf in $root.Folders) {
+              $tree += (Get-FolderTree -folder $sf -prefixPath $mailboxName -mailboxName $mailboxName)
+            }
+          } catch {}
+
+          $mb = @{
+            Name = $mailboxName
+            StoreID = $target.StoreID
+            SmtpAddress = $smtp
+            SubFolders = $tree
+          }
+
+          $res = @{ success = $true; folders = @($mb) } | ConvertTo-Json -Depth 24 -Compress
+          Write-Output $res
+        } catch {
+          $err = $_.Exception.Message
+          $res = @{ success = $false; error = $err; folders = @() } | ConvertTo-Json -Depth 3 -Compress
+          Write-Output $res
+        }
+      `;
+
+      let result = await this.executePowerShellScript(script, 60000);
+      if (!result.success) {
+        // Retry in 32-bit if first attempt fails
+        result = await this.executePowerShellScript(script, 60000, { force32Bit: true });
+      }
+      if (!result.success) {
+        throw new Error(result.error || 'Échec récupération structure dossiers');
+      }
+      let json;
+      try { json = JSON.parse(result.output || '{}'); } catch (_) { json = {}; }
+      let folders = Array.isArray(json.folders) ? json.folders : [];
+      if (folders.length === 0) {
+        const res32 = await this.executePowerShellScript(script, 60000, { force32Bit: true });
+        if (res32.success) {
+          try {
+            const j2 = JSON.parse(res32.output || '{}');
+            folders = Array.isArray(j2.folders) ? j2.folders : folders;
+          } catch {}
+        }
+      }
+      return folders;
+    } catch (error) {
+      console.error('❌ Erreur getFolderStructure:', error.message);
+      return [];
+    }
+  }
+
+  /**
    * OPTIMIZED: Récupération emails par folder
    */
   async getEmailsFromFolder(folderPath, limit = 100) {
@@ -674,6 +987,11 @@ class OutlookConnector extends EventEmitter {
       console.log(`� [OUTLOOK] Navigation vers dossier spécifique: ${folderPath}`);
       
       const script = `
+        # Force UTF-8 output to preserve accents/diacritics
+        $enc = New-Object System.Text.UTF8Encoding $false
+        [Console]::OutputEncoding = $enc
+        $OutputEncoding = $enc
+
         try {
           $outlook = New-Object -ComObject Outlook.Application
           $namespace = $outlook.GetNamespace("MAPI")
@@ -963,7 +1281,7 @@ class OutlookConnector extends EventEmitter {
   /**
    * Exécuter un script PowerShell
    */
-  async executePowerShellScript(script, timeout = 15000) {
+  async executePowerShellScript(script, timeout = 15000, opts = {}) {
     try {
       // console.log(`🔧 [DEBUG] Exécution PowerShell - Longueur script: ${script.length} caractères`);
       
@@ -978,8 +1296,13 @@ class OutlookConnector extends EventEmitter {
       fs.writeFileSync(tempFile, BOM + script, { encoding: 'utf8' });
       // console.log(`📄 [DEBUG] Script temporaire: ${tempFile}`);
       
-      // Exécuter le fichier PowerShell
-      const result = await this.executeCommand('powershell', ['-ExecutionPolicy', 'Bypass', '-File', tempFile], timeout);
+  // Choisir l'exécutable PowerShell (64-bit par défaut, fallback 32-bit en option)
+  const winDir = process.env.WINDIR || 'C:\\Windows';
+  const pwsh32 = `${winDir}\\SysWOW64\\WindowsPowerShell\\v1.0\\powershell.exe`;
+  const pwsh64 = `${winDir}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe`;
+
+  const command = opts.force32Bit ? pwsh32 : pwsh64;
+  const result = await this.executeCommand(command, ['-NoProfile','-STA','-ExecutionPolicy','Bypass','-File', tempFile], timeout);
       
       // Nettoyer le fichier temporaire
       try {
@@ -997,7 +1320,7 @@ class OutlookConnector extends EventEmitter {
         console.log(`❌ [DEBUG] Error: ${result.error}`);
       }
       
-      return result;
+  return result;
     } catch (error) {
       console.error(`❌ [DEBUG] Exception PowerShell: ${error.message}`);
       return { success: false, error: error.message };

@@ -1,1479 +1,318 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="fr">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Mail Monitor - Chargement</title>
-    <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+        <title>Mail Monitor – Chargement</title>
+        <script>
+                // Appliquer le thème le plus tôt possible pour éviter un flash de mauvais thème
+                (function(){
+                    try {
+                        const stored = localStorage.getItem('uiTheme');
+                        const sys = (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) ? 'dark' : 'light';
+                        const t = (stored === 'dark' || stored === 'light') ? stored : sys;
+                        document.documentElement.setAttribute('data-theme', t);
+                    } catch (_) { /* no-op */ }
+                })();
+        </script>
+        <style>
+                /* Thème clair par défaut (et explicite) */
+                :root, html[data-theme="light"] {
+                        --bg: #f4f6fa;
+                        --fg: #1f2937;
+                        --muted: #6b7280;
+                        --accent: #0d6efd; /* bootstrap primary */
+                        --ok: #198754;     /* bootstrap success */
+                        --err: #dc3545;    /* bootstrap danger */
+                        --card: #ffffff;
+                        --border: #e5e7eb;
+                        --status-bg: rgba(0,0,0,.02);
+                        --status-border: rgba(0,0,0,.06);
+                        --bar: #e9eef6;
+                        --bar-fill: linear-gradient(90deg,#0d6efd,#4da3ff);
+                        --bar-ok: linear-gradient(90deg,#198754,#34d399);
+                        --shadow: 0 12px 30px rgba(0,0,0,.08);
+                    }
 
+                    /* Thème sombre */
+                    html[data-theme="dark"] {
+                        --bg: #0b0f17;
+                        --fg: #e5e7eb;
+                        --muted: #9ca3af;
+                        --accent: #4da3ff;
+                        --ok: #34d399;
+                        --err: #f87171;
+                        --card: #111827;
+                        --border: #1f2937;
+                        --status-bg: rgba(255,255,255,.04);
+                        --status-border: rgba(255,255,255,.08);
+                        --bar: #111827;
+                        --bar-fill: linear-gradient(90deg,#3b82f6,#60a5fa);
+                        --bar-ok: linear-gradient(90deg,#10b981,#34d399);
+                        --shadow: 0 12px 30px rgba(0,0,0,.4);
+                }
+
+        * { box-sizing: border-box; }
+    html, body { height: 100%; background: transparent; }
         body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background: linear-gradient(135deg, #1e3c72 0%, #2a5298 50%, #1e3c72 100%);
-            background-size: 300% 300%;
-            animation: gradientShift 8s ease infinite;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            height: 100vh;
-            width: 100vw;
-            color: white;
-            overflow: hidden;
             margin: 0;
-            padding: 20px;
+            /* Transparent window: remove page background so only the card is visible */
+            background: transparent;
+            color: var(--fg);
+            font: 14px/1.5 system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans, "Helvetica Neue", Arial;
+            display: grid;
+            place-items: center;
+            overflow: hidden;
+            padding: 16px;
+            /* Ne pas mettre tout le body en drag, on gère le drag sur la carte visible */
+            -webkit-user-select: none;
+            user-select: none;
+        }
+
+        .wrap {
+            width: 520px;
+            max-width: 92vw;
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 14px;
+            padding: 18px 18px 14px;
+            box-shadow: var(--shadow);
+            /* Rendre la carte elle-même déplaçable */
             -webkit-app-region: drag;
-            box-sizing: border-box;
         }
 
-        @keyframes gradientShift {
-            0% { background-position: 0% 50%; }
-            50% { background-position: 100% 50%; }
-            100% { background-position: 0% 50%; }
-        }
-
-        .loading-container {
-            text-align: center;
-            background: rgba(255, 255, 255, 0.08);
-            backdrop-filter: blur(20px);
-            -webkit-backdrop-filter: blur(20px);
-            border: 2px solid rgba(255, 255, 255, 0.15);
-            border-radius: 24px;
-            padding: 30px;
-            box-shadow: 
-                0 20px 40px rgba(0, 0, 0, 0.15),
-                inset 0 1px 0 rgba(255, 255, 255, 0.2);
-            width: auto;
-            min-width: 400px;
-            max-width: 600px;
-            height: auto;
-            position: relative;
-            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-            -webkit-app-region: no-drag; /* Empêcher le drag sur les éléments interactifs */
-            display: inline-block; /* Pour un meilleur dimensionnement */
-        }
-
-        .loading-container:hover {
-            transform: translateY(-2px);
-            box-shadow: 
-                0 25px 50px rgba(0, 0, 0, 0.2),
-                inset 0 1px 0 rgba(255, 255, 255, 0.25);
-            border-color: rgba(255, 255, 255, 0.2);
-        }
-
-        /* Boutons et éléments interactifs */
-        button, input, select, textarea, .interactive {
-            -webkit-app-region: no-drag;
-        }
-
-        .logo {
-            width: 85px;
-            height: 85px;
-            margin: 10px auto 20px;
-            animation: logoFloat 3s ease-in-out infinite;
-            filter: drop-shadow(0 4px 8px rgba(0, 0, 0, 0.2));
-        }
-
-        @keyframes logoFloat {
-            0%, 100% { transform: translateY(0px) rotate(0deg); }
-            50% { transform: translateY(-8px) rotate(2deg); }
-        }
-
-        .logo svg {
-            width: 100%;
-            height: 100%;
-        }
-
-        .app-title {
-            font-size: 28px;
-            font-weight: 700;
-            margin-bottom: 8px;
-            color: #fff;
-            line-height: 1.2;
-            text-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
-            letter-spacing: -0.5px;
-        }
-
-        .app-subtitle {
-            font-size: 15px;
-            margin-bottom: 25px;
-            color: rgba(255, 255, 255, 0.85);
-            line-height: 1.4;
-            font-weight: 400;
-        }
-
-        .loading-spinner {
-            width: 50px;
-            height: 50px;
-            border: 4px solid rgba(255, 255, 255, 0.2);
-            border-top: 4px solid rgba(255, 255, 255, 0.9);
-            border-radius: 50%;
-            animation: modernSpin 1.2s cubic-bezier(0.4, 0, 0.2, 1) infinite;
-            margin: 0 auto 20px;
-            position: relative;
-        }
-
-        .loading-spinner::after {
-            content: '';
-            position: absolute;
-            top: -4px;
-            left: -4px;
-            right: -4px;
-            bottom: -4px;
-            border: 4px solid transparent;
-            border-top: 4px solid rgba(255, 255, 255, 0.4);
-            border-radius: 50%;
-            animation: modernSpin 0.8s cubic-bezier(0.4, 0, 0.2, 1) infinite reverse;
-        }
-
-        @keyframes modernSpin {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
-        }
-
-        .loading-text {
-            font-size: 18px;
-            margin-bottom: 12px;
-            font-weight: 600;
-            line-height: 1.3;
-            color: #fff;
-            text-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
-        }
-
-        .loading-details {
-            font-size: 14px;
-            color: rgba(255, 255, 255, 0.8);
-            margin-bottom: 20px;
-            min-height: 40px;
-            line-height: 1.5;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            background: rgba(255, 255, 255, 0.05);
-            border-radius: 12px;
-            padding: 12px 16px;
-            border: 1px solid rgba(255, 255, 255, 0.1);
-        }
-
-        .progress-container {
-            margin-bottom: 15px;
-            transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
-            background: rgba(255, 255, 255, 0.05);
-            border-radius: 12px;
-            padding: 8px;
-            border: 1px solid rgba(255, 255, 255, 0.08);
-        }
-
-        .progress-container.completed {
-            transform: scale(0.98);
-            background: rgba(76, 175, 80, 0.1);
-            border-color: rgba(76, 175, 80, 0.3);
-        }
-
-        .progress-bar {
-            width: 100%;
-            height: 8px;
-            background: rgba(255, 255, 255, 0.1);
-            border-radius: 6px;
-            overflow: hidden;
-            position: relative;
-            margin: 8px 0;
-        }
-
-        .progress-fill {
-            height: 100%;
-            background: linear-gradient(90deg, 
-                rgba(255, 255, 255, 0.9) 0%, 
-                rgba(255, 255, 255, 0.7) 50%, 
-                rgba(255, 255, 255, 0.9) 100%);
-            background-size: 200% 100%;
-            animation: progressShimmer 2s ease-in-out infinite;
-            border-radius: 6px;
-            width: 0%;
-            transition: all 0.5s cubic-bezier(0.4, 0, 0.2, 1);
-            position: relative;
-        }
-
-        @keyframes progressShimmer {
-            0% { background-position: -200% 0; }
-            100% { background-position: 200% 0; }
-        }
-
-        .progress-fill.completed {
-            background: linear-gradient(90deg, #4caf50, #66bb6a);
-            animation: none;
-        }
-
-        .status-item {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            padding: 12px 16px;
-            margin: 8px 0;
-            background: rgba(255, 255, 255, 0.05);
-            border-radius: 10px;
-            border: 1px solid rgba(255, 255, 255, 0.08);
-            transition: all 0.3s ease;
-            font-size: 14px;
-        }
-
-        .status-item:hover {
-            background: rgba(255, 255, 255, 0.08);
-            transform: translateX(4px);
-        }
-
-        .status-item.active {
-            background: rgba(33, 150, 243, 0.15);
-            border-color: rgba(33, 150, 243, 0.3);
-            box-shadow: 0 0 20px rgba(33, 150, 243, 0.2);
-        }
-
-        .status-item.completed {
-            background: rgba(76, 175, 80, 0.15);
-            border-color: rgba(76, 175, 80, 0.3);
-            color: rgba(255, 255, 255, 0.95);
-        }
-
-        .status-item.error {
-            background: rgba(244, 67, 54, 0.15);
-            border-color: rgba(244, 67, 54, 0.3);
-            animation: errorPulse 1s ease-in-out;
-        }
-
-        @keyframes errorPulse {
-            0%, 100% { transform: scale(1); }
-            50% { transform: scale(1.02); }
-        }
-
-        .status-icon {
-            font-size: 16px;
-            width: 24px;
-            height: 24px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            border-radius: 50%;
-            background: rgba(255, 255, 255, 0.1);
-            margin-right: 12px;
-            transition: all 0.3s ease;
-        }
-
-        .status-item.active .status-icon {
-            background: rgba(33, 150, 243, 0.3);
-            animation: iconPulse 1.5s ease-in-out infinite;
-        }
-
-        @keyframes iconPulse {
-            0%, 100% { opacity: 1; transform: scale(1); }
-            50% { opacity: 0.7; transform: scale(1.1); }
-        }
-
-        .retry-button {
-            background: linear-gradient(135deg, #ff4757, #ff3742);
-            color: white;
-            border: none;
-            padding: 14px 28px;
-            border-radius: 12px;
-            font-size: 16px;
-            font-weight: 600;
-            cursor: pointer;
-            transition: all 0.3s ease;
-            margin-top: 20px;
-            box-shadow: 0 4px 15px rgba(255, 71, 87, 0.3);
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-        }
-
-        .retry-button:hover {
-            background: linear-gradient(135deg, #ff3742, #ff2837);
-            transform: translateY(-2px);
-            box-shadow: 0 6px 20px rgba(255, 71, 87, 0.4);
-        }
-
-        .retry-button:active {
-            transform: translateY(0);
-        }
-            opacity: 0.8;
-        }
-
-        .progress-label {
-            font-size: 12px;
-            color: rgba(255, 255, 255, 0.9);
-            margin-bottom: 4px;
-            text-align: left;
-            font-weight: 500;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-        }
-
-        .progress-label .status-icon {
-            font-size: 14px;
-            margin-left: 8px;
-            opacity: 0;
-            transition: opacity 0.3s ease;
-        }
+        .head { display: flex; align-items: center; gap: 12px; margin-bottom: 6px; }
+        .logo { width: 28px; height: 28px; border-radius: 6px; box-shadow: 0 2px 8px rgba(0,0,0,.3); }
+        .title { font-size: 16px; font-weight: 600; letter-spacing: .2px; }
+        .subtitle { color: var(--muted); font-size: 12px; margin-bottom: 14px; }
 
-        .progress-label.completed .status-icon {
-            opacity: 1;
-        }
-
-        .progress-bar {
-            width: 100%;
-            height: 4px;
-            background: rgba(255, 255, 255, 0.2);
-            border-radius: 2px;
-            overflow: hidden;
-            margin-bottom: 4px;
-            transition: all 0.5s ease;
-        }
-
-        .progress-bar.completed {
-            height: 2px;
-            background: rgba(76, 175, 80, 0.3);
-        }
-
-        .progress-fill {
-            height: 100%;
-            background: linear-gradient(90deg, #4facfe 0%, #00f2fe 100%);
-            border-radius: 2px;
-            transition: all 0.5s ease;
-            width: 0%;
-        }
-
-        .progress-fill.completed {
-            background: linear-gradient(90deg, #4caf50 0%, #8bc34a 100%);
-        }
-
-        .progress-percent {
-            font-size: 10px;
-            color: rgba(255, 255, 255, 0.7);
-            text-align: right;
-            margin-bottom: 2px;
-            transition: opacity 0.5s ease;
-        }
-
-        .progress-percent.completed {
-            opacity: 0;
-        }
-
-        .status-list {
-            text-align: left;
-            margin-top: 12px; /* Marge réduite */
-        }
-
-        .status-item {
-            display: flex;
-            align-items: center;
-            margin-bottom: 4px; /* Marge très réduite */
-            font-size: 12px; /* Plus petit */
-            opacity: 0.6;
-            transition: opacity 0.3s ease;
-            line-height: 1.3;
-        }
-
-        .status-item.active {
-            opacity: 1;
-        }
-
-        .status-item.completed {
-            opacity: 0.8;
-            color: #4ade80;
-        }
-
-        .status-icon {
-            margin-right: 6px; /* Marge réduite */
-            width: 16px; /* Plus petit */
-            font-size: 12px; /* Plus petit */
-        }
-
-        @keyframes spin {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
-        }
-
-        @keyframes pulse {
-            0%, 100% { transform: scale(1); }
-            50% { transform: scale(1.1); }
-        }
-
-        .fade-out {
-            opacity: 0;
-            transform: scale(0.95);
-            transition: all 0.5s ease;
-        }
-
-        .error-state {
-            background: rgba(239, 68, 68, 0.1);
-            border-color: rgba(239, 68, 68, 0.3);
-        }
-
-        .error-text {
-            color: #fca5a5;
-        }
-
-        .retry-button {
-            background: rgba(255, 255, 255, 0.2);
-            color: white;
-            border: 1px solid rgba(255, 255, 255, 0.3);
-            padding: 10px 20px;
-            border-radius: 8px;
-            cursor: pointer;
-            font-size: 14px;
-            margin-top: 15px;
-            transition: all 0.3s ease;
-            -webkit-app-region: no-drag; /* Empêcher le drag sur le bouton */
-        }
-
-        .retry-button:hover {
-            background: rgba(255, 255, 255, 0.3);
-            transform: translateY(-2px);
-        }
-
-        /* Nouvelles animations pour les améliorations */
-        @keyframes pulse {
-            0%, 100% { transform: scale(1) rotate(0deg); opacity: 1; }
-            50% { transform: scale(1.05) rotate(1deg); opacity: 0.8; }
-        }
-
-        @keyframes fadeIn {
-            from { 
-                opacity: 0; 
-                transform: translateY(20px) scale(0.9); 
-            }
-            to { 
-                opacity: 1; 
-                transform: translateY(0) scale(1); 
-            }
-        }
-
-        @keyframes fadeOut {
-            from { 
-                opacity: 1; 
-                transform: translateY(0) scale(1); 
-            }
-            to { 
-                opacity: 0; 
-                transform: translateY(-20px) scale(0.9); 
-            }
-        }
-
-        @keyframes slideInFromLeft {
-            from { transform: translateX(-100%) scale(0.8); opacity: 0; }
-            to { transform: translateX(0) scale(1); opacity: 1; }
-        }
-
-        /* Amélioration des indicateurs de progression */
-        .progress-fill {
-            transition: all 0.5s cubic-bezier(0.4, 0, 0.2, 1);
-            position: relative;
-        }
-
-        .progress-fill::before {
-            content: '';
-            position: absolute;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            background: linear-gradient(90deg, 
-                transparent 0%, 
-                rgba(255, 255, 255, 0.4) 50%, 
-                transparent 100%);
-            animation: progressGlow 2s ease-in-out infinite;
-        }
-
-        @keyframes progressGlow {
-            0%, 100% { transform: translateX(-100%); }
-            50% { transform: translateX(100%); }
-        }
+    .status { background: var(--status-bg); border: 1px solid var(--status-border); border-radius: 10px; padding: 10px 12px; margin-bottom: 12px; min-height: 40px; display: flex; align-items: center; }
+    .status span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; width: 100%; }
+    /* Les éléments interactifs à l'intérieur ne doivent pas être drag pour permettre les clics */
+    button, a, input, textarea { -webkit-app-region: no-drag; user-select: text; }
 
-        .status-item.completed .status-icon {
-            animation: bounceIn 0.6s ease;
-            background: rgba(76, 175, 80, 0.3);
+        /* Minimal hero with big percentage */
+    .hero { display: grid; place-items: center; margin: 10px 0 6px; padding: 6px 0; }
+        .big-percent { font-size: 28px; font-weight: 700; letter-spacing: .5px; color: var(--accent); }
+    .spinner {
+            width: 28px; height: 28px; border: 2px solid rgba(13,110,253,.2); border-top-color: var(--accent); border-radius: 50%;
+          animation: spin 1s linear infinite; margin-bottom: 8px;
         }
+        @keyframes spin { to { transform: rotate(360deg); } }
 
-        @keyframes bounceIn {
-            0% { transform: scale(0.3) rotate(-180deg); opacity: 0; }
-            50% { transform: scale(1.1) rotate(0deg); opacity: 1; }
-            70% { transform: scale(0.9) rotate(10deg); }
-            100% { transform: scale(1) rotate(0deg); opacity: 1; }
-        }
-
-        .status-item.error .status-icon {
-            animation: shakeError 0.5s ease;
-            background: rgba(244, 67, 54, 0.3);
-        }
-
-        @keyframes shakeError {
-            0%, 100% { transform: translateX(0) rotate(0deg); }
-            10%, 30%, 50%, 70%, 90% { transform: translateX(-4px) rotate(-2deg); }
-            20%, 40%, 60%, 80% { transform: translateX(4px) rotate(2deg); }
-        }
-
-        /* Style amélioré pour les messages */
-        #loadingDetails {
-            min-height: 40px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
-            animation: fadeIn 0.5s ease;
-        }
-
-        /* Effet de glassmorphism plus prononcé */
-        .glass-effect {
-            background: rgba(255, 255, 255, 0.1);
-            backdrop-filter: blur(10px);
-            -webkit-backdrop-filter: blur(10px);
-            border: 1px solid rgba(255, 255, 255, 0.2);
-            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
-        }
+        .foot { display: flex; justify-content: space-between; align-items: center; margin-top: 12px; }
+    .overall { height: 10px; background: var(--bar); border-radius: 999px; overflow: hidden; flex: 1; margin-right: 10px; border: 1px solid var(--border); }
+    .overall .fill { width: 0%; height: 100%; background: var(--bar-fill); transition: width .25s ease; box-shadow: 0 1px 2px rgba(13,110,253,.15) inset; }
 
-        /* Animation d'entrée pour le conteneur */
-        .loading-container {
-            animation: containerEntrance 0.8s cubic-bezier(0.4, 0, 0.2, 1) forwards;
-        }
-
-        @keyframes containerEntrance {
-            0% {
-                opacity: 0;
-                transform: scale(0.8) translateY(50px);
-            }
-            100% {
-                opacity: 1;
-                transform: scale(1) translateY(0);
-            }
-        }
-
-        /* Particules flottantes en arrière-plan */
-        .loading-container::before {
-            content: '';
-            position: absolute;
-            top: -50%;
-            left: -50%;
-            width: 200%;
-            height: 200%;
-            background: radial-gradient(circle, 
-                rgba(255, 255, 255, 0.03) 1px, 
-                transparent 1px);
-            background-size: 50px 50px;
-            animation: particleFloat 20s linear infinite;
-            pointer-events: none;
-            z-index: 0;
-        }
-
-        @keyframes particleFloat {
-            0% { transform: translate(0, 0) rotate(0deg); }
-            100% { transform: translate(-50px, -50px) rotate(360deg); }
-        }
+        .retry { display: none; background: transparent; color: var(--fg); border: 1px solid var(--status-border); padding: 6px 10px; border-radius: 8px; font-size: 12px; cursor: pointer; }
+        .retry:hover { background: var(--status-bg); }
+        .error { color: var(--err); }
 
-        /* S'assurer que le contenu est au-dessus des particules */
-        .loading-container > * {
-            position: relative;
-            z-index: 1;
-        }
-        
-        /* Styles pour le copyright dans la page de chargement */
-        .copyright-footer {
-            position: absolute;
-            bottom: 20px;
-            left: 50%;
-            transform: translateX(-50%);
-            color: rgba(255, 255, 255, 0.7);
-            font-size: 12px;
-            text-align: center;
-            opacity: 0.8;
-        }
+        /* Hide detailed task list by default for a cleaner look */
+        .bars { display: none; }
+        .task { display: none; }
     </style>
 </head>
 <body>
-    <div class="loading-container" id="loadingContainer">
-        <div class="logo">
-            <img src="../resources/new%20logo/logo_128x128.png" alt="Logo" width="80" height="80" style="border-radius: 12px; box-shadow: 0 4px 10px rgba(0,0,0,0.2);" />
+    <div class="wrap" id="wrap">
+        <div class="head">
+            <img class="logo" src="../resources/new%20logo/logo_128x128.png" alt="Logo" />
+            <div class="title">Mail Monitor</div>
         </div>
-        <div class="app-title">Mail Monitor</div>
-        <div class="app-subtitle">Surveillance intelligente d'Outlook</div>
-        
-        <div class="loading-spinner" id="loadingSpinner"></div>
-        
-        <div class="loading-text" id="loadingText">Initialisation en cours...</div>
-        <div class="loading-details" id="loadingDetails">Preparation de l'environnement</div>
-        
-        <!-- Copyright footer pour la page de chargement -->
-        <div class="copyright-footer">
-            <small>© 2025 Tanguy Raingeard - Mail Monitor v1.0.0</small>
+        <div class="subtitle">Initialisation en cours…</div>
+
+        <div class="status" id="status"><span>Préparation de l'environnement…</span></div>
+
+        <div class="hero">
+          <div class="spinner" aria-hidden="true"></div>
+          <div class="big-percent" id="overall-percent">0%</div>
         </div>
-        
-        <!-- Barres de progression intégrées avec validation -->
-        <div id="progressBars">
-            <div class="progress-container" id="progress-environment" style="display: none;">
-                <div class="progress-label" id="label-environment">
-                    <span>Vérification système</span>
-                    <span class="status-icon">✅</span>
-                </div>
-                <div class="progress-bar" id="bar-environment">
-                    <div class="progress-fill" id="progressFill-environment"></div>
-                </div>
-                <div class="progress-percent" id="progressPercent-environment">0%</div>
+
+        <!-- Detailed tasks grid kept in DOM but hidden by CSS (for future debug if needed) -->
+        <div class="bars" id="bars" aria-hidden="true">
+            <div class="task" id="task-configuration">
+                <div class="task-head"><div class="task-label">Vérification système</div><div class="task-pct" id="pct-configuration">0%</div></div>
+                <div class="bar"><div class="fill" id="fill-configuration"></div></div>
             </div>
-            
-            <div class="progress-container" id="progress-outlook" style="display: none;">
-                <div class="progress-label" id="label-outlook">
-                    <span>Connexion Outlook</span>
-                    <span class="status-icon">✅</span>
-                </div>
-                <div class="progress-bar" id="bar-outlook">
-                    <div class="progress-fill" id="progressFill-outlook"></div>
-                </div>
-                <div class="progress-percent" id="progressPercent-outlook">0%</div>
+            <div class="task" id="task-connection">
+                <div class="task-head"><div class="task-label">Connexion Outlook</div><div class="task-pct" id="pct-connection">0%</div></div>
+                <div class="bar"><div class="fill" id="fill-connection"></div></div>
             </div>
-            
-            <div class="progress-container" id="progress-mailboxes" style="display: none;">
-                <div class="progress-label" id="label-mailboxes">
-                    <span>Boîtes mail</span>
-                    <span class="status-icon">✅</span>
-                </div>
-                <div class="progress-bar" id="bar-mailboxes">
-                    <div class="progress-fill" id="progressFill-mailboxes"></div>
-                </div>
-                <div class="progress-percent" id="progressPercent-mailboxes">0%</div>
+            <div class="task" id="task-stats">
+                <div class="task-head"><div class="task-label">Statistiques</div><div class="task-pct" id="pct-stats">0%</div></div>
+                <div class="bar"><div class="fill" id="fill-stats"></div></div>
             </div>
-            
-            <div class="progress-container" id="progress-folders" style="display: none;">
-                <div class="progress-label" id="label-folders">
-                    <span>Structure dossiers</span>
-                    <span class="status-icon">✅</span>
-                </div>
-                <div class="progress-bar" id="bar-folders">
-                    <div class="progress-fill" id="progressFill-folders"></div>
-                </div>
-                <div class="progress-percent" id="progressPercent-folders">0%</div>
+            <div class="task" id="task-categories">
+                <div class="task-head"><div class="task-label">Catégories</div><div class="task-pct" id="pct-categories">0%</div></div>
+                <div class="bar"><div class="fill" id="fill-categories"></div></div>
             </div>
-            
-            <div class="progress-container" id="progress-monitoring" style="display: none;">
-                <div class="progress-label" id="label-monitoring">
-                    <span>Monitoring automatique</span>
-                    <span class="status-icon">✅</span>
-                </div>
-                <div class="progress-bar" id="bar-monitoring">
-                    <div class="progress-fill" id="progressFill-monitoring"></div>
-                </div>
-                <div class="progress-percent" id="progressPercent-monitoring">0%</div>
+            <div class="task" id="task-folders">
+                <div class="task-head"><div class="task-label">Structure dossiers</div><div class="task-pct" id="pct-folders">0%</div></div>
+                <div class="bar"><div class="fill" id="fill-folders"></div></div>
             </div>
-            
-            <div class="progress-container" id="progress-analysis" style="display: none;">
-                <div class="progress-label" id="label-analysis">
-                    <span>Analyse des emails</span>
-                    <span class="status-icon">✅</span>
-                </div>
-                <div class="progress-bar" id="bar-analysis">
-                    <div class="progress-fill" id="progressFill-analysis"></div>
-                </div>
-                <div class="progress-percent" id="progressPercent-analysis">0%</div>
+            <div class="task" id="task-vba">
+                <div class="task-head"><div class="task-label">Configuration VBA</div><div class="task-pct" id="pct-vba">0%</div></div>
+                <div class="bar"><div class="fill" id="fill-vba"></div></div>
             </div>
-        </div>        <button class="retry-button" id="retryButton" style="display: none;">
-            Reessayer
-        </button>
+            <div class="task" id="task-monitoring">
+                <div class="task-head"><div class="task-label" id="label-monitoring">Monitoring automatique</div><div class="task-pct" id="pct-monitoring">0%</div></div>
+                <div class="bar"><div class="fill" id="fill-monitoring"></div></div>
+            </div>
+            <div class="task" id="task-weekly">
+                <div class="task-head"><div class="task-label">Suivi hebdomadaire</div><div class="task-pct" id="pct-weekly">0%</div></div>
+                <div class="bar"><div class="fill" id="fill-weekly"></div></div>
+            </div>
+        </div>
+
+        <div class="foot">
+            <div class="overall"><div class="fill" id="fill-overall"></div></div>
+            <button class="retry" id="retry">Réessayer</button>
+        </div>
     </div>
 
-    <script>
-        class LoadingManager {
-            constructor() {
-                this.currentStep = 0;
-                this.totalTasks = 6; // Nombre total de tâches
-                this.completedTasks = 0;
-                this.steps = [
-                    'progress-environment',
-                    'progress-outlook', 
-                    'progress-mailboxes',
-                    'progress-folders',
-                    'progress-monitoring',
-                    'progress-analysis'
-                ];
-                this.stepMessages = [
-                    'Vérification de l\'environnement système...',
-                    'Connexion à Outlook...',
-                    'Analyse des boîtes mail...',
-                    'Exploration de la structure des dossiers...',
-                    'Configuration du monitoring automatique...',
-                    'Analyse des emails existants...'
-                ];
-                this.taskProgress = new Map();
-                this.isError = false;
-                this.startTime = Date.now();
-                this.init();
-            }
-
-            init() {
-                // Ecouter les messages du processus principal
-                if (window.electronAPI) {
-                    window.electronAPI.onLoadingProgress((data) => {
-                        this.updateProgress(data);
-                    });
-
-                    window.electronAPI.onLoadingComplete(() => {
-                        console.log('✅ Événement loading-complete reçu du processus principal');
-                        this.complete();
-                    });
-
-                    window.electronAPI.onLoadingError((error) => {
-                        this.showError(error);
-                    });
-                    
-                    // Écouter les événements de progression détaillée
-                    window.electronAPI.onTaskProgress?.((taskData) => {
-                        this.updateTaskProgress(taskData);
-                    });
-
-                    // Écouter la progression d'analyse PowerShell (branchée sur la barre Monitoring)
-                    window.electronAPI.onPowerShellAnalysisProgress?.((psData) => {
-                        this.updateAnalysisProgress(psData);
-                    });
-                }
-
-                // Démarrer le redimensionnement automatique
-                this.setupAutoResize();
-                
-                // NOUVEAU: Démarrer une simulation de chargement après un délai court
-                // si aucun événement de progression n'est reçu du processus principal
-                this.fallbackTimer = setTimeout(() => {
-                    console.log('⚠️ Aucun événement reçu, démarrage simulation de chargement...');
-                    this.simulateProgress();
-                }, 2000);
-
-                // Démarrer avec un timer de sécurité et init UI
-                this.startAutoProgress();
-                this.updateCounters();
-
-                // Bouton de retry
-                document.getElementById('retryButton')?.addEventListener('click', () => {
-                    this.retry();
-                });
-            }
-
-            setupAutoResize() {
-                // Observer les changements de contenu pour ajuster la taille
-                const container = document.getElementById('loadingContainer');
-                if (!container) return;
-
-                const resizeObserver = new ResizeObserver((entries) => {
-                    for (let entry of entries) {
-                        this.adjustWindowSize();
-                    }
-                });
-
-                // Observer le container principal
-                resizeObserver.observe(container);
-
-                // Aussi observer les changements dans le DOM
-                const mutationObserver = new MutationObserver(() => {
-                    // Petit délai pour laisser le DOM se mettre à jour
-                    setTimeout(() => this.adjustWindowSize(), 100);
-                });
-
-                mutationObserver.observe(container, {
-                    childList: true,
-                    subtree: true,
-                    attributes: true,
-                    attributeFilter: ['class', 'style']
-                });
-
-                // Redimensionnement initial
-                setTimeout(() => this.adjustWindowSize(), 500);
-                
-                // Forcer l'affichage de la première barre pour démonstration
-                setTimeout(() => {
-                    const firstProgress = document.getElementById('progress-environment');
-                    if (firstProgress) {
-                        firstProgress.style.display = 'block';
-                        setTimeout(() => this.adjustWindowSize(), 100);
-                    }
-                }, 1000);
-            }
-
-            adjustWindowSize() {
-                if (!window.electronAPI?.resizeToContent) return;
-
-                const container = document.getElementById('loadingContainer');
-                if (!container) return;
-
-                // Calculer la taille réelle du contenu
-                const containerRect = container.getBoundingClientRect();
-                const bodyRect = document.body.getBoundingClientRect();
-
-                // Dimensions avec marges de sécurité
-                const contentWidth = Math.ceil(containerRect.width + 80); // 40px de marge de chaque côté
-                const contentHeight = Math.ceil(containerRect.height + 80); // 40px de marge en haut et en bas
-
-                // Limites raisonnables
-                const finalWidth = Math.max(450, Math.min(700, contentWidth));
-                const finalHeight = Math.max(350, Math.min(800, contentHeight));
-
-                // Redimensionner seulement si nécessaire (éviter les boucles)
-                const currentBounds = window.screen.width; // Proxy pour vérifier si on a accès
-                if (currentBounds) {
-                    console.log(`🔧 Ajustement taille fenêtre: ${finalWidth}x${finalHeight}`);
-                    window.electronAPI.resizeToContent(finalWidth, finalHeight);
-                }
-            }
-
-
-            updateCounters() {
-                const percentage = this.totalTasks > 0 
-                    ? Math.round((this.completedTasks / this.totalTasks) * 100)
-                    : 0;
-                
-                // Mettre à jour la barre de progression principale
-                const progressFill = document.getElementById('progressFill');
-                if (progressFill) {
-                    progressFill.style.width = `${percentage}%`;
-                }
-
-                // Mettre à jour le texte de pourcentage si il existe
-                const progressPercent = document.querySelector('.progress-percent');
-                if (progressPercent) {
-                    progressPercent.textContent = `${percentage}%`;
-                }
-
-                // Mettre à jour le compteur de tâches
-                const loadingDetails = document.getElementById('loadingDetails');
-                if (loadingDetails && this.completedTasks > 0) {
-                    const elapsed = Math.round((Date.now() - this.startTime) / 1000);
-                    loadingDetails.innerHTML = `
-                        ${this.getCurrentStepMessage()}<br>
-                        <small style="opacity: 0.8;">${this.completedTasks}/${this.totalTasks} tâches • ${elapsed}s</small>
-                    `;
-                }
-            }
-
-            getCurrentStepMessage() {
-                if (this.currentStep < this.stepMessages.length) {
-                    return this.stepMessages[this.currentStep];
-                }
-                return 'Finalisation...';
-            }
-
-            updateTaskProgress(taskData) {
-                const { taskId, description, completed, error } = taskData;
-                
-                this.taskProgress.set(taskId, { description, completed, error });
-                
-                if (completed && !error) {
-                    this.completedTasks++;
-                    this.markStepCompleted(taskId);
-                }
-                
-                this.updateCounters();
-                
-                // Mettre à jour le message actuel
-                if (!completed) {
-                    const loadingDetails = document.getElementById('loadingDetails');
-                    if (loadingDetails) {
-                        loadingDetails.textContent = description;
-                    }
-                }
-            }
-
-            markStepCompleted(taskId) {
-                // Mapping des IDs de tâches vers les éléments HTML
-                const taskMapping = {
-                    'configuration': 'status-configuration',
-                    'connection': 'status-connection',
-                    'stats': 'status-stats',
-                    'emails': 'status-emails',
-                    'categories': 'status-categories',
-                    'folders': 'status-folders',
-                    'vba': 'status-vba',
-                    'monitoring': 'status-monitoring',
-                    'weekly': 'status-weekly'
-                };
-
-                const elementId = taskMapping[taskId];
-                if (elementId) {
-                    const element = document.getElementById(elementId);
-                    if (element) {
-                        element.classList.remove('active');
-                        element.classList.add('completed');
-                        const icon = element.querySelector('.status-icon');
-                        if (icon) {
-                            icon.textContent = '✅';
-                        }
-                    }
-                }
-            }
-
-            startAutoProgress() {
-                // Demarrer le premier step si pas de retour IPC
-                setTimeout(() => {
-                    if (this.completedTasks === 0) {
-                        this.simulateProgress();
-                    }
-                }, 1000);
-            }
-
-            simulateProgress() {
-                if (this.isError || this.currentStep >= this.steps.length) return;
-
-                // Marquer l'étape précédente comme complétée
-                if (this.currentStep > 0) {
-                    const prevStepId = this.steps[this.currentStep - 1];
-                    const prevStep = document.getElementById(prevStepId);
-                    if (prevStep) {
-                        // Afficher la barre précédente si pas déjà visible
-                        if (prevStep.style.display === 'none' || prevStep.style.display === '') {
-                            prevStep.style.display = 'block';
-                            setTimeout(() => this.adjustWindowSize(), 100);
-                        }
-                        
-                        // Compléter la barre précédente
-                        this.completeTask(prevStepId.replace('progress-', ''));
-                    }
-                    this.completedTasks++;
-                    
-                    // Redimensionner après chaque étape complétée
-                    setTimeout(() => this.adjustWindowSize(), 200);
-                }
-
-                // Activer l'étape actuelle
-                if (this.currentStep < this.steps.length) {
-                    const currentStepId = this.steps[this.currentStep];
-                    const currentStepEl = document.getElementById(currentStepId);
-                    if (currentStepEl) {
-                        // Afficher la barre actuelle si pas déjà visible
-                        if (currentStepEl.style.display === 'none' || currentStepEl.style.display === '') {
-                            currentStepEl.style.display = 'block';
-                            setTimeout(() => this.adjustWindowSize(), 100);
-                        }
-                        
-                        // Démarrer la progression de la tâche actuelle
-                        const taskName = currentStepId.replace('progress-', '');
-                        this.startTaskProgress(taskName);
-                    }
-
-                    this.updateCounters();
-                    this.currentStep++;
-
-                    // Passer à l'étape suivante
-                    if (this.currentStep < this.steps.length) {
-                        setTimeout(() => this.simulateProgress(), 4000 + Math.random() * 1000);
-                    } else {
-                        setTimeout(() => this.complete(), 2000);
-                    }
-                }
-            }
-
-            startTaskProgress(taskName) {
-                const progressFill = document.getElementById(`progressFill-${taskName}`);
-                const progressPercent = document.getElementById(`progressPercent-${taskName}`);
-                
-                if (progressFill && progressPercent) {
-                    let progress = 0;
-                    const interval = setInterval(() => {
-                        progress += Math.random() * 15 + 5; // Progression de 5-20% par step
-                        if (progress >= 95) {
-                            progress = 100;
-                            clearInterval(interval);
-                        }
-                        
-                        progressFill.style.width = progress + '%';
-                        progressPercent.textContent = Math.round(progress) + '%';
-                        
-                        if (progress >= 100) {
-                            this.completeTask(taskName);
-                        }
-                    }, 200 + Math.random() * 300);
-                }
-            }
-
-            updateProgress(data) {
-                console.log('Update progress:', data);
-                
-                // Annuler le timer de fallback puisqu'on reçoit des événements réels
-                if (this.fallbackTimer) {
-                    clearTimeout(this.fallbackTimer);
-                    this.fallbackTimer = null;
-                    console.log('🔄 Timer de fallback annulé - événements reçus du processus principal');
-                }
-                
-                // Mettre à jour le message principal
-                if (data.message) {
-                    document.getElementById('loadingDetails').textContent = data.message;
-                }
-
-                // Gérer les étapes spécifiques avec barres multiples
-                if (data.step !== undefined && data.progress !== undefined) {
-                    const taskNames = ['environment', 'outlook', 'mailboxes', 'folders', 'monitoring'];
-                    const currentTask = taskNames[data.step];
-                    
-                    if (currentTask) {
-                        // Afficher et mettre à jour la barre de progression de cette tâche
-                        const progressContainer = document.getElementById(`progress-${currentTask}`);
-                        if (progressContainer) {
-                            // Si la barre était cachée, la rendre visible
-                            if (progressContainer.style.display === 'none' || progressContainer.style.display === '') {
-                                progressContainer.style.display = 'block';
-                                console.log(`Barre ${currentTask} maintenant visible`);
-                                
-                                // Déclencher un redimensionnement après l'affichage d'un nouvel élément
-                                setTimeout(() => this.adjustWindowSize(), 150);
+        <script>
+        (function(){
+                        // Ajuster le thème en fonction des paramètres sauvegardés (BDD) dès que possible
+                        try {
+                            if (window.electronAPI && window.electronAPI.loadAppSettings) {
+                                window.electronAPI.loadAppSettings().then((res)=>{
+                                    const tRaw = res?.success && res.settings?.ui?.theme;
+                                    const t = (tRaw === 'dark') ? 'dark' : (tRaw === 'light') ? 'light' : null;
+                                    if (t) document.documentElement.setAttribute('data-theme', t);
+                                }).catch(()=>{});
                             }
-                        }
+                        } catch(_) {}
 
-                        const progressFill = document.getElementById(`progressFill-${currentTask}`);
-                        const progressPercent = document.getElementById(`progressPercent-${currentTask}`);
-                        
-                        if (progressFill) {
-                            progressFill.style.width = data.progress + '%';
-                        }
-                        if (progressPercent) {
-                            progressPercent.textContent = Math.round(data.progress) + '%';
-                        }
-                        
-                        console.log(`${currentTask} mis à jour: ${data.progress}%`);
+            const steps = ["configuration","connection","stats","categories","folders","vba","monitoring","weekly"]; // 8 étapes réelles
+            const total = steps.length;
+            const stepPercents = new Array(total).fill(0);
+            let fallbackTimer = null;
+            let gotRealEvents = false;
 
-                        // Si la tâche est terminée (100%), la transformer en validation
-                        if (data.progress >= 100) {
-                            this.completeTask(currentTask);
-                            // Redimensionner après la completion d'une tâche
-                            setTimeout(() => this.adjustWindowSize(), 200);
-                        }
-                    }
-                }
-            }
-            
-            updateAnalysisProgress(progressData) {
-                console.log('PowerShell Analysis progress:', progressData);
-                
-                // VÉRIFIER d'abord si la tâche monitoring est déjà complétée
-                const monitoringContainer = document.getElementById('progress-monitoring');
-                if (monitoringContainer && monitoringContainer.classList.contains('completed')) {
-                    console.log('Tâche monitoring déjà complétée, ignorer les mises à jour supplémentaires');
-                    return; // Ignorer toutes les mises à jour après complétion
-                }
-                
-                // UTILISER la barre "monitoring" au lieu d'une barre séparée "analysis"
-                // car l'analyse PowerShell fait partie du monitoring automatique
-                if (monitoringContainer) {
-                    // Si c'est la première fois qu'on affiche cette barre, l'initialiser à 0%
-                    if (monitoringContainer.style.display === 'none' || monitoringContainer.style.display === '') {
-                        monitoringContainer.style.display = 'block';
-                        
-                        const progressFill = document.getElementById('progressFill-monitoring');
-                        const progressPercent = document.getElementById('progressPercent-monitoring');
-                        
-                        if (progressFill) {
-                            progressFill.style.width = '0%';
-                        }
-                        if (progressPercent) {
-                            progressPercent.textContent = '0%';
-                        }
-                        
-                        console.log('Barre monitoring initialisée à 0% pour analyse PowerShell');
-                    }
-                }
-                
-                // Mettre à jour le message principal avec les détails de l'analyse
-                const loadingDetails = document.getElementById('loadingDetails');
-                if (loadingDetails && progressData.message) {
-                    // Extraire les informations importantes du message PowerShell
-                    let cleanMessage = progressData.message
-                        .replace(/.*: /, '') // Enlever le préfixe timestamp
-                        .replace(/\[PROGRESS\]/, '')
-                        .replace(/\[GLOBAL\]/, '')
-                        .replace(/\[BATCH\]/, '')
-                        .replace(/\[PERIODE\]/, '')
-                        .replace(/\[ADAPTIVE\]/, '')
-                        .replace(/\[STATS\]/, '')
-                        .replace(/\[TERMINE\]/, '')
-                        .trim();
-                    
-                    // Nettoyer les caractères d'échappement PowerShell
-                    cleanMessage = cleanMessage
-                        .replace(/´┐¢/g, 'é')
-                        .replace(/├®/g, 'è')
-                        .replace(/├á/g, 'à')
-                        .replace(/├®/g, 'è');
-                    
-                    // Messages spéciaux pour l'adaptation
-                    if (progressData.message.includes('[ADAPTIVE]')) {
-                        if (progressData.message.includes('Extension')) {
-                            cleanMessage = '🔄 Adaptation: Extension de période (volume faible)';
-                        } else if (progressData.message.includes('Réduction')) {
-                            cleanMessage = '⚡ Adaptation: Réduction de période (volume élevé)';
-                        } else if (progressData.message.includes('optimal')) {
-                            cleanMessage = '✅ Adaptation: Période optimale maintenue';
-                        }
-                    }
-                    
-                    loadingDetails.textContent = `${progressData.folder}: ${cleanMessage}`;
-                }
-                
-                // Extraire le pourcentage de progression si disponible
-                if (progressData.message.includes('[') && progressData.message.includes('%]')) {
-                    const percentMatch = progressData.message.match(/\[([0-9.]+)%\]/);
-                    if (percentMatch) {
-                        const percent = parseFloat(percentMatch[1]);
-                        
-                        // Vérifier encore une fois que la tâche n'est pas déjà complétée
-                        const monitoringContainer = document.getElementById('progress-monitoring');
-                        if (monitoringContainer && monitoringContainer.classList.contains('completed')) {
-                            console.log('Tâche monitoring déjà complétée, ignorer mise à jour progression');
-                            return;
-                        }
-                        
-                        // Mettre à jour la barre MONITORING avec le pourcentage PowerShell
-                        const progressFill = document.getElementById('progressFill-monitoring');
-                        const progressPercent = document.getElementById('progressPercent-monitoring');
-                        
-                        if (progressFill) {
-                            progressFill.style.width = percent + '%';
-                        }
-                        if (progressPercent) {
-                            progressPercent.textContent = percent + '%';
-                        }
-                        
-                        console.log(`Barre monitoring mise à jour: ${percent}%`);
-                        
-                        // Si terminé (proche de 100% ou message de fin), compléter UNE SEULE FOIS
-                        if (percent >= 95 || progressData.message.includes('[TERMINE]')) {
-                            console.log('Complétion de la tâche monitoring...');
-                            this.completeTask('monitoring');
-                        }
-                    }
-                }
-                
-                // Détecter les messages de fin ou d'optimisation
-                if (progressData.message.includes('[TERMINE]') || progressData.message.includes('TOTAL:')) {
-                    // Vérifier encore une fois que la tâche n'est pas déjà complétée
-                    const monitoringContainer = document.getElementById('progress-monitoring');
-                    if (monitoringContainer && !monitoringContainer.classList.contains('completed')) {
-                        console.log('Message TERMINE détecté, complétion de la tâche monitoring...');
-                        this.completeTask('monitoring');
-                    }
-                }
-                
-                // Détecter les messages d'adaptation pour montrer l'optimisation en cours
-                if (progressData.message.includes('[ADAPTIVE]')) {
-                    const monitoringLabel = document.getElementById('label-monitoring');
-                    if (monitoringLabel) {
-                        const span = monitoringLabel.querySelector('span');
-                        if (span) {
-                            if (progressData.message.includes('Extension')) {
-                                span.textContent = 'Monitoring automatique (extension période)';
-                            } else if (progressData.message.includes('Réduction')) {
-                                span.textContent = 'Monitoring automatique (optimisation volume)';
-                            } else if (progressData.message.includes('optimal')) {
-                                span.textContent = 'Monitoring automatique (période optimale)';
-                            }
-                        }
-                    }
-                }
+            const qs = id => document.getElementById(id);
+            const clamp = (v,min=0,max=100)=>Math.max(min,Math.min(max,v));
+            const setStatus = (msg) => { const s = qs('status'); if (s) s.firstElementChild.textContent = msg; };
+
+            const setTaskPct = (name, pct) => {
+                const fill = qs(`fill-${name}`);
+                const label = qs(`pct-${name}`);
+                if (fill) fill.style.width = clamp(pct) + '%';
+                if (label) label.textContent = Math.round(clamp(pct)) + '%';
+            };
+
+            const setOverallPct = (pct) => {
+                const overallFill = qs('fill-overall');
+                const overallText = qs('overall-percent');
+                const val = Math.round(clamp(pct));
+                if (overallFill) overallFill.style.width = val + '%';
+                if (overallText) overallText.textContent = val + '%';
+            };
+
+            const recomputeOverall = () => {
+                const sum = stepPercents.reduce((a,b)=>a+b,0);
+                const overall = sum / total; // moyenne simple
+                setOverallPct(overall);
+                adjustSize();
+            };
+
+            function adjustSize(){
+                if (!window.electronAPI || !window.electronAPI.resizeToContent) return;
+                const w = Math.ceil(qs('wrap').getBoundingClientRect().width + 24);
+                const h = Math.ceil(qs('wrap').getBoundingClientRect().height + 24);
+                const W = Math.max(420, Math.min(700, w));
+                const H = Math.max(240, Math.min(560, h));
+                window.electronAPI.resizeToContent(W, H);
             }
 
-            completeTask(taskName) {
-                const progressContainer = document.getElementById(`progress-${taskName}`);
-                const progressFill = document.getElementById(`progressFill-${taskName}`);
-                const progressPercent = document.getElementById(`progressPercent-${taskName}`);
-                const progressBar = document.getElementById(`bar-${taskName}`);
-                const progressLabel = document.getElementById(`label-${taskName}`);
-                
-                if (!progressContainer) return;
-
-                // Marquer comme complété visuellement
-                progressContainer.classList.add('completed');
-                
-                if (progressFill) {
-                    progressFill.style.width = '100%';
-                    progressFill.classList.add('completed');
-                }
-                
-                if (progressPercent) {
-                    progressPercent.classList.add('completed');
-                }
-                
-                if (progressBar) {
-                    progressBar.classList.add('completed');
-                }
-                
-                if (progressLabel) {
-                    progressLabel.classList.add('completed');
-                }
-
-                // Animation de transformation
-                setTimeout(() => {
-                    if (progressPercent) {
-                        progressPercent.style.display = 'none';
-                    }
-                }, 500);
-            }
-
-
-
-            // Nouvelle méthode pour compléter le processus de chargement
-            complete() {
-                console.log('Loading completed - Enhanced version');
-                
-                // Annuler le timer de fallback si il existe
-                if (this.fallbackTimer) {
-                    clearTimeout(this.fallbackTimer);
-                    this.fallbackTimer = null;
-                }
-                
-                // Marquer toutes les étapes comme complétées
-                this.steps.forEach(stepId => {
-                    const stepEl = document.getElementById(stepId);
-                    if (stepEl) {
-                        stepEl.classList.remove('active');
-                        stepEl.classList.add('completed');
-                        const icon = stepEl.querySelector('.status-icon');
-                        if (icon) {
-                            icon.textContent = '✅';
+            // IPC wiring
+            if (window.electronAPI){
+                window.electronAPI.onLoadingProgress?.((data)=>{
+                    gotRealEvents = true; if (fallbackTimer){ clearTimeout(fallbackTimer); fallbackTimer = null; }
+                    if (data?.message) setStatus(data.message);
+                    if (typeof data?.step === 'number' && typeof data?.progress === 'number'){
+                        const idx = data.step;
+                        if (idx >= 0 && idx < total){
+                            const name = steps[idx];
+                            setTaskPct(name, data.progress); // invisible UI but kept for debug
+                            stepPercents[idx] = clamp(data.progress);
+                            recomputeOverall();
                         }
                     }
                 });
 
-                this.completedTasks = this.totalTasks;
-                this.updateCounters();
-
-                // Message de finalisation avec design amélioré
-                const loadingDetails = document.getElementById('loadingDetails');
-                if (loadingDetails) {
-                    const elapsed = Math.round((Date.now() - this.startTime) / 1000);
-                    loadingDetails.innerHTML = `
-                        <div style="text-align: center; padding: 20px;">
-                            <div style="font-size: 24px; color: #28a745; margin-bottom: 10px;">
-                                ✅ Initialisation réussie!
-                            </div>
-                            <div style="color: #6c757d; font-size: 14px;">
-                                Toutes les tâches terminées en ${elapsed}s
-                            </div>
-                            <div style="margin-top: 15px; color: #007bff; font-size: 13px;">
-                                Redirection vers l'application...
-                            </div>
-                        </div>
-                    `;
-                }
-
-                // Effet de réussite sur la barre de progression
-                const progressFill = document.getElementById('progressFill');
-                if (progressFill) {
-                    progressFill.style.width = '100%';
-                    progressFill.style.background = 'linear-gradient(90deg, #28a745, #20c997)';
-                    progressFill.style.transition = 'all 0.5s ease';
-                }
-
-                // Animation de célébration (optionnelle)
-                this.playSuccessAnimation();
-
-                // Rediriger vers l'application principale après un délai
-                setTimeout(() => {
-                    if (window.electronAPI && window.electronAPI.closeLoadingWindow) {
-                        window.electronAPI.closeLoadingWindow();
-                    } else {
-                        // Fallback si l'API n'est pas disponible
-                        window.location.href = 'index.html';
-                    }
-                }, 2000);
-            }
-
-            // Méthode de simulation de chargement en fallback
-            simulateProgress() {
-                console.log('🔄 Démarrage de la simulation de chargement...');
-                
-                const taskNames = ['environment', 'outlook', 'mailboxes', 'folders', 'monitoring', 'analysis'];
-                const messages = [
-                    'Vérification de l\'environnement système...',
-                    'Connexion à Outlook...',
-                    'Analyse des boîtes mail...',
-                    'Exploration de la structure des dossiers...',
-                    'Configuration du monitoring automatique...',
-                    'Analyse des emails existants...'
-                ];
-                
-                let currentTaskIndex = 0;
-                
-                const processNextTask = () => {
-                    if (currentTaskIndex >= taskNames.length) {
-                        // Simulation terminée, marquer comme complétée
-                        console.log('✅ Simulation de chargement terminée');
-                        setTimeout(() => this.complete(), 1000);
-                        return;
-                    }
-                    
-                    const taskName = taskNames[currentTaskIndex];
-                    const message = messages[currentTaskIndex];
-                    
-                    // Afficher la barre de progression pour cette tâche
-                    const progressContainer = document.getElementById(`progress-${taskName}`);
-                    if (progressContainer) {
-                        progressContainer.style.display = 'block';
-                        this.adjustWindowSize();
-                    }
-                    
-                    // Mettre à jour le message
-                    const loadingDetails = document.getElementById('loadingDetails');
-                    if (loadingDetails) {
-                        loadingDetails.textContent = message;
-                    }
-                    
-                    // Animer la progression de 0 à 100%
-                    this.startTaskProgress(taskName);
-                    
-                    // Passer à la tâche suivante après la progression
-                    setTimeout(() => {
-                        currentTaskIndex++;
-                        processNextTask();
-                    }, 3000); // 3 secondes par tâche
-                };
-                
-                // Démarrer la première tâche
-                processNextTask();
-            }
-
-            playSuccessAnimation() {
-                // Animation simple de pulsation pour la barre de progression
-                const progressContainer = document.querySelector('.progress-container');
-                if (progressContainer) {
-                    progressContainer.style.animation = 'pulse 0.6s ease-in-out';
-                    setTimeout(() => {
-                        progressContainer.style.animation = '';
-                    }, 600);
-                }
-            }
-
-            // Méthode améliorée pour gérer les erreurs avec plus de détails
-            showError(error) {
-                console.error('Loading error - Enhanced version:', error);
-                this.isError = true;
-
-                // Marquer l'étape actuelle comme en erreur
-                if (this.currentStep < this.steps.length) {
-                    const currentStepEl = document.getElementById(this.steps[this.currentStep]);
-                    if (currentStepEl) {
-                        currentStepEl.classList.remove('active');
-                        currentStepEl.classList.add('error');
-                        const icon = currentStepEl.querySelector('.status-icon');
-                        if (icon) {
-                            icon.textContent = '❌';
-                        }
-                    }
-                }
-
-                // Afficher le message d'erreur avec plus de détails
-                const loadingDetails = document.getElementById('loadingDetails');
-                if (loadingDetails) {
-                    const errorMessage = error.message || error || 'Erreur inconnue';
-                    loadingDetails.innerHTML = `
-                        <div style="text-align: center; padding: 20px;">
-                            <div style="font-size: 20px; color: #dc3545; margin-bottom: 10px;">
-                                ❌ Erreur d'initialisation
-                            </div>
-                            <div style="color: #6c757d; font-size: 14px; margin-bottom: 15px;">
-                                ${errorMessage}
-                            </div>
-                            <div style="color: #007bff; font-size: 13px;">
-                                Cliquez sur "Réessayer" pour relancer l'initialisation
-                            </div>
-                        </div>
-                    `;
-                }
-
-                // Modifier la barre de progression pour indiquer l'erreur
-                const progressFill = document.getElementById('progressFill');
-                if (progressFill) {
-                    progressFill.style.background = 'linear-gradient(90deg, #dc3545, #ff6b6b)';
-                }
-
-                // Afficher le bouton de retry avec style amélioré
-                const retryButton = document.getElementById('retryButton');
-                if (retryButton) {
-                    retryButton.style.display = 'inline-block';
-                    retryButton.style.animation = 'fadeIn 0.3s ease-in';
-                }
-            }
-
-            // Méthode améliorée pour redémarrer avec reset complet
-            retry() {
-                console.log('Retrying loading process - Enhanced version');
-                
-                // Réinitialiser l'état
-                this.isError = false;
-                this.currentStep = 0;
-                this.completedTasks = 0;
-                this.startTime = Date.now();
-                this.taskProgress.clear();
-
-                // Réinitialiser l'affichage avec animations
-                this.steps.forEach(stepId => {
-                    const stepEl = document.getElementById(stepId);
-                    if (stepEl) {
-                        stepEl.classList.remove('active', 'completed', 'error');
-                        const icon = stepEl.querySelector('.status-icon');
-                        if (icon) {
-                            icon.textContent = '⏳';
-                        }
+                window.electronAPI.onTaskProgress?.(({taskId, description, completed, error})=>{
+                    if (description) setStatus(description);
+                    const idx = steps.indexOf(taskId);
+                    if (idx !== -1){
+                        setTaskPct(taskId, completed && !error ? 100 : stepPercents[idx]);
+                        if (completed && !error) stepPercents[idx] = 100;
+                        recomputeOverall();
                     }
                 });
 
-                // Réinitialiser la barre de progression
-                const progressFill = document.getElementById('progressFill');
-                if (progressFill) {
-                    progressFill.style.width = '0%';
-                    progressFill.style.background = 'linear-gradient(90deg, #007bff, #17a2b8)';
-                    progressFill.style.transition = 'width 0.3s ease';
-                }
-
-                // Message de redémarrage
-                const loadingDetails = document.getElementById('loadingDetails');
-                if (loadingDetails) {
-                    loadingDetails.innerHTML = `
-                        <div style="text-align: center; color: #007bff;">
-                            🔄 Redémarrage de l'initialisation...
-                        </div>
-                    `;
-                }
-
-                // Cacher le bouton retry avec animation
-                const retryButton = document.getElementById('retryButton');
-                if (retryButton) {
-                    retryButton.style.animation = 'fadeOut 0.3s ease-out';
-                    setTimeout(() => {
-                        retryButton.style.display = 'none';
-                        retryButton.style.animation = '';
-                    }, 300);
-                }
-
-                // Redémarrer le processus
-                setTimeout(() => {
-                    if (window.electronAPI && window.electronAPI.retryLoading) {
-                        window.electronAPI.retryLoading();
-                    } else {
-                        this.startAutoProgress();
+                // Utiliser la zone de statut pour les messages PowerShell
+                window.electronAPI.onPowerShellAnalysisProgress?.((ps)=>{
+                    if (ps?.message){
+                        let msg = ps.message.replace(/.*: /,'')
+                            .replace(/\[(PROGRESS|GLOBAL|BATCH|PERIODE|ADAPTIVE|STATS|TERMINE)\]/g,'').trim();
+                        msg = msg.replace(/´┐¢/g,'é').replace(/├®/g,'è').replace(/├á/g,'à');
+                        setStatus(`${ps.folder ? ps.folder+': ' : ''}${msg}`);
                     }
-                }, 500);
-            }
-        }
 
-        // Initialiser le gestionnaire de chargement
-        document.addEventListener('DOMContentLoaded', () => {
-            // Effet d'entrée animé
-            const container = document.getElementById('loadingContainer');
-            container.style.opacity = '0';
-            container.style.transform = 'scale(0.8) translateY(50px)';
-            
-            setTimeout(() => {
-                container.style.transition = 'all 0.8s cubic-bezier(0.4, 0, 0.2, 1)';
-                container.style.opacity = '1';
-                container.style.transform = 'scale(1) translateY(0)';
-            }, 100);
-            
-            // Initialiser le gestionnaire de chargement
-            const loadingManager = new LoadingManager();
-        });
+                    const m = ps?.message && ps.message.match(/\[([0-9.]+)%\]/);
+                    if (m){
+                        const p = Math.min(100, parseFloat(m[1]));
+                        // map sur "monitoring"
+                        const idx = steps.indexOf('monitoring');
+                        if (idx !== -1){ stepPercents[idx] = p; setTaskPct('monitoring', p); recomputeOverall(); }
+                    }
+                });
+
+                window.electronAPI.onLoadingComplete?.(()=>{
+                    for (let i=0;i<total;i++){ stepPercents[i] = 100; setTaskPct(steps[i], 100); }
+                    recomputeOverall();
+                    setStatus('Initialisation terminée. Ouverture…');
+                    setTimeout(()=>{ window.electronAPI.closeLoadingWindow ? window.electronAPI.closeLoadingWindow() : window.location.replace('index.html'); }, 700);
+                });
+
+                window.electronAPI.onLoadingError?.((err)=>{
+                    const btn = qs('retry');
+                    setStatus(`Erreur: ${(err && (err.message||err)) || 'inconnue'}`);
+                    btn.style.display = 'inline-block';
+                    btn.onclick = ()=>{
+                        btn.style.display='none'; setStatus('Relance…');
+                        for (let i=0;i<total;i++){ stepPercents[i] = 0; setTaskPct(steps[i], 0); }
+                        setOverallPct(0);
+                        window.electronAPI.retryLoading ? window.electronAPI.retryLoading() : startFallback();
+                    };
+                    adjustSize();
+                });
+            }
+
+            // Fallback simulation si aucun événement n'arrive
+            function startFallback(){
+                let i = 0; const tick = ()=>{
+                    if (i>=steps.length){ setTimeout(()=>finishFallback(), 400); return; }
+                    const name = steps[i];
+                    let p = 0; const iv = setInterval(()=>{
+                        p += 18+Math.random()*10;
+                        p = Math.min(100,p);
+                        setTaskPct(name, p);
+                        stepPercents[i] = p;
+                        recomputeOverall();
+                        if (p>=100){ clearInterval(iv); i++; setTimeout(tick, 180); }
+                    }, 140);
+                }; tick();
+            }
+            function finishFallback(){ for (let i=0;i<total;i++){ stepPercents[i]=100; setTaskPct(steps[i],100);} recomputeOverall(); setStatus('Initialisation terminée. Ouverture…'); setTimeout(()=>window.location.replace('index.html'), 650); }
+
+            // Armer le fallback seulement si aucun événement réel rapidement
+            fallbackTimer = setTimeout(()=>{ if (!gotRealEvents) startFallback(); }, 1400);
+
+            // Initial
+            setOverallPct(0);
+            setTimeout(adjustSize, 120);
+        })();
     </script>
 </body>
 </html>

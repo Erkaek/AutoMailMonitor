@@ -574,12 +574,17 @@ try {
     
     const folders = Array.from(this.monitoredFolders.keys()).map(path => `"${path}"`).join(',\n      ');
     
-    const scriptContent = `
+  const scriptContent = `
 # Script de polling intelligent Outlook - DÉTECTION CHANGEMENTS EN TEMPS RÉEL
 # Surveille les modifications d'emails avec vérification des lastModificationTime
 
 $ErrorActionPreference = "SilentlyContinue"
 $DebugPreference = "SilentlyContinue"
+
+# Force UTF-8 output to preserve accents/diacritics
+$enc = New-Object System.Text.UTF8Encoding $false
+[Console]::OutputEncoding = $enc
+$OutputEncoding = $enc
 
 # Configuration
 $PollIntervalSeconds = 2  # Vérification toutes les 2 secondes

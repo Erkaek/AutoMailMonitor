@@ -1349,11 +1349,12 @@ class UnifiedMonitoringService extends EventEmitter {
      * Traitement parallèle d'un batch
      */
     async processBatchParallel(emails, folder) {
-        // Correction: garantir que le sujet n'est jamais null ou vide pour chaque email du batch
+        // Normaliser le sujet pour chaque email (les scripts COM/PS fournissent souvent "Subject")
         const correctedEmails = emails.map(emailData => {
-            if (!emailData.subject || typeof emailData.subject !== 'string' || emailData.subject.trim() === '') {
-                emailData.subject = '(Sans objet)';
-            }
+            // Prélever depuis plusieurs sources possibles
+            const rawSubject = (emailData.subject ?? emailData.Subject ?? emailData.ConversationTopic ?? '').toString();
+            const normalized = rawSubject.trim() !== '' ? rawSubject : '(Sans objet)';
+            emailData.subject = normalized;
             return emailData;
         });
         const promises = correctedEmails.map(emailData => this.processEmailOptimized(emailData, folder));
@@ -1450,10 +1451,9 @@ class UnifiedMonitoringService extends EventEmitter {
      */
     async addEmail(emailData, folder) {
         try {
-            // Correction: garantir que le sujet n'est jamais null ou vide
-            if (!emailData.subject || typeof emailData.subject !== 'string' || emailData.subject.trim() === '') {
-                emailData.subject = '(Sans objet)';
-            }
+            // Normaliser le sujet (compat: Subject/subject/ConversationTopic)
+            const rawSubject = (emailData.subject ?? emailData.Subject ?? emailData.ConversationTopic ?? '').toString();
+            emailData.subject = rawSubject.trim() !== '' ? rawSubject : '(Sans objet)';
             
             // Formatter les données pour la base de données
             const emailRecord = {
@@ -1484,10 +1484,9 @@ class UnifiedMonitoringService extends EventEmitter {
      */
     async updateEmail(emailData, folder) {
         try {
-            // Correction: garantir que le sujet n'est jamais null ou vide
-            if (!emailData.subject || typeof emailData.subject !== 'string' || emailData.subject.trim() === '') {
-                emailData.subject = '(Sans objet)';
-            }
+            // Normaliser le sujet (compat: Subject/subject/ConversationTopic)
+            const rawSubject = (emailData.subject ?? emailData.Subject ?? emailData.ConversationTopic ?? '').toString();
+            emailData.subject = rawSubject.trim() !== '' ? rawSubject : '(Sans objet)';
             
             // Formatter les données pour la mise à jour
             const updateData = {
@@ -2316,6 +2315,9 @@ class UnifiedMonitoringService extends EventEmitter {
      */
     async handleRealtimeNewEmail(emailData) {
         try {
+            // Normaliser le sujet pour la persistance
+            const rawSubjectRT = (emailData.subject ?? emailData.Subject ?? emailData.ConversationTopic ?? '').toString();
+            emailData.subject = rawSubjectRT.trim() !== '' ? rawSubjectRT : '(Sans objet)';
             this.log(`📧 Nouvel email détecté: ${emailData.subject}`, 'REALTIME');
             
             // Trouver la configuration du dossier

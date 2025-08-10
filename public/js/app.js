@@ -21,11 +21,16 @@ class MailMonitor {
       recentEmails: [],
       databaseStats: {},
       lastUpdate: null,
+  currentWeekInfo: null,
       weeklyHistory: {
         page: 1,
   pageSize: 5,
         totalWeeks: 0,
         totalPages: 1
+      },
+      ui: {
+  foldersSort: 'alpha', // 'alpha' | 'unread'
+  theme: 'light' // 'light' | 'dark'
       }
     };
     
@@ -49,6 +54,21 @@ class MailMonitor {
     console.log('🚀 Initialisation de Mail Monitor...');
     
     try {
+      // Injecter la version app dans le footer (source: app.getVersion)
+      try {
+        const ver = (window.electronAPI && await window.electronAPI.getAppVersion()) || null;
+        const el = document.getElementById('app-version');
+        if (el && ver) el.textContent = `v${ver}`;
+      } catch {}
+      // Appliquer le dernier thème connu immédiatement (fallback rapide) avant l'UI
+      try {
+        const t = localStorage.getItem('uiTheme');
+        if (t === 'dark' || t === 'light') {
+          document.body?.setAttribute('data-theme', t);
+          this.state.ui.theme = t;
+        }
+      } catch(_) {}
+
       // Démarrer le gestionnaire de chargement
       this.startLoading();
       
@@ -87,12 +107,46 @@ class MailMonitor {
       
       // Terminer le chargement
       this.finishLoading();
+
+      // Sidebar responsive: appliquer et binder
+      try {
+        this.applyResponsiveSidebar();
+        this.bindSidebarToggle();
+        window.addEventListener('resize', () => this.applyResponsiveSidebar());
+      } catch(_) {}
       
       console.log('✅ MailMonitor app initialisée avec succès');
     } catch (error) {
       console.error('❌ Erreur lors de l\'initialisation:', error);
       this.showNotification('Erreur d\'initialisation', error.message, 'danger');
       this.finishLoading();
+    }
+  }
+
+  // ---------- Sidebar responsive ----------
+  bindSidebarToggle() {
+    const toggle = (e) => {
+      if (e) e.preventDefault();
+      const body = document.body;
+      const collapsed = body.classList.toggle('sidebar-collapsed');
+      try { localStorage.setItem('sidebarCollapsed', collapsed ? '1' : '0'); } catch(_) {}
+    };
+    const burger = document.getElementById('sidebar-burger');
+    if (burger) burger.addEventListener('click', toggle);
+    const fab = document.getElementById('sidebar-fab');
+    if (fab) fab.addEventListener('click', toggle);
+  }
+
+  applyResponsiveSidebar() {
+    const body = document.body;
+    const w = window.innerWidth || document.documentElement.clientWidth;
+    let pref = null;
+    try { pref = localStorage.getItem('sidebarCollapsed'); } catch(_) {}
+    if (pref === '1') body.classList.add('sidebar-collapsed');
+    else if (pref === '0') body.classList.remove('sidebar-collapsed');
+    else {
+      if (w < 1100) body.classList.add('sidebar-collapsed');
+      else body.classList.remove('sidebar-collapsed');
     }
   }
 
@@ -486,8 +540,6 @@ class MailMonitor {
     const element = document.getElementById(elementId);
     if (element) {
       element.textContent = content;
-    } else {
-      console.warn(`⚠️ Élément avec ID '${elementId}' non trouvé`);
     }
   }
 
@@ -497,7 +549,6 @@ class MailMonitor {
   updateLastRefreshTime() {
     const now = new Date();
     const timeString = now.toLocaleTimeString('fr-FR');
-    this.updateElement('last-update', timeString);
     this.updateElement('last-sync', timeString);
   }
 
@@ -579,6 +630,43 @@ class MailMonitor {
       });
     });
     
+    // Tri dossiers (dashboard)
+    document.getElementById('sort-folders-alpha')?.addEventListener('click', () => {
+      this.state.ui.foldersSort = 'alpha';
+      document.getElementById('sort-folders-alpha')?.classList.add('active');
+      document.getElementById('sort-folders-unread')?.classList.remove('active');
+      // Re-render sans refetch
+      this.updateFoldersStatsDisplay(this._lastFoldersItems || []);
+    });
+    document.getElementById('sort-folders-unread')?.addEventListener('click', () => {
+      this.state.ui.foldersSort = 'unread';
+      document.getElementById('sort-folders-unread')?.classList.add('active');
+      document.getElementById('sort-folders-alpha')?.classList.remove('active');
+      this.updateFoldersStatsDisplay(this._lastFoldersItems || []);
+    });
+
+    // Bascule de thème (soleil/lune)
+    const themeToggle = document.getElementById('theme-toggle');
+    const themeToggleIcon = document.getElementById('theme-toggle-icon');
+    const themeToggleLabel = document.getElementById('theme-toggle-label');
+    const syncToggleUI = (theme) => {
+      if (!themeToggleIcon || !themeToggleLabel) return;
+      const isDark = theme === 'dark';
+      themeToggleIcon.className = isDark ? 'bi bi-moon' : 'bi bi-sun';
+      themeToggleLabel.textContent = isDark ? 'Sombre' : 'Clair';
+    };
+    if (themeToggle) {
+      themeToggle.addEventListener('click', async () => {
+        const current = this.state?.ui?.theme === 'dark' ? 'dark' : 'light';
+        const next = current === 'dark' ? 'light' : 'dark';
+        this.applyTheme(next);
+        syncToggleUI(next);
+        await this.persistTheme(next);
+  // Recolor charts if present
+  try { await this.loadPersonalPerformance?.(); } catch(_) {}
+      });
+    }
+
     // Paramètres
     document.getElementById('settings-form')?.addEventListener('submit', (e) => this.saveSettings(e));
     document.getElementById('reset-settings')?.addEventListener('click', () => this.resetSettings());
@@ -828,17 +916,99 @@ class MailMonitor {
     try {
       console.log('📁 Chargement statistiques dossiers...');
       
-      // Récupérer les données des dossiers avec leurs emails
-      const foldersData = await window.electronAPI.getFoldersTree();
-      
-      if (foldersData && foldersData.folders) {
-        this.updateFoldersStatsDisplay(foldersData.folders);
-        
-        // Mettre à jour le badge total
-        const totalFoldersEl = document.getElementById('total-folders-badge');
-        if (totalFoldersEl) {
-          totalFoldersEl.textContent = `${foldersData.folders.length} dossier${foldersData.folders.length > 1 ? 's' : ''}`;
+      // Récupérer l'arborescence complète puis réduire aux dossiers surveillés (plus pertinent et compact)
+      const [foldersData, dbFolderStatsResp] = await Promise.all([
+        window.electronAPI.getFoldersTree(),
+        window.electronAPI.getFolderStats?.().catch(() => null)
+      ]);
+
+      // Index des stats DB par chemin (normalisé)
+      const dbStats = (dbFolderStatsResp && (dbFolderStatsResp.stats || dbFolderStatsResp)) || [];
+      const toKey = (s) => (s || '').toLowerCase();
+      const statsByPath = new Map();
+      if (Array.isArray(dbStats)) {
+        for (const row of dbStats) {
+          const p = toKey(row.path || row.folder_name);
+          if (p) statsByPath.set(p, row);
         }
+      }
+
+      const monitoredConfigs = this.state.folderCategories || {};
+      const monitoredPaths = Object.keys(monitoredConfigs);
+
+      let items = [];
+
+      if (foldersData && Array.isArray(foldersData.folders) && foldersData.folders.length > 0) {
+        // Filtrer l'arbre pour ne conserver que les dossiers surveillés
+        const lc = (s) => (s || '').toLowerCase();
+        const monitoredLc = monitoredPaths.map(p => lc(p));
+
+        items = foldersData.folders
+          .filter(f => {
+            const fPath = lc(f.path || f.FolderPath || f.Path || '');
+            if (!fPath) return false;
+            return monitoredLc.some(mp => fPath === mp || fPath.endsWith(mp));
+          })
+          .map(f => {
+            const fPath = f.path || f.FolderPath || f.Path || '';
+            // Récupérer la config surveillée correspondante
+            const matchKey = monitoredPaths.find(p => lc(fPath) === lc(p) || lc(fPath).endsWith(lc(p))) || fPath;
+            const cfg = monitoredConfigs[matchKey] || {};
+            const name = f.name || cfg.name || this.extractFolderName(fPath) || 'Dossier';
+            const category = cfg.category || f.category || '';
+            // Comptages robustes (valeurs natives Outlook > fallback emails récents)
+            // Support multiple possible property names from Outlook/PowerShell shapes
+            const totalRaw =
+              f.TotalItems ?? f.ItemsCount ?? f.TotalItemCount ?? f.ItemCount ?? f.Count ?? f.total ?? f.totalEmails ?? f.emailCount;
+            let unreadRaw =
+              f.UnReadItemCount ?? f.UnreadItemCount ?? f.UnreadCount ?? f.unreadCount ?? f.UnreadItems ?? f.unreadItems ?? f.unread ?? f.unreadEmails;
+
+            // Fusionner avec la BDD si pas de compteur non lus côté Outlook
+            if (!(Number.isFinite(+unreadRaw))) {
+              const db = statsByPath.get(toKey(fPath))
+                || statsByPath.get(toKey(this.extractFolderName(fPath)))
+                || [...statsByPath.entries()].find(([k]) => toKey(fPath).endsWith(k))?.[1];
+              if (db && Number.isFinite(+db.unreadCount)) {
+                unreadRaw = +db.unreadCount;
+              }
+            }
+
+            const counts = this._computeFolderCounts({
+              total: totalRaw,
+              unread: unreadRaw,
+              path: fPath,
+              name
+            });
+            return { name, path: fPath, category, total: counts.total, unread: counts.unread };
+          });
+      }
+
+      // Fallback: s'il n'y a pas d'arborescence, construire depuis la configuration surveillée
+      if ((!items || items.length === 0) && monitoredPaths.length > 0) {
+        items = monitoredPaths.map(p => {
+          const cfg = monitoredConfigs[p] || {};
+          const name = cfg.name || this.extractFolderName(p) || 'Dossier';
+          // Essayer de récupérer d'abord depuis la BDD
+          const db = statsByPath.get(toKey(p))
+            || statsByPath.get(toKey(name))
+            || [...statsByPath.entries()].find(([k]) => toKey(p).endsWith(k))?.[1];
+          let total = Number.isFinite(+db?.emailCount) ? +db.emailCount : null;
+          let unread = Number.isFinite(+db?.unreadCount) ? +db.unreadCount : null;
+          const counts = this._computeFolderCounts({ path: p, name, total, unread });
+          return { name, path: p, category: cfg.category || '', total: counts.total, unread: counts.unread };
+        });
+      }
+
+  // Conserver les items pour re-render local
+  this._lastFoldersItems = items || [];
+  // Mise à jour de l'affichage (compact)
+  this.updateFoldersStatsDisplay(this._lastFoldersItems);
+
+      // Mettre à jour le badge total (affichage courant)
+      const totalFoldersEl = document.getElementById('total-folders-badge');
+      if (totalFoldersEl) {
+        const n = items?.length || 0;
+        totalFoldersEl.textContent = `${n} dossier${n > 1 ? 's' : ''}`;
       }
       
     } catch (error) {
@@ -861,43 +1031,51 @@ class MailMonitor {
       `;
       return;
     }
-    
-    // Générer les cartes pour chaque dossier avec attributs stables pour MAJ ciblées
-    const foldersHtml = folders.map(folder => {
-      const categoryColor = this.getCategoryColor(folder.category);
-      const categoryIcon = this.getCategoryIcon(folder.category);
-      const readEmails = folder.emailCount || 0;  // Tous les emails pour ce dossier
-      const domId = `folderStat-${(folder.path || folder.name || Math.random()).toString().replace(/[^a-zA-Z0-9_-]/g, '')}`;
-      
+
+    // Préparer données triées selon préférence utilisateur (par défaut: alphabétique)
+    const safeFolders = folders.map(f => ({
+      name: f.name || 'Dossier',
+      path: f.path || '',
+      category: f.category || '',
+      total: Number.isFinite(+f.total) ? +f.total : 0,
+      unread: Number.isFinite(+f.unread) ? +f.unread : 0
+    }));
+
+    const sortMode = this.state?.ui?.foldersSort || 'alpha';
+    const sorted = safeFolders.sort((a, b) => {
+      if (sortMode === 'unread') {
+        const du = (b.unread || 0) - (a.unread || 0);
+        if (du !== 0) return du;
+      }
+      const an = (a.name || '').toString();
+      const bn = (b.name || '').toString();
+      return an.localeCompare(bn, 'fr', { sensitivity: 'base', numeric: true });
+    });
+
+  // Rendu compact: éléments légers en grille
+    const html = sorted.map(f => {
+      const domId = `fold-${(f.path || f.name).toString().replace(/[^a-zA-Z0-9_-]/g, '')}`;
+      const catIcon = this.getCategoryIcon(f.category);
+      const catClass = this.getCategoryColor(f.category);
       return `
-        <div class="col-xl-3 col-lg-4 col-md-6">
-          <div class="folder-stat-card p-3 h-100" data-folder-key="${this.escapeHtml(folder.path || folder.name || '')}" id="${domId}">
-            <div class="d-flex align-items-center mb-2">
-              <i class="bi ${categoryIcon} ${categoryColor} fs-4 me-2"></i>
-              <h6 class="mb-0 fw-semibold">${this.escapeHtml(folder.name)}</h6>
-            </div>
-            <div class="row g-2 text-center">
-              <div class="col-6">
-                <div class="fs-4 fw-bold text-primary" data-field="total">${readEmails}</div>
-                <small class="text-muted">Total</small>
-              </div>
-              <div class="col-6">
-                <div class="fs-4 fw-bold text-warning" data-field="unread">0</div>
-                <small class="text-muted">Non lus</small>
+        <div class="col-12 col-md-6 col-lg-4">
+      <div class="d-flex justify-content-between align-items-center p-2 rounded border bg-surface" 
+               id="${domId}" data-folder-key="${this.escapeHtml(f.path || f.name)}">
+            <div class="d-flex align-items-center text-truncate" style="max-width: 70%;">
+              <span class="me-2 ${catClass}">${catIcon.startsWith('bi ') ? `<i class=\"bi ${catIcon}\"></i>` : this.escapeHtml(catIcon)}</span>
+              <div class="text-truncate">
+                <div class="fw-semibold text-truncate" title="${this.escapeHtml(f.name)}">${this.escapeHtml(f.name)}</div>
+                ${f.category ? `<small class="text-muted">${this.escapeHtml(f.category)}</small>` : ''}
               </div>
             </div>
-            <div class="mt-2">
-              <div class="d-flex justify-content-between align-items-center">
-                <small class="text-muted">${this.escapeHtml(folder.category)}</small>
-                <span class="badge bg-light text-dark">${folder.isMonitored ? 'Actif' : 'Inactif'}</span>
-              </div>
+            <div class="d-flex align-items-center gap-2 ms-2">
+              <span class="badge bg-warning text-dark" title="Non lus">${f.unread}</span>
             </div>
           </div>
-        </div>
-      `;
+        </div>`;
     }).join('');
-    
-    container.innerHTML = foldersHtml;
+
+    container.innerHTML = html;
   }
 
   // Méthodes utilitaires pour les catégories
@@ -906,6 +1084,7 @@ class MailMonitor {
       'Déclarations': 'text-danger',
       'Règlements': 'text-success', 
       'mails_simples': 'text-info',
+      'Mails simples': 'text-info',
       'test': 'text-secondary'
     };
     return colors[category] || 'text-muted';
@@ -916,9 +1095,34 @@ class MailMonitor {
       'Déclarations': 'bi-file-earmark-text',
       'Règlements': 'bi-credit-card',
       'mails_simples': 'bi-envelope',
+      'Mails simples': 'bi-envelope',
       'test': 'bi-folder'
     };
     return icons[category] || 'bi-folder';
+  }
+
+  // Calcule les compteurs d'un dossier (total / non lus) avec fallback sur les emails récents
+  _computeFolderCounts({ total, unread, path, name }) {
+    let t = Number.isFinite(+total) ? +total : null;
+    let u = Number.isFinite(+unread) ? +unread : null;
+
+    // If both are known, return immediately
+    if (t !== null && u !== null) return { total: t, unread: u };
+
+    // Fallback: derive missing piece from recent emails, but keep any known value
+    const emails = Array.isArray(this.state.recentEmails) ? this.state.recentEmails : [];
+    const toLc = (s) => (s || '').toLowerCase();
+    const pathLc = toLc(path);
+    const nameLc = toLc(name);
+    const byFolder = emails.filter(e => {
+      const eName = toLc(e.folder_name || e.Folder || '');
+      const ePath = toLc(e.folder_path || e.FolderPath || '');
+      return (ePath && (ePath === pathLc || ePath.endsWith(pathLc))) || (eName && eName === nameLc);
+    });
+
+    if (t === null) t = byFolder.length;
+    if (u === null) u = byFolder.filter(e => (!e.is_read && e.is_read !== undefined) || e.UnRead === true).length;
+    return { total: t || 0, unread: u || 0 };
   }
 
   async checkMonitoringStatus() {
@@ -955,7 +1159,14 @@ class MailMonitor {
       const mailboxes = await window.electronAPI.getMailboxes();
       
       if (!mailboxes.mailboxes || mailboxes.mailboxes.length === 0) {
-        this.showNotification('Aucune boîte mail', 'Impossible de récupérer les boîtes mail d\'Outlook', 'warning');
+        // Tentative: charger l'arborescence du Store par défaut
+        this.showNotification('Aucune boîte mail', 'Tentative de chargement de l\'arborescence du compte par défaut…', 'info');
+        const ok = await this.showDefaultFolderTreeModal();
+        if (!ok) {
+          // Fallback ultime: ajout manuel
+          this.showNotification('Aucune boîte mail', 'Impossible de charger l\'arborescence Outlook. Vous pouvez ajouter un dossier manuellement.', 'warning');
+          this.showManualAddFolderModal();
+        }
         return;
       }
 
@@ -965,6 +1176,202 @@ class MailMonitor {
       console.error('❌ Erreur récupération dossiers:', error);
       this.showNotification('Erreur', 'Impossible de récupérer la liste des dossiers', 'danger');
     }
+  }
+
+  // Fallback prioritaire: tenter d'afficher l'arbo du Store par défaut
+  async showDefaultFolderTreeModal() {
+    try {
+      // Nettoyer un ancien modal éventuel
+      const existingModal = document.getElementById('folderModal');
+      if (existingModal) existingModal.remove();
+
+      const modalHtml = `
+        <div class="modal fade" id="folderModal" tabindex="-1">
+          <div class="modal-dialog modal-lg">
+            <div class="modal-content">
+              <div class="modal-header">
+                <h5 class="modal-title">Ajouter un dossier à surveiller</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+              </div>
+              <div class="modal-body">
+                <form id="add-folder-form">
+                  <div class="mb-3">
+                    <label class="form-label">Boîte mail</label>
+                    <select class="form-select" id="mailbox-select" required>
+                      <option value="">Sélectionnez une boîte mail</option>
+                    </select>
+                  </div>
+                  <div class="mb-3">
+                    <label class="form-label">Dossier</label>
+                    <div class="border rounded p-3 bg-surface" style="max-height: 300px; overflow-y: auto;">
+                      <div id="folder-tree" class="folder-tree">
+                        <div class="text-muted"><i class="bi bi-hourglass-split me-2"></i>Chargement…</div>
+                      </div>
+                    </div>
+                    <input type="hidden" id="selected-folder-path" required>
+                    <div class="form-text mt-2">
+                      <small>Cliquez sur un dossier pour le sélectionner</small>
+                    </div>
+                  </div>
+                  <div class="mb-3">
+                    <label class="form-label">Catégorie</label>
+                    <select class="form-control" id="category-input" required>
+                      <option value="">-- Sélectionner une catégorie --</option>
+                      <option value="Déclarations">Déclarations</option>
+                      <option value="Règlements">Règlements</option>
+                      <option value="Mails simples">Mails simples</option>
+                    </select>
+                    <div class="form-text">Choisissez la catégorie appropriée pour classer les emails de ce dossier</div>
+                  </div>
+                </form>
+              </div>
+              <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Annuler</button>
+                <button type="button" class="btn btn-primary" id="save-folder-config">Ajouter</button>
+              </div>
+            </div>
+          </div>
+        </div>`;
+
+      document.body.insertAdjacentHTML('beforeend', modalHtml);
+      const modal = new bootstrap.Modal(document.getElementById('folderModal'));
+      modal.show();
+
+      // Charger toutes les boîtes (storeId vide => toutes les stores côté backend)
+      const folderTree = document.getElementById('folder-tree');
+      const mailboxSelect = document.getElementById('mailbox-select');
+      let allMailboxes = [];
+  try {
+        const result = await window.electronAPI.getFolderStructure('');
+        if (result?.success && Array.isArray(result.folders) && result.folders.length > 0) {
+          allMailboxes = result.folders;
+          // Alimenter la liste des boîtes
+          mailboxSelect.innerHTML = '<option value="">Sélectionnez une boîte mail</option>' +
+            allMailboxes.map(mb => {
+              const label = mb.SmtpAddress ? `${mb.Name} (${mb.SmtpAddress})` : mb.Name;
+              return `<option value="${this.escapeHtml(mb.StoreID || mb.Name)}">${this.escapeHtml(label)}</option>`;
+            }).join('');
+
+          // Si une seule, sélectionner automatiquement
+          if (allMailboxes.length === 1) {
+            mailboxSelect.value = this.escapeHtml(allMailboxes[0].StoreID || allMailboxes[0].Name);
+          }
+
+          const renderTreeFor = (storeIdOrName) => {
+            const selected = allMailboxes.find(mb => mb.StoreID === storeIdOrName || mb.Name === storeIdOrName);
+            const mb = selected || allMailboxes[0];
+            if (mb && Array.isArray(mb.SubFolders)) {
+              let treeHtml = '';
+              for (const folder of mb.SubFolders) treeHtml += this.createFolderTree(folder, 0);
+              folderTree.innerHTML = treeHtml || '<div class="text-warning"><i class="bi bi-info-circle me-2"></i>Aucun dossier trouvé</div>';
+              this.initializeFolderTreeEvents();
+            } else {
+              folderTree.innerHTML = '<div class="text-warning"><i class="bi bi-info-circle me-2"></i>Aucun dossier trouvé pour cette boîte</div>';
+            }
+          };
+
+          // Premier rendu
+          renderTreeFor(mailboxSelect.value || (allMailboxes[0]?.StoreID || allMailboxes[0]?.Name));
+
+          // Sur changement de boîte, re-rendre l'arbo
+          mailboxSelect.addEventListener('change', (e) => renderTreeFor(e.target.value));
+        } else {
+          const errMsg = this.escapeHtml(result?.error || 'Erreur de chargement');
+          folderTree.innerHTML = `<div class="text-danger"><i class="bi bi-exclamation-triangle me-2"></i>${errMsg}<br/><small>Conseils: assurez-vous qu\'Outlook est démarré, que l\'exécution PowerShell est autorisée (ExecutionPolicy: Bypass autorisé), et que Outlook n\'est pas 32-bit sans PowerShell 32-bit.</small></div>`;
+          return false;
+        }
+      } catch (e) {
+        console.error('❌ Chargement boîtes/arbo:', e);
+        folderTree.innerHTML = `<div class="text-danger"><i class="bi bi-exclamation-triangle me-2"></i>${this.escapeHtml(e.message || 'Erreur de chargement')}<br/><small>Conseils: démarrez Outlook et réessayez.</small></div>`;
+        return false;
+      }
+
+      // Sauvegarde
+      document.getElementById('save-folder-config').addEventListener('click', () => {
+        this.saveFolderConfiguration(modal);
+      });
+
+      return true;
+    } catch (error) {
+      console.error('❌ showDefaultFolderTreeModal:', error);
+      return false;
+    }
+  }
+
+  // Fallback lorsqu'aucune boîte Outlook n'est détectée: ajout manuel
+  showManualAddFolderModal() {
+    const existingModal = document.getElementById('manualFolderModal');
+    if (existingModal) existingModal.remove();
+
+    const modalHtml = `
+      <div class="modal fade" id="manualFolderModal" tabindex="-1">
+        <div class="modal-dialog">
+          <div class="modal-content">
+            <div class="modal-header">
+              <h5 class="modal-title">Ajouter un dossier (manuel)</h5>
+              <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+              <form id="manual-folder-form">
+                <div class="mb-3">
+                  <label class="form-label">Nom du dossier</label>
+                  <input type="text" class="form-control" id="manual-folder-name" placeholder="Ex: Déclarations 2025" required />
+                </div>
+                <div class="mb-3">
+                  <label class="form-label">Chemin complet</label>
+                  <input type="text" class="form-control" id="manual-folder-path" placeholder="Ex: Boîte de réception\\Déclarations" required />
+                  <div class="form-text">Utilisez le chemin tel qu'il apparaît dans Outlook</div>
+                </div>
+                <div class="mb-3">
+                  <label class="form-label">Catégorie</label>
+                  <select class="form-select" id="manual-folder-category" required>
+                    <option value="">-- Sélectionner une catégorie --</option>
+                    <option value="Déclarations">Déclarations</option>
+                    <option value="Règlements">Règlements</option>
+                    <option value="Mails simples">Mails simples</option>
+                  </select>
+                </div>
+              </form>
+            </div>
+            <div class="modal-footer">
+              <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Annuler</button>
+              <button type="button" class="btn btn-primary" id="manual-folder-save">Ajouter</button>
+            </div>
+          </div>
+        </div>
+      </div>`;
+
+    document.body.insertAdjacentHTML('beforeend', modalHtml);
+    const modal = new bootstrap.Modal(document.getElementById('manualFolderModal'));
+    modal.show();
+
+    document.getElementById('manual-folder-save').addEventListener('click', async () => {
+      const name = document.getElementById('manual-folder-name').value.trim();
+      const path = document.getElementById('manual-folder-path').value.trim();
+      const category = document.getElementById('manual-folder-category').value.trim();
+      if (!name || !path || !category) {
+        this.showNotification('Champs requis', 'Merci de renseigner le nom, le chemin, et la catégorie', 'warning');
+        return;
+      }
+      try {
+        const res = await window.electronAPI.addFolderToMonitoring({ folderPath: path, category });
+        if (res && res.success) {
+          // Rafraîchir configuration depuis BDD
+          await this.loadFoldersConfiguration();
+          this.updateFolderConfigDisplay();
+          const el = document.getElementById('manualFolderModal');
+          const instance = el ? bootstrap.Modal.getInstance(el) : null;
+          if (instance) instance.hide();
+          const count = res.count || 1;
+          this.showNotification('Dossier(s) ajouté(s)', `${count} élément(s) catégorisé(s) en "${category}"`, 'success');
+        } else {
+          this.showNotification('Erreur', (res && res.error) || 'Échec de l\'ajout', 'danger');
+        }
+      } catch (e) {
+        console.error('❌ Erreur ajout manuel:', e);
+        this.showNotification('Erreur', e.message, 'danger');
+      }
+    });
   }
 
   createFolderSelectionModal(mailboxes) {
@@ -988,12 +1395,15 @@ class MailMonitor {
                   <label class="form-label">Boîte mail</label>
                   <select class="form-select" id="mailbox-select" required>
                     <option value="">Sélectionnez une boîte mail</option>
-                    ${mailboxes.map(mb => `<option value="${mb.StoreID}">${mb.Name}</option>`).join('')}
+                    ${mailboxes.map(mb => {
+                      const label = mb.SmtpAddress ? `${mb.Name} (${mb.SmtpAddress})` : mb.Name;
+                      return `<option value="${this.escapeHtml(mb.StoreID)}">${this.escapeHtml(label)}</option>`;
+                    }).join('')}
                   </select>
                 </div>
                 <div class="mb-3">
                   <label class="form-label">Dossier</label>
-                  <div class="border rounded p-3" style="max-height: 300px; overflow-y: auto; background-color: #f8f9fa;">
+                  <div class="border rounded p-3 bg-surface" style="max-height: 300px; overflow-y: auto;">
                     <div id="folder-tree" class="folder-tree">
                       <div class="text-muted">Sélectionnez d'abord une boîte mail</div>
                     </div>
@@ -1007,9 +1417,9 @@ class MailMonitor {
                   <label class="form-label">Catégorie</label>
                   <select class="form-control" id="category-input" required>
                     <option value="">-- Sélectionner une catégorie --</option>
-                    <option value="declarations">Déclarations</option>
-                    <option value="reglements">Règlements</option>
-                    <option value="mails_simples">Mails simples</option>
+                    <option value="Déclarations">Déclarations</option>
+                    <option value="Règlements">Règlements</option>
+                    <option value="Mails simples">Mails simples</option>
                   </select>
                   <div class="form-text">Choisissez la catégorie appropriée pour classer les emails de ce dossier</div>
                 </div>
@@ -1206,7 +1616,8 @@ class MailMonitor {
         // Désélectionner tous les autres dossiers
         document.querySelectorAll('.folder-selectable').forEach(f => {
           f.classList.remove('bg-primary', 'text-white');
-          f.classList.add('text-dark');
+          // Nettoyer les états de survol custom
+          f.classList.remove('hover-surface');
         });
         
         // Sélectionner le dossier cliqué
@@ -1224,13 +1635,13 @@ class MailMonitor {
       // Effet de survol
       folder.addEventListener('mouseenter', (e) => {
         if (!folder.classList.contains('bg-primary')) {
-          folder.classList.add('bg-light');
+          folder.classList.add('hover-surface');
         }
       });
       
       folder.addEventListener('mouseleave', (e) => {
         if (!folder.classList.contains('bg-primary')) {
-          folder.classList.remove('bg-light');
+          folder.classList.remove('hover-surface');
         }
       });
     });
@@ -1269,18 +1680,11 @@ class MailMonitor {
         return;
       }
 
-      // Ajouter à la configuration locale
-      this.state.folderCategories[folderPath] = {
-        category: category,
-        name: folderName.trim()
-      };
-
-      // Sauvegarder sur disque
-      const result = await window.electronAPI.saveFoldersConfig({
-        folderCategories: this.state.folderCategories
-      });
+      // Demander au processus principal d'ajouter le dossier et tous ses sous-dossiers
+      const result = await window.electronAPI.addFolderToMonitoring({ folderPath, category });
 
       if (result.success) {
+        await this.loadFoldersConfiguration();
         this.updateFolderConfigDisplay();
         
         // Fermer le modal correctement avec Bootstrap
@@ -1292,8 +1696,9 @@ class MailMonitor {
           }
         }
         
-        this.showNotification('Configuration sauvegardée', `Dossier "${folderName}" ajouté à la catégorie "${category}"`, 'success');
-        console.log('✅ Configuration de dossier sauvegardée');
+        const count = result.count || 1;
+        this.showNotification('Configuration sauvegardée', `"${count}" dossier(s) ajouté(s) en "${category}"`, 'success');
+        console.log('✅ Configuration de dossier sauvegardée (avec sous-dossiers)');
       } else {
         this.showNotification('Erreur de sauvegarde', result.error || 'Impossible de sauvegarder la configuration', 'danger');
       }
@@ -1301,6 +1706,84 @@ class MailMonitor {
       console.error('❌ Erreur sauvegarde configuration:', error);
       this.showNotification('Erreur', error.message, 'danger');
     }
+  }
+
+  // Ouvre un sélecteur de catégorie et met à jour en BDD + état local
+  async editFolderCategory(folderPath) {
+    try {
+      const current = this.state.folderCategories[folderPath] || {};
+      const currentCat = current.category || '';
+
+      // Construire un petit modal de sélection de catégorie
+      const modalId = 'editCategoryModal';
+      document.getElementById(modalId)?.remove();
+      const html = `
+        <div class="modal fade" id="${modalId}" tabindex="-1">
+          <div class="modal-dialog">
+            <div class="modal-content">
+              <div class="modal-header">
+                <h5 class="modal-title">Modifier la catégorie</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+              </div>
+              <div class="modal-body">
+                <div class="mb-3">
+                  <label class="form-label">Catégorie</label>
+                  <select class="form-select" id="edit-category-select">
+                    <option value="Déclarations" ${currentCat === 'Déclarations' ? 'selected' : ''}>Déclarations</option>
+                    <option value="Règlements" ${currentCat === 'Règlements' ? 'selected' : ''}>Règlements</option>
+                    <option value="Mails simples" ${currentCat === 'Mails simples' ? 'selected' : ''}>Mails simples</option>
+                  </select>
+                </div>
+              </div>
+              <div class="modal-footer">
+                <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Annuler</button>
+                <button type="button" class="btn btn-primary" id="edit-category-save">Enregistrer</button>
+              </div>
+            </div>
+          </div>
+        </div>`;
+      document.body.insertAdjacentHTML('beforeend', html);
+      const modal = new bootstrap.Modal(document.getElementById(modalId));
+      modal.show();
+
+      document.getElementById('edit-category-save').addEventListener('click', async () => {
+        const newCategory = document.getElementById('edit-category-select').value;
+        if (!newCategory) return;
+        try {
+          // Mise à jour BDD via IPC dédié si dispo, sinon fallback saveFoldersConfig
+          if (window.electronAPI.updateFolderCategory) {
+            const res = await window.electronAPI.updateFolderCategory({ folderPath, category: newCategory });
+            if (!res?.success) throw new Error(res?.error || 'Échec de la mise à jour');
+          } else {
+            this.state.folderCategories[folderPath] = { ...(this.state.folderCategories[folderPath] || {}), category: newCategory };
+            const res = await window.electronAPI.saveFoldersConfig({ folderCategories: this.state.folderCategories });
+            if (!res?.success) throw new Error(res?.error || 'Échec de la sauvegarde');
+          }
+
+          // Mettre à jour l'état local de façon optimiste
+          if (!this.state.folderCategories[folderPath]) this.state.folderCategories[folderPath] = {};
+          this.state.folderCategories[folderPath].category = newCategory;
+          this.updateFolderConfigDisplay();
+
+          bootstrap.Modal.getInstance(document.getElementById(modalId))?.hide();
+          this.showNotification('Catégorie mise à jour', `Nouvelle catégorie: "${newCategory}"`, 'success');
+        } catch (e) {
+          console.error('❌ Erreur maj catégorie:', e);
+          this.showNotification('Erreur', e.message, 'danger');
+        }
+      });
+    } catch (error) {
+      console.error('❌ Erreur editFolderCategory:', error);
+      this.showNotification('Erreur', error.message, 'danger');
+    }
+  }
+
+  
+
+  extractFolderName(path) {
+    if (!path) return '';
+    const parts = String(path).split('\\');
+    return parts[parts.length - 1] || path;
   }
 
   // === MISE À JOUR DE L'INTERFACE ===
@@ -1483,36 +1966,46 @@ class MailMonitor {
     const tbody = document.getElementById('emails-table');
     if (!tbody) return;
 
-    if (this.state.recentEmails.length === 0) {
+    const emails = Array.isArray(this.state.recentEmails) ? this.state.recentEmails : [];
+
+    if (emails.length === 0) {
       tbody.innerHTML = `
         <tr>
-          <td colspan="5" class="text-center text-muted py-4">
-            <i class="bi bi-inbox me-2"></i>Aucun email récent trouvé
+          <td colspan="5" class="text-center text-muted py-5 border-0">
+            <div class="d-flex flex-column align-items-center">
+              <div class="spinner-border text-primary mb-3" role="status"></div>
+              <h6 class="text-muted mb-2">Aucun email à afficher</h6>
+              <p class="text-muted mb-0 small">Les nouveaux emails apparaîtront ici dès leur réception</p>
+            </div>
           </td>
-        </tr>
-      `;
+        </tr>`;
       return;
     }
 
-    tbody.innerHTML = this.state.recentEmails.map(email => `
-      <tr>
-        <td>${new Date(email.received_time || email.created_at).toLocaleDateString()}</td>
-        <td>
-          <div class="fw-bold">${this.escapeHtml(email.sender_name || 'Inconnu')}</div>
-          <small class="text-muted">${this.escapeHtml(email.sender_email || '')}</small>
-        </td>
-        <td>${this.escapeHtml(email.subject || '(Sans objet)')}</td>
-        <td>
-          <span class="badge bg-secondary">${this.escapeHtml(email.folder_name || 'Inconnu')}</span>
-        </td>
-        <td>
-          ${email.is_read ? 
-            '<span class="badge bg-success">Lu</span>' : 
-            '<span class="badge bg-warning">Non lu</span>'
-          }
-        </td>
-      </tr>
-    `).join('');
+    tbody.innerHTML = emails.map(email => {
+      const isUnread = (email.is_read === false) || (email.UnRead === true);
+      const rowClass = isUnread ? 'email-row email-unread' : 'email-row email-read';
+      const dateStr = new Date(email.received_time || email.created_at).toLocaleDateString();
+      const senderName = this.escapeHtml(email.sender_name || 'Inconnu');
+      const senderEmail = this.escapeHtml(email.sender_email || '');
+      const subject = this.escapeHtml(email.subject || '(Sans objet)');
+      const folderName = this.escapeHtml(email.folder_name || 'Inconnu');
+      const statusBadge = isUnread
+        ? '<span class="badge bg-warning text-dark">Non lu</span>'
+        : '<span class="badge bg-success">Lu</span>';
+
+      return `
+        <tr class="${rowClass}">
+          <td>${dateStr}</td>
+          <td>
+            <div class="fw-bold">${senderName}</div>
+            <small class="text-muted">${senderEmail}</small>
+          </td>
+          <td>${subject}</td>
+          <td><span class="badge bg-secondary">${folderName}</span></td>
+          <td>${statusBadge}</td>
+        </tr>`;
+    }).join('');
   }
 
   updateFolderConfigDisplay() {
@@ -1553,7 +2046,7 @@ class MailMonitor {
     }
 
     // Générer les cartes modernes pour chaque dossier (structure stable)
-    const foldersHtml = filtered.map(([path, config]) => {
+  const foldersHtml = filtered.map(([path, config]) => {
       const categoryClass = this.getCategoryClass(config.category);
       const categoryIcon = this.getCategoryIcon(config.category);
       // Compteurs par dossier basés sur les emails récents (robuste)
@@ -1585,62 +2078,17 @@ class MailMonitor {
                 </div>
                 <div class="folder-path">${this.escapeHtml(this.truncatePath(path))}</div>
               </div>
-              <div class="dropdown">
-                <button class="btn btn-sm btn-outline-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown">
-                  <i class="bi bi-three-dots"></i>
+              <div class="btn-group btn-group-sm ms-2" role="group" aria-label="Actions dossier">
+                <button class="btn btn-outline-primary" title="Modifier la catégorie" onclick='app.editFolderCategory(${JSON.stringify(path)})'>
+                  <i class="bi bi-pencil"></i>
                 </button>
-                <ul class="dropdown-menu dropdown-menu-end">
-                  <li>
-                    <button class="dropdown-item" onclick="app.editFolderCategory('${this.escapeHtml(path)}')">
-                      <i class="bi bi-pencil me-2"></i>Modifier la catégorie
-                    </button>
-                  </li>
-                  <li>
-                    <button class="dropdown-item" onclick="app.viewFolderStats('${this.escapeHtml(path)}')">
-                      <i class="bi bi-graph-up me-2"></i>Voir les statistiques
-                    </button>
-                  </li>
-                  <li><hr class="dropdown-divider"></li>
-                  <li>
-                    <button class="dropdown-item text-danger" onclick="app.removeFolderConfig('${this.escapeHtml(path)}')">
-                      <i class="bi bi-trash me-2"></i>Supprimer
-                    </button>
-                  </li>
-                </ul>
+                <button class="btn btn-outline-danger" title="Supprimer ce dossier" onclick='app.removeFolderConfig(${JSON.stringify(path)})'>
+                  <i class="bi bi-trash"></i>
+                </button>
               </div>
             </div>
           </div>
-          <div class="p-2 pt-0">
-            <div class="row g-2">
-              <div class="col-4">
-                <div class="text-center">
-                  <div class="h6 mb-0 text-primary" data-field="total">${total}</div>
-                  <small class="text-muted">Emails</small>
-                </div>
-              </div>
-              <div class="col-4">
-                <div class="text-center">
-                  <div class="h6 mb-0 text-success" data-field="treated">${treated}</div>
-                  <small class="text-muted">Traités</small>
-                </div>
-              </div>
-              <div class="col-4">
-                <div class="text-center">
-                  <div class="h6 mb-0 text-warning" data-field="pending">${pending}</div>
-                  <small class="text-muted">En attente</small>
-                </div>
-              </div>
-            </div>
-            <div class="mt-2">
-              <div class="d-flex justify-content-between align-items-center mb-1">
-                <small class="text-muted">Activité</small>
-                <small class="text-muted" data-field="activity-label">${activityPct}%</small>
-              </div>
-              <div class="progress" style="height: 4px;">
-                <div class="progress-bar bg-success" role="progressbar" data-field="activity-bar" style="width: ${activityPct}%"></div>
-              </div>
-            </div>
-          </div>
+        <!-- Bloc de statistiques détaillées supprimé à la demande -->
         </div>
       `;
     }).join('');
@@ -1655,7 +2103,7 @@ class MailMonitor {
       const existing = new Map(Array.from(list.querySelectorAll('[data-folder-key]')).map(el => [el.getAttribute('data-folder-key'), el]));
       const currentKeys = new Set();
 
-      filtered.forEach(([path, config]) => {
+    filtered.forEach(([path, config]) => {
         currentKeys.add(path);
         const el = existing.get(path);
         // Recalcule des chiffres
@@ -1667,23 +2115,15 @@ class MailMonitor {
           const ePath = (e.folder_path || e.FolderPath || '').toLowerCase();
           return (eName && eName === cfgNameLc) || (ePath && (ePath === pathLc || ePath.endsWith(pathLc)));
         });
+        // Les statistiques détaillées ont été supprimées de l'UI Monitoring
         const total = byFolder.length;
-        const treated = byFolder.filter(e => (e.is_treated === true) || (e.is_read === true) || e.IsRead === true).length;
-        const pending = Math.max(0, total - treated);
-        const activityPct = total > 0 ? Math.round((treated / total) * 100) : 0;
 
         if (!el) {
           // Ajouter nouvelle carte
-          list.insertAdjacentHTML('beforeend', this._renderFolderCard(path, config, { total, treated, pending, activityPct }));
+          list.insertAdjacentHTML('beforeend', this._renderFolderCard(path, config, { total }));
         } else {
           // Patch in-place
-          el.querySelector('[data-field="total"]').textContent = total;
-          el.querySelector('[data-field="treated"]').textContent = treated;
-          el.querySelector('[data-field="pending"]').textContent = pending;
-          const bar = el.querySelector('[data-field="activity-bar"]');
-          if (bar) bar.style.width = `${activityPct}%`;
-          const label = el.querySelector('[data-field="activity-label"]');
-          if (label) label.textContent = `${activityPct}%`;
+          // Plus de mise à jour des champs statistiques (supprimés de l'UI)
         }
       });
 
@@ -1699,7 +2139,7 @@ class MailMonitor {
     const categoryClass = this.getCategoryClass(config.category);
     const categoryIcon = this.getCategoryIcon(config.category);
     const safeKey = path.replace(/[^a-zA-Z0-9_-]/g, '_');
-    const { total = 0, treated = 0, pending = 0, activityPct = 0 } = nums || {};
+    const { total = 0 } = nums || {};
     return `
       <div class="folder-card mb-2 animate-slide-up" data-folder-key="${this.escapeHtml(path)}" id="monCard-${safeKey}">
         <div class="folder-header p-2">
@@ -1720,18 +2160,14 @@ class MailMonitor {
               </button>
               <ul class="dropdown-menu dropdown-menu-end">
                 <li>
-                  <button class="dropdown-item" onclick="app.editFolderCategory('${this.escapeHtml(path)}')">
+                  <button class="dropdown-item" onclick='app.editFolderCategory(${JSON.stringify(path)})'>
                     <i class="bi bi-pencil me-2"></i>Modifier la catégorie
                   </button>
                 </li>
-                <li>
-                  <button class="dropdown-item" onclick="app.viewFolderStats('${this.escapeHtml(path)}')">
-                    <i class="bi bi-graph-up me-2"></i>Voir les statistiques
-                  </button>
-                </li>
+                
                 <li><hr class="dropdown-divider"></li>
                 <li>
-                  <button class="dropdown-item text-danger" onclick="app.removeFolderConfig('${this.escapeHtml(path)}')">
+                  <button class="dropdown-item text-danger" onclick='app.removeFolderConfig(${JSON.stringify(path)})'>
                     <i class="bi bi-trash me-2"></i>Supprimer
                   </button>
                 </li>
@@ -1739,37 +2175,7 @@ class MailMonitor {
             </div>
           </div>
         </div>
-        <div class="p-2 pt-0">
-          <div class="row g-2">
-            <div class="col-4">
-              <div class="text-center">
-                <div class="h6 mb-0 text-primary" data-field="total">${total}</div>
-                <small class="text-muted">Emails</small>
-              </div>
-            </div>
-            <div class="col-4">
-              <div class="text-center">
-                <div class="h6 mb-0 text-success" data-field="treated">${treated}</div>
-                <small class="text-muted">Traités</small>
-              </div>
-            </div>
-            <div class="col-4">
-              <div class="text-center">
-                <div class="h6 mb-0 text-warning" data-field="pending">${pending}</div>
-                <small class="text-muted">En attente</small>
-              </div>
-            </div>
-          </div>
-          <div class="mt-2">
-            <div class="d-flex justify-content-between align-items-center mb-1">
-              <small class="text-muted">Activité</small>
-              <small class="text-muted" data-field="activity-label">${activityPct}%</small>
-            </div>
-            <div class="progress" style="height: 4px;">
-              <div class="progress-bar bg-success" role="progressbar" data-field="activity-bar" style="width: ${activityPct}%"></div>
-            </div>
-          </div>
-        </div>
+        <!-- Bloc de statistiques détaillées supprimé -->
       </div>
     `;
   }
@@ -1828,10 +2234,12 @@ class MailMonitor {
   // Rafraîchir les cartes dossiers (compteurs)
   this.updateFolderConfigDisplay();
         
-        // Mettre à jour les filtres
+  // Mettre à jour les filtres
         this.updateEmailFilters();
         
         console.log(`✅ ${emails.length} emails chargés`);
+  // Recalculer les compteurs par dossier après réception des emails pour éviter les zéros
+  try { this.loadFoldersStats(); } catch (_) {}
       } else {
         console.warn('⚠️ Pas d\'emails trouvés');
         this.state.recentEmails = [];
@@ -1904,13 +2312,15 @@ class MailMonitor {
       const receivedDate = new Date(email.received_time || email.ReceivedTime);
       const isToday = receivedDate.toDateString() === new Date().toDateString();
       const timeAgo = this.getTimeAgo(receivedDate);
+      const isUnread = (!email.is_read && email.is_read !== undefined) || !!email.UnRead;
+      const rowClass = isUnread ? 'email-row email-unread' : 'email-row email-read';
       
       // Déterminer le dossier depuis le chemin
       const folderName = this.extractFolderName(email.folder_name || email.FolderPath || 'Boîte de réception');
       const folderCategory = this.getFolderCategory(email.folder_name || email.FolderPath);
       
       return `
-        <tr class="email-row ${!email.is_read && email.is_read !== undefined ? 'table-warning' : (email.UnRead ? 'table-warning' : '')}" data-email-id="${email.outlook_id || email.EntryID}">
+        <tr class="${rowClass}" data-email-id="${email.outlook_id || email.EntryID}">
           <td class="ps-3">
             <div class="d-flex flex-column">
               <span class="fw-medium ${isToday ? 'text-primary' : ''}">${timeAgo}</span>
@@ -1953,7 +2363,7 @@ class MailMonitor {
           </td>
           <td>
             <div class="d-flex align-items-center">
-              ${(!email.is_read && email.is_read !== undefined) || email.UnRead ? 
+              ${isUnread ?
                 '<span class="badge bg-warning text-dark"><i class="bi bi-envelope me-1"></i>Non lu</span>' :
                 '<span class="badge bg-success"><i class="bi bi-envelope-open me-1"></i>Lu</span>'
               }
@@ -2606,8 +3016,7 @@ class MailMonitor {
         // 2. Mettre à jour l'affichage IMMÉDIATEMENT
         this.updateFolderConfigDisplay();
         
-        // 3. Afficher une notification de traitement
-        this.showNotification('Suppression en cours...', 'Le dossier est en cours de suppression', 'info');
+  // Notification en cours de suppression retirée pour éviter le bruit visuel
         
         // 4. Puis faire l'appel API en arrière-plan
         await window.electronAPI.removeFolderFromMonitoring({ folderPath });
@@ -2621,8 +3030,16 @@ class MailMonitor {
         
         // 7. Attendre un peu puis rafraîchir les statistiques
         setTimeout(async () => {
-          await this.refreshStats();
-          await this.refreshEmails();
+          try {
+            if (typeof this.refreshStats === 'function') {
+              await this.refreshStats();
+            }
+            if (typeof this.refreshEmails === 'function') {
+              await this.refreshEmails();
+            }
+          } catch (e) {
+            console.warn('Post-delete refresh skipped:', e?.message || e);
+          }
         }, 1000);
         
         this.showNotification('Configuration supprimée', 'Le dossier a été retiré de la surveillance et le service redémarré', 'success');
@@ -2661,7 +3078,7 @@ class MailMonitor {
           autoStart: true
         },
         ui: {
-          theme: "default",
+          theme: (document.getElementById('theme-select')?.value || this.state.ui?.theme || 'light'),
           language: "fr",
           emailsLimit: parseInt(document.getElementById('emails-limit')?.value) || 20,
           tabs: tabVisibility
@@ -2705,7 +3122,7 @@ class MailMonitor {
             autoStart: true
           },
           ui: {
-            theme: "default",
+            theme: "light",
             language: "fr",
             emailsLimit: 20,
             // Rétablir la visibilité par défaut: tous les onglets visibles
@@ -2756,6 +3173,22 @@ class MailMonitor {
         console.log('📄 Paramètres chargés:', result.settings);
         // Appliquer la visibilité des onglets au chargement
         this.applyTabVisibility(result.settings?.ui?.tabs);
+  // Appliquer le thème au chargement
+  {
+    const tRaw = (result.settings?.ui?.theme) || 'light';
+    const t = (tRaw === 'dark') ? 'dark' : 'light';
+    this.state.ui.theme = t;
+    this.applyTheme(t);
+    // Sync toggle button UI
+    try {
+      const icon = document.getElementById('theme-toggle-icon');
+      const label = document.getElementById('theme-toggle-label');
+      if (icon && label) {
+        icon.className = t === 'dark' ? 'bi bi-moon' : 'bi bi-sun';
+        label.textContent = t === 'dark' ? 'Sombre' : 'Clair';
+      }
+    } catch(_) {}
+  }
       } else {
         console.warn('⚠️ Erreur chargement paramètres, utilisation des valeurs par défaut');
         // Valeurs par défaut: tous les onglets visibles
@@ -2767,6 +3200,8 @@ class MailMonitor {
           importActivity: true,
           monitoring: true
         });
+  // Thème par défaut
+  this.applyTheme('light');
       }
     } catch (error) {
       console.error('❌ Erreur chargement paramètres:', error);
@@ -2792,6 +3227,21 @@ class MailMonitor {
       if (emailsLimit) {
         emailsLimit.value = settings.ui.emailsLimit || 20;
       }
+      // Thème
+      {
+        const allowedThemes = new Set(['light','dark']);
+        const themeRaw = settings.ui.theme || 'light';
+        const theme = allowedThemes.has(themeRaw) ? themeRaw : 'light';
+        this.applyTheme(theme);
+        this.state.ui.theme = theme;
+        // Sync toggle button UI
+        const icon = document.getElementById('theme-toggle-icon');
+        const label = document.getElementById('theme-toggle-label');
+        if (icon && label) {
+          icon.className = theme === 'dark' ? 'bi bi-moon' : 'bi bi-sun';
+          label.textContent = theme === 'dark' ? 'Sombre' : 'Clair';
+        }
+      }
       // Visibilité des onglets
       const tabs = settings.ui.tabs || {};
       const setCk = (id, def=true) => { const el = document.getElementById(id); if (el) el.checked = (tabs?.[id.replace('tab-','').replace('-','')] ?? def); };
@@ -2816,6 +3266,42 @@ class MailMonitor {
       if (notificationsCheckbox) {
         notificationsCheckbox.checked = settings.notifications.enableDesktopNotifications || false;
       }
+    }
+  }
+
+  // Applique immédiatement le thème en ajoutant l'attribut data-theme au body
+  applyTheme(theme) {
+    const allowed = new Set(['light','dark']);
+    const t = allowed.has(theme) ? theme : 'light';
+    try {
+      document.body?.setAttribute('data-theme', t);
+      this.state.ui.theme = t;
+  try { localStorage.setItem('uiTheme', t); } catch(_) {}
+    } catch (e) {
+      console.warn('⚠️ applyTheme:', e?.message || e);
+    }
+  }
+
+  // Persiste uniquement le thème dans les paramètres sans modifier le reste
+  async persistTheme(theme) {
+    try {
+  const allowed = new Set(['light','dark']);
+      const t = allowed.has(theme) ? theme : 'light';
+  try { localStorage.setItem('uiTheme', t); } catch(_) {}
+      const current = await window.electronAPI.loadAppSettings();
+      const settings = (current?.success && current.settings) ? current.settings : {};
+      // Valeurs par défaut minimales
+      settings.monitoring = settings.monitoring || { treatReadEmailsAsProcessed: false, scanInterval: 30000, autoStart: true };
+      settings.ui = Object.assign({ language: 'fr', emailsLimit: 20, tabs: { dashboard: true, emails: true, weekly: true, personalPerformance: true, importActivity: true, monitoring: true } }, settings.ui || {});
+      settings.ui.theme = t;
+      settings.database = settings.database || { purgeOldDataAfterDays: 365, enableEventLogging: true };
+      settings.notifications = settings.notifications || { showStartupNotification: true, showMonitoringStatus: true, enableDesktopNotifications: false };
+      const res = await window.electronAPI.saveAppSettings(settings);
+      if (!res?.success) throw new Error(res?.error || 'Échec de sauvegarde');
+      this.showNotification('Thème appliqué', 'Votre thème a été enregistré', 'success');
+    } catch (e) {
+      console.error('❌ persistTheme:', e);
+      this.showNotification('Erreur', 'Impossible d’enregistrer le thème', 'danger');
     }
   }
 
@@ -2918,34 +3404,10 @@ class MailMonitor {
   }
 
   showNotification(title, message, type = 'info') {
-    // Créer une notification Bootstrap
-    const alertClass = `alert-${type === 'error' ? 'danger' : type}`;
-    const icon = {
-      success: 'check-circle',
-      danger: 'exclamation-triangle',
-      warning: 'exclamation-circle',
-      info: 'info-circle'
-    }[type] || 'info-circle';
-
-    const notificationHtml = `
-      <div class="alert ${alertClass} alert-dismissible fade show position-fixed" 
-           style="top: 20px; right: 20px; z-index: 9999; min-width: 300px;" role="alert">
-        <i class="bi bi-${icon} me-2"></i>
-        <strong>${this.escapeHtml(title)}</strong>
-        <div>${this.escapeHtml(message)}</div>
-        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
-      </div>
-    `;
-
-    document.body.insertAdjacentHTML('beforeend', notificationHtml);
-    
-    // Auto-supprimer après 5 secondes
-    setTimeout(() => {
-      const alert = document.querySelector('.alert:last-of-type');
-      if (alert) {
-        alert.remove();
-      }
-    }, 5000);
+  // Notifications visuelles désactivées selon la préférence utilisateur
+  // Conserver une trace console légère pour le debug si nécessaire
+  // console.debug('[notification]', { title, message, type });
+  return; // no-op
   }
 
   showConfirmModal(title, message, confirmText = 'Confirmer', variant = 'primary') {
@@ -3023,14 +3485,15 @@ class MailMonitor {
   }
 
   // === INFORMATIONS COPYRIGHT ===
-  showAbout() {
+  async showAbout() {
+    const appVersion = (window.electronAPI && await window.electronAPI.getAppVersion()) || '—';
     const aboutContent = `
       <div class="text-center">
         <i class="bi bi-envelope-check display-4 text-primary mb-3"></i>
         <h4>Mail Monitor</h4>
         <p class="text-muted">Surveillance professionnelle des emails Outlook</p>
         <hr>
-        <p><strong>Version:</strong> 1.0.0</p>
+  <p><strong>Version:</strong> ${appVersion}</p>
         <p><strong>Auteur:</strong> Tanguy Raingeard</p>
         <p><strong>Copyright:</strong> © 2025 Tanguy Raingeard</p>
         <p><small class="text-muted">Tous droits réservés</small></p>
@@ -3070,8 +3533,8 @@ class MailMonitor {
         document.body.removeChild(modalDiv);
       });
     } else {
-      // Fallback vers alert
-      alert('Mail Monitor v1.0.0\n© 2025 Tanguy Raingeard - Tous droits réservés');
+  // Fallback vers alert
+  alert(`Mail Monitor v${appVersion}\n© 2025 Tanguy Raingeard - Tous droits réservés`);
     }
   }
 
@@ -3095,6 +3558,10 @@ class MailMonitor {
       
       // Configurer les événements
       this.setupWeeklyEventListeners();
+
+  // Préparer les commentaires hebdomadaires
+  await this.populateWeeksForComments?.();
+  await this.refreshCommentsList?.();
       
       console.log('✅ Suivi hebdomadaire initialisé');
     } catch (error) {
@@ -3107,10 +3574,22 @@ class MailMonitor {
    * Configure les événements pour le suivi hebdomadaire
    */
   setupWeeklyEventListeners() {
-    // Bouton traité par ADG
-    const adjustBtn = document.getElementById('add-manual-adjustment');
-    if (adjustBtn) {
-      adjustBtn.addEventListener('click', () => this.handleManualAdjustment());
+    // Formulaire d'ajustement manuel (submit)
+    const manualForm = document.getElementById('manual-adjustment-form');
+    if (manualForm) {
+      manualForm.addEventListener('submit', (e) => {
+        e.preventDefault();
+        this.handleManualAdjustment(1);
+      });
+    }
+
+    // Bouton retirer (ajustement négatif)
+    const negativeBtn = document.getElementById('negative-adjustment');
+    if (negativeBtn) {
+      negativeBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        this.handleManualAdjustment(-1);
+      });
     }
 
     // Bouton de sauvegarde des paramètres
@@ -3119,11 +3598,60 @@ class MailMonitor {
       saveSettingsBtn.addEventListener('click', () => this.saveWeeklySettings());
     }
 
-    // Bouton d'ouverture des paramètres
-    const settingsBtn = document.getElementById('weekly-settings-btn');
-    if (settingsBtn) {
-      settingsBtn.addEventListener('click', () => this.openWeeklySettings());
+    // Charger les paramètres à l'ouverture de la modal
+    const weeklySettingsModal = document.getElementById('weeklySettingsModal');
+    if (weeklySettingsModal) {
+      weeklySettingsModal.addEventListener('show.bs.modal', () => this.loadWeeklySettings());
     }
+
+  // Commentaires hebdo: ajout
+    const addCommentBtn = document.getElementById('add-comment-btn');
+    if (addCommentBtn) {
+      addCommentBtn.addEventListener('click', async (e) => {
+        e.preventDefault();
+        const weekSel = document.getElementById('comments-week-select');
+        const txtEl = document.getElementById('comment-text');
+        const week_identifier = weekSel?.value || this.state.currentWeekInfo?.identifier;
+        const comment_text = (txtEl?.value || '').trim();
+        if (!week_identifier || !comment_text) { this.showNotification('Erreur', 'Semaine ou texte manquant', 'warning'); return; }
+        try {
+          const m = String(week_identifier).match(/S(\d+).*?(\d{4})/);
+          const week_number = m ? parseInt(m[1],10) : undefined;
+          const week_year = m ? parseInt(m[2],10) : undefined;
+      const res = await window.electronAPI.addWeeklyComment({ week_identifier, week_year, week_number, comment_text });
+          if (res?.success) {
+            if (txtEl) txtEl.value = '';
+            await this.refreshCommentsList?.();
+            this.showNotification('Commentaire ajouté', 'Votre note a été enregistrée', 'success');
+          } else {
+            this.showNotification('Erreur', res?.error || 'Ajout impossible', 'danger');
+          }
+        } catch (err) { this.showNotification('Erreur', err?.message || 'Ajout impossible', 'danger'); }
+      });
+    }
+
+    // Commentaires hebdo: refresh
+    const refreshBtn = document.getElementById('refresh-comments');
+    if (refreshBtn) {
+      refreshBtn.addEventListener('click', async () => {
+        await this.populateWeeksForComments?.();
+        await this.refreshCommentsList?.();
+      });
+    }
+
+  // Commentaires hebdo: changer de semaine
+    const weekSelect = document.getElementById('comments-week-select');
+    if (weekSelect) {
+      weekSelect.addEventListener('change', async () => {
+        await this.refreshCommentsList?.();
+    const dup = document.getElementById('comments-week-select-dup');
+    if (dup) { dup.innerHTML = weekSelect.innerHTML; dup.value = weekSelect.value; }
+    const countersWeek = document.getElementById('counters-week-select');
+    if (countersWeek) { countersWeek.innerHTML = weekSelect.innerHTML; countersWeek.value = weekSelect.value; }
+      });
+    }
+
+  // Bouton de rafraîchissement manuel supprimé: l'onglet se met à jour automatiquement (événements + intervalle)
 
     // Actualisation automatique des stats hebdomadaires
     setInterval(() => {
@@ -3152,6 +3680,223 @@ class MailMonitor {
   }
 
   /**
+   * Remplit le sélecteur de semaines pour les commentaires
+   */
+  async populateWeeksForComments(limit = 24) {
+    try {
+      const select = document.getElementById('comments-week-select');
+      if (!select || !window.electronAPI?.listWeeksForComments) return;
+
+      // Mémoriser la valeur sélectionnée si existante
+      const previous = select.value;
+
+      const res = await window.electronAPI.listWeeksForComments(limit);
+      if (!res?.success) return;
+
+      const rows = Array.isArray(res.rows) ? res.rows : [];
+      if (rows.length === 0) {
+        select.innerHTML = '';
+        return;
+      }
+
+  // Construire les options
+      const options = rows.map(r => {
+        const id = r.week_identifier || `S${r.week_number}-${r.week_year}`;
+        const label = `S${r.week_number} - ${r.week_year}` +
+          (r.week_start_date && r.week_end_date ? ` (${r.week_start_date} - ${r.week_end_date})` : '');
+        return `<option value="${this.escapeHtml(id)}">${this.escapeHtml(label)}</option>`;
+      }).join('');
+  select.innerHTML = options;
+  // Synchroniser les autres sélecteurs liés (dup + compteurs)
+  const dup = document.getElementById('comments-week-select-dup');
+  const counters = document.getElementById('counters-week-select');
+  if (dup) dup.innerHTML = options;
+  if (counters) counters.innerHTML = options;
+
+      // Choisir la meilleure sélection: précédente > semaine courante > première
+      const currentId = this.state?.currentWeekInfo?.identifier;
+      const desired = previous || currentId || (rows[0]?.week_identifier);
+  if (desired) {
+        const opt = Array.from(select.options).find(o => o.value === desired);
+        if (opt) select.value = desired; else select.selectedIndex = 0;
+      } else {
+        select.selectedIndex = 0;
+      }
+
+  // Appliquer la même sélection aux duplicatas si présents
+  if (dup) dup.value = select.value;
+  if (counters) counters.value = select.value;
+
+      return select.value;
+    } catch (e) {
+      console.warn('Erreur populateWeeksForComments:', e);
+    }
+  }
+
+  /**
+   * Rafraîchit l'affichage de la liste des commentaires pour la semaine sélectionnée
+   */
+  async refreshCommentsList() {
+    try {
+      const listEl = document.getElementById('weekly-comments-list');
+      const select = document.getElementById('comments-week-select');
+      if (!listEl) return;
+
+      // Déterminer la semaine ciblée
+      let weekId = select?.value || this.state?.currentWeekInfo?.identifier;
+      if (!weekId && window.electronAPI?.invoke) {
+        try {
+          const resp = await window.electronAPI.invoke('api-weekly-current-stats');
+          if (resp?.success) weekId = resp.weekInfo?.identifier;
+        } catch {}
+      }
+  if (!weekId) {
+        listEl.innerHTML = '<li class="list-group-item text-muted text-center">Aucune semaine sélectionnée</li>';
+        return;
+      }
+
+      // Etat de chargement
+      listEl.innerHTML = '<li class="list-group-item text-center"><span class="spinner-border spinner-border-sm me-2"></span>Chargement…</li>';
+
+      // Charger les commentaires
+      const res = await window.electronAPI.listWeeklyComments?.(weekId);
+      if (!res?.success) {
+        listEl.innerHTML = `<li class="list-group-item text-danger text-center">Erreur: ${this.escapeHtml(res?.error || 'chargement impossible')}</li>`;
+        return;
+      }
+
+  const rows = Array.isArray(res.rows) ? res.rows : [];
+      if (rows.length === 0) {
+        listEl.innerHTML = '<li class="list-group-item text-muted text-center">Aucun commentaire pour cette semaine</li>';
+        return;
+      }
+
+      // Helper pour affichage date courte
+      const fmtDate = (s) => {
+        if (!s) return '';
+        // s attendu comme 'YYYY-MM-DD HH:MM:SS'
+        return s.slice(0, 16).replace('T', ' ');
+      };
+
+      // Rendu liste
+  listEl.innerHTML = rows.map(r => {
+        const cat = r.category ? `<span class="badge rounded-pill bg-secondary me-2">${this.escapeHtml(r.category)}</span>` : '';
+        const meta = `<small class="text-muted">${this.escapeHtml(fmtDate(r.created_at))}${r.author ? ' • ' + this.escapeHtml(r.author) : ''}</small>`;
+        return `
+          <li class="list-group-item d-flex justify-content-between align-items-start" data-id="${r.id}">
+            <div class="ms-2 me-auto">
+              <div class="fw-semibold">${cat}${this.escapeHtml(r.comment_text || '')}</div>
+              ${meta}
+            </div>
+            <div class="btn-group btn-group-sm align-self-center" role="group">
+              <button type="button" class="btn btn-outline-secondary btn-edit-comment" title="Modifier"><i class="bi bi-pencil"></i></button>
+              <button type="button" class="btn btn-outline-danger btn-delete-comment" title="Supprimer"><i class="bi bi-trash"></i></button>
+            </div>
+          </li>`;
+      }).join('');
+
+      // Attacher les événements des boutons
+      const attach = (selector, handler) => {
+        listEl.querySelectorAll(selector).forEach(btn => btn.addEventListener('click', handler));
+      };
+
+      attach('.btn-edit-comment', async (e) => {
+        const li = e.currentTarget.closest('li[data-id]');
+        const id = li ? parseInt(li.getAttribute('data-id'), 10) : null;
+        if (!id) return;
+        const currentText = li.querySelector('.fw-semibold')?.textContent || '';
+        const proposed = prompt('Modifier le commentaire:', currentText.trim());
+        if (proposed == null) return; // annulé
+        const text = proposed.trim();
+        if (!text) return;
+        try {
+          const upd = await window.electronAPI.updateWeeklyComment?.({ id, comment_text: text });
+          if (upd?.success) {
+            await this.refreshCommentsList();
+            this.showNotification('Commentaire modifié', 'La note a été mise à jour', 'success');
+          } else {
+            this.showNotification('Erreur', upd?.error || 'Modification impossible', 'danger');
+          }
+        } catch (err) {
+          this.showNotification('Erreur', err?.message || 'Modification impossible', 'danger');
+        }
+      });
+
+      attach('.btn-delete-comment', async (e) => {
+        const li = e.currentTarget.closest('li[data-id]');
+        const id = li ? parseInt(li.getAttribute('data-id'), 10) : null;
+        if (!id) return;
+        if (!confirm('Supprimer ce commentaire ?')) return;
+        try {
+          const del = await window.electronAPI.deleteWeeklyComment?.({ id });
+          if (del?.success) {
+            await this.refreshCommentsList();
+            this.showNotification('Commentaire supprimé', 'La note a été supprimée', 'success');
+          } else {
+            this.showNotification('Erreur', del?.error || 'Suppression impossible', 'danger');
+          }
+        } catch (err) {
+          this.showNotification('Erreur', err?.message || 'Suppression impossible', 'danger');
+        }
+      });
+    } catch (e) {
+      console.warn('Erreur refreshCommentsList:', e);
+    }
+  }
+
+  /**
+   * Ouvre un modal listant les commentaires d'une semaine
+   */
+  async openCommentModal(weekIdentifier, weekDisplay) {
+    try {
+      const modalEl = document.getElementById('commentModal');
+      const titleEl = document.getElementById('commentModalTitle');
+      const bodyEl = document.getElementById('commentModalBody');
+      if (!modalEl || !titleEl || !bodyEl) return;
+
+      // Déterminer l'identifiant et le libellé
+      let id = weekIdentifier;
+      let display = weekDisplay;
+      if (!id && display) {
+        const m = String(display).match(/S\s*(\d{1,2}).*?(\d{4})/);
+        if (m) id = `S${parseInt(m[1],10)}-${m[2]}`;
+      }
+      if (!display && id) display = id.replace('S', 'S');
+
+      titleEl.textContent = `Commentaires – ${display || 'Semaine'}`;
+      bodyEl.innerHTML = '<div class="text-center text-muted py-2"><span class="spinner-border spinner-border-sm me-2"></span>Chargement…</div>';
+
+      // Charger les commentaires
+      const res = await window.electronAPI.listWeeklyComments?.(id);
+      if (!res?.success) {
+        bodyEl.innerHTML = `<div class="alert alert-danger">Erreur: ${this.escapeHtml(res?.error || 'chargement impossible')}</div>`;
+      } else {
+        const rows = Array.isArray(res.rows) ? res.rows : [];
+        if (rows.length === 0) {
+          bodyEl.innerHTML = '<div class="text-muted">Aucun commentaire pour cette semaine.</div>';
+        } else {
+          const fmtDate = (s) => s ? s.slice(0,16).replace('T',' ') : '';
+          bodyEl.innerHTML = `
+            <ul class="list-group small">
+              ${rows.map(r => `
+                <li class="list-group-item">
+                  <div class="fw-semibold">${this.escapeHtml(r.comment_text || '')}</div>
+                  <div class="text-muted">${this.escapeHtml(fmtDate(r.created_at))}${r.author ? ' • ' + this.escapeHtml(r.author) : ''}</div>
+                </li>
+              `).join('')}
+            </ul>`;
+        }
+      }
+
+      // Afficher le modal
+      const modal = new bootstrap.Modal(modalEl);
+      modal.show();
+    } catch (e) {
+      console.warn('openCommentModal:', e);
+    }
+  }
+
+  /**
    * Charge les statistiques de la semaine actuelle
    */
   async loadCurrentWeekStats() {
@@ -3168,6 +3913,8 @@ class MailMonitor {
           categories: response.categories
         };
         console.log('📅 Données formatées pour affichage:', weekData);
+  // Stocker l'information de semaine pour les ajustements
+  this.state.currentWeekInfo = response.weekInfo || null;
         this.updateCurrentWeekDisplay(weekData);
       } else {
         console.error('❌ Erreur lors du chargement des stats hebdomadaires:', response.error);
@@ -3294,45 +4041,67 @@ class MailMonitor {
   /**
    * Gère les données traitées par ADG
    */
-  async handleManualAdjustment() {
+  async handleManualAdjustment(sign = 1) {
     const form = document.getElementById('manual-adjustment-form');
-    const formData = new FormData(form);
-    
-    const adjustmentData = {
-      category: formData.get('adjustment-category'),
-      quantity: parseInt(formData.get('adjustment-quantity')),
-      type: formData.get('adjustment-type'),
-      description: formData.get('adjustment-description') || ''
-    };
+    if (!form) return;
+    const categoryEl = document.getElementById('adjustment-category');
+    const valueEl = document.getElementById('adjustment-value');
+    const typeEl = document.getElementById('adjustment-type');
 
-    // Validation
-    if (!adjustmentData.category || !adjustmentData.quantity || adjustmentData.quantity <= 0) {
+    const category = categoryEl ? categoryEl.value : '';
+    const value = valueEl ? parseInt(valueEl.value, 10) : 0;
+    const adjustmentType = typeEl ? typeEl.value : 'manual_adjustments';
+
+    if (!category || !value || value <= 0) {
       this.showNotification('Erreur', 'Veuillez remplir tous les champs requis', 'warning');
       return;
     }
 
+    // Mapper la catégorie affichée vers le folderType attendu en BDD
+    let folderType = category;
+    if (category.toLowerCase() === 'déclarations' || category.toLowerCase() === 'declarations') {
+      folderType = 'declarations';
+    } else if (category.toLowerCase() === 'règlements' || category.toLowerCase() === 'reglements') {
+      folderType = 'reglements';
+    } else if (category.toLowerCase() === 'mail simple' || category.toLowerCase() === 'mails_simples' || category.toLowerCase() === 'mails simples') {
+      folderType = 'mails_simples';
+    }
+
+  // Identifier de semaine: prioriser la sélection du formulaire "Ajouter aux compteurs"
+  const countersWeekSel = document.getElementById('counters-week-select');
+  let weekIdentifier = countersWeekSel?.value || this.state.currentWeekInfo?.identifier;
+    if (!weekIdentifier) {
+      try {
+        const resp = await window.electronAPI.invoke('api-weekly-current-stats');
+        if (resp?.success) weekIdentifier = resp.weekInfo?.identifier;
+      } catch {}
+    }
+    if (!weekIdentifier) {
+      this.showNotification('Erreur', 'Semaine courante introuvable', 'danger');
+      return;
+    }
+
+    const payload = {
+      weekIdentifier,
+      folderType,
+      adjustmentValue: sign * Math.abs(value),
+      adjustmentType
+    };
+
     try {
-      const response = await window.electronAPI.invoke('api-weekly-adjust-count', adjustmentData);
-      
+      const response = await window.electronAPI.invoke('api-weekly-adjust-count', payload);
       if (response.success) {
-        this.showNotification('Données ajoutées', 
-          `${adjustmentData.quantity} ${adjustmentData.type} ajouté(s) pour ${adjustmentData.category}`, 
-          'success'
-        );
-        
-        // Réinitialiser le formulaire
+        this.showNotification('Succès', `${Math.abs(value)} ${adjustmentType} ${sign > 0 ? 'ajouté(s)' : 'retiré(s)'} pour ${folderType}`, 'success');
         form.reset();
-        
-        // Recharger les statistiques
         await this.loadCurrentWeekStats();
         await this.loadWeeklyHistory();
-        
+        await this.loadPersonalPerformance?.();
       } else {
-        this.showNotification('Erreur', response.error, 'danger');
+        this.showNotification('Erreur', response.error || 'Ajustement refusé', 'danger');
       }
     } catch (error) {
-      console.error('Erreur lors de l\'ajout de données par ADG:', error);
-      this.showNotification('Erreur', 'Impossible d\'ajouter les données', 'danger');
+      console.error('Erreur lors de l\'ajustement manuel:', error);
+      this.showNotification('Erreur', 'Impossible d\'ajuster les données', 'danger');
     }
   }
 
@@ -3392,12 +4161,17 @@ class MailMonitor {
           acc.stockEnd += Number(c.stockEndWeek || 0);
           return acc;
         }, { received: 0, treated: 0, stockEnd: 0 });
+        // Dériver l'identifiant de semaine (Sxx-YYYY) à partir de l'affichage
+        let identifier = '';
+        const m = String(w.weekDisplay || '').match(/S\s*(\d{1,2}).*?(\d{4})/);
+        if (m) identifier = `S${parseInt(m[1], 10)}-${m[2]}`;
         return {
           display: w.weekDisplay,
           received: sums.received,
           treated: sums.treated,
           stockEnd: sums.stockEnd,
-          dateRange: w.dateRange
+          dateRange: w.dateRange,
+          identifier
         };
       });
 
@@ -3408,10 +4182,24 @@ class MailMonitor {
           <td class="text-center"><span class="badge bg-primary rounded-pill">${r.received}</span></td>
           <td class="text-center"><span class="badge bg-success rounded-pill">${r.treated}</span></td>
           <td class="text-center"><span class="badge bg-warning rounded-pill">${r.stockEnd}</span></td>
+          <td class="text-center">
+            <button type="button" class="btn btn-outline-info btn-sm btn-pp-week-notes" data-week-identifier="${this.escapeHtml(r.identifier)}" data-week-display="${this.escapeHtml(r.display)}">
+              <i class="bi bi-info-circle me-1"></i> Note
+            </button>
+          </td>
         </tr>
       `).join('');
 
-      // Semaine courante = première ligne de l'historique (plus récente)
+      // Brancher les boutons Note pour ouvrir le modal de commentaires
+      tableBody.querySelectorAll('.btn-pp-week-notes').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const id = btn.getAttribute('data-week-identifier');
+          const display = btn.getAttribute('data-week-display');
+          this.openCommentModal(id, display);
+        });
+      });
+
+  // Semaine courante = première ligne de l'historique (plus récente)
       const current = rowsHtml[0];
       const previous = rowsHtml[1];
       if (weekTitleEl && current) weekTitleEl.textContent = current.display;
@@ -3436,6 +4224,124 @@ class MailMonitor {
         trendEl.className = 'badge bg-secondary';
         trendEl.textContent = '--';
       }
+
+      // Graphiques
+      try {
+        const labels = weeks.map(w => w.weekDisplay).slice(0, 6).reverse(); // oldest→newest for nicer reading
+        const receivedData = weeks.map(w => (w.categories||[]).reduce((s,c)=>s+Number(c.received||0),0)).slice(0,6).reverse();
+        const treatedData = weeks.map(w => (w.categories||[]).reduce((s,c)=>s+Number(c.treated||0),0)).slice(0,6).reverse();
+        const stockData = weeks.map(w => (w.categories||[]).reduce((s,c)=>s+Number(c.stockEndWeek||0),0)).slice(0,6).reverse();
+  const rateData = receivedData.map((rec, i) => rec > 0 ? Math.round((treatedData[i]/rec)*1000)/10 : 0);
+
+        // Theme-aware colors
+        const isDark = (document.body?.getAttribute('data-theme') === 'dark');
+        const col1 = getComputedStyle(document.body).getPropertyValue('--brand-1').trim() || (isDark ? '#60a5fa' : '#0d6efd');
+        const col2 = getComputedStyle(document.body).getPropertyValue('--brand-2').trim() || (isDark ? '#34d399' : '#66b2ff');
+        const textCol = getComputedStyle(document.body).getPropertyValue('--text-primary').trim() || (isDark ? '#e5e7eb' : '#1f2937');
+        const gridCol = getComputedStyle(document.body).getPropertyValue('--border-color').trim() || (isDark ? '#1f2937' : '#e5e7eb');
+
+        // Destroy previous charts if any
+        const destroyIf = (c) => { try { if (c && c.destroy) c.destroy(); } catch(_){} };
+        destroyIf(this.charts.ppRT);
+  destroyIf(this.charts.ppStock);
+  destroyIf(this.charts.ppRate);
+
+        const ctx1 = document.getElementById('pp-chart-rt');
+        const ctx2 = document.getElementById('pp-chart-stock');
+        if (ctx1 && window.Chart) {
+          this.charts.ppRT = new Chart(ctx1, {
+            type: 'bar',
+            data: {
+              labels,
+              datasets: [
+                { label: 'Reçus', data: receivedData, backgroundColor: col1, borderRadius: 6 },
+                { label: 'Traités', data: treatedData, backgroundColor: col2, borderRadius: 6 }
+              ]
+            },
+            options: {
+              responsive: true,
+              maintainAspectRatio: false,
+              plugins: { legend: { labels: { color: textCol } } },
+              scales: {
+                x: { ticks: { color: textCol }, grid: { color: gridCol } },
+                y: { ticks: { color: textCol }, grid: { color: gridCol } }
+              }
+            }
+          });
+        }
+        if (ctx2 && window.Chart) {
+          this.charts.ppStock = new Chart(ctx2, {
+            type: 'line',
+            data: {
+              labels,
+              datasets: [
+                { label: 'Stock fin', data: stockData, borderColor: col1, backgroundColor: col1 + '33', tension: .3, fill: true }
+              ]
+            },
+            options: {
+              responsive: true,
+              maintainAspectRatio: false,
+              plugins: { legend: { labels: { color: textCol } } },
+              scales: {
+                x: { ticks: { color: textCol }, grid: { color: gridCol } },
+                y: { ticks: { color: textCol }, grid: { color: gridCol } }
+              }
+            }
+          });
+        }
+        const ctx3 = document.getElementById('pp-chart-rate');
+        if (ctx3 && window.Chart) {
+          this.charts.ppRate = new Chart(ctx3, {
+            type: 'line',
+            data: {
+              labels,
+              datasets: [
+                { label: 'Taux (%)', data: rateData, borderColor: col2, backgroundColor: col2 + '33', tension: .3, fill: true }
+              ]
+            },
+            options: {
+              responsive: true,
+              maintainAspectRatio: false,
+              plugins: { legend: { labels: { color: textCol } } },
+              scales: {
+                x: { ticks: { color: textCol }, grid: { color: gridCol } },
+                y: { ticks: { color: textCol }, grid: { color: gridCol } }
+              }
+            }
+          });
+        }
+      } catch(_) { /* ignore charts if missing */ }
+
+      // Analyses complémentaires (moyennes, taux, semaines extrêmes)
+      try {
+        const avg = (arr) => arr.length ? (arr.reduce((a,b)=>a+b,0) / arr.length) : 0;
+        const safePct = (num, den) => den > 0 ? Math.round((num/den)*1000)/10 : 0; // 1 decimal
+
+        const avgReceived = Math.round(avg(rowsHtml.map(r=>r.received)));
+        const avgTreated = Math.round(avg(rowsHtml.map(r=>r.treated)));
+        const avgRate = safePct(avgTreated, avgReceived);
+        const currentRate = safePct((current?.treated)||0, (current?.received)||0);
+
+        // Semaine la plus chargée (par reçus)
+        const busiest = rowsHtml.reduce((best, r) => !best || r.received > best.received ? r : best, null);
+        // Meilleure semaine par taux de traitement (ignorer petites semaines <10 reçus)
+        const bestRate = rowsHtml
+          .map(r => ({ r, rate: safePct(r.treated, r.received) }))
+          .filter(x => x.r.received >= 10)
+          .reduce((best, x) => (!best || x.rate > best.rate) ? x : best, null);
+
+  const setText = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
+  // Estimation semaines pour vider: si débit net moyen > 0 (traités > reçus), stock / (traités - reçus)
+  const netPerWeek = Math.max(0, avgTreated - avgReceived);
+  const clearWeeks = (netPerWeek > 0 && current?.stockEnd > 0) ? Math.ceil(current.stockEnd / netPerWeek) : (netPerWeek === 0 && (current?.stockEnd||0) > 0 ? '∞' : 0);
+        setText('pp-rate-current', `${currentRate}%`);
+        setText('pp-avg-received', `${avgReceived}`);
+        setText('pp-avg-treated', `${avgTreated}`);
+        setText('pp-avg-rate', `${avgRate}%`);
+        setText('pp-busiest-week', busiest ? `${this.escapeHtml(busiest.display)} (${busiest.received})` : '--');
+        setText('pp-best-week', bestRate ? `${this.escapeHtml(bestRate.r.display)} (${bestRate.rate}%)` : '--');
+  setText('pp-clear-weeks', `${clearWeeks}`);
+      } catch (_) { /* ignore */ }
     } catch (e) {
       console.warn('Erreur chargement Performances personnelles:', e);
     }
@@ -3460,7 +4366,7 @@ class MailMonitor {
       loadingElement.classList.add('d-none');
     }
 
-    let historyHtml = '';
+  let historyHtml = '';
     
     if (!historyData || historyData.length === 0) {
       // Afficher le message "aucune donnée" et masquer le tableau
@@ -3487,6 +4393,10 @@ class MailMonitor {
         
         // Créer un ID unique pour la semaine pour gérer le survol
         const weekId = `week-${week.weekDisplay.replace(/[^a-zA-Z0-9]/g, '-')}`;
+        // Tenter de dériver l'identifiant de semaine (Sxx-YYYY)
+        let weekIdentifier = '';
+        const m = String(week.weekDisplay || '').match(/S\s*(\d{1,2}).*?(\d{4})/);
+        if (m) weekIdentifier = `S${parseInt(m[1],10)}-${m[2]}`;
         
         // Ligne pour la semaine avec les 3 catégories
         week.categories.forEach((category, index) => {
@@ -3513,7 +4423,12 @@ class MailMonitor {
           if (isFirstRow) {
             historyHtml += `
               <td rowspan="3" class="text-center align-middle" style="vertical-align: middle !important;"><span class="badge bg-dark rounded-pill fs-6">${totalStock}</span></td>
-              <td rowspan="3" class="text-center align-middle" style="vertical-align: middle !important;">${evolutionHtml}</td>`;
+              <td rowspan="3" class="text-center align-middle" style="vertical-align: middle !important;">${evolutionHtml}</td>
+              <td rowspan="3" class="text-center align-middle" style="vertical-align: middle !important;">
+                <button type="button" class="btn btn-outline-info btn-sm btn-week-notes" data-week-identifier="${this.escapeHtml(weekIdentifier)}" data-week-display="${this.escapeHtml(week.weekDisplay)}">
+                  <i class="bi bi-info-circle me-1"></i> Note
+                </button>
+              </td>`;
           }
           
           historyHtml += `
@@ -3527,6 +4442,15 @@ class MailMonitor {
     
     // Ajouter les événements de survol pour les semaines complètes
     this.addWeekHoverEvents();
+
+    // Boutons "Note" (ouvrir le modal de commentaires)
+    tbody.querySelectorAll('.btn-week-notes').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        const id = btn.getAttribute('data-week-identifier');
+        const display = btn.getAttribute('data-week-display');
+        this.openCommentModal(id, display);
+      });
+    });
   }
 
   /**
@@ -3624,7 +4548,7 @@ class MailMonitor {
       if (response.success) {
         const checkbox = document.getElementById('count-read-as-treated');
         if (checkbox) {
-          checkbox.checked = response.data.countReadAsTreated || false;
+          checkbox.checked = !!response.value;
         }
       }
     } catch (error) {
@@ -3641,7 +4565,7 @@ class MailMonitor {
       const countReadAsTreated = checkbox ? checkbox.checked : false;
 
       const response = await window.electronAPI.invoke('api-settings-count-read-as-treated', {
-        countReadAsTreated
+  value: countReadAsTreated
       });
 
       if (response.success) {

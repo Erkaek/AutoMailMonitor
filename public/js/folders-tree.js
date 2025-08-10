@@ -196,14 +196,14 @@ class FoldersTreeManager {
           ${isLeafNode ? `
             <div class="folder-actions">
               ${node.isMonitored ? `
-                <button class="btn btn-outline-primary edit-folder" title="Modifier">
+                <button class="btn btn-outline-primary btn-sm edit-folder" title="Modifier">
                   <i class="bi bi-pencil"></i>
                 </button>
-                <button class="btn btn-outline-danger remove-folder" title="Supprimer du monitoring">
+                <button class="btn btn-outline-danger btn-sm remove-folder" title="Supprimer du monitoring">
                   <i class="bi bi-trash"></i>
                 </button>
               ` : `
-                <button class="btn btn-outline-success add-to-monitoring" title="Ajouter au monitoring">
+                <button class="btn btn-outline-success btn-sm add-to-monitoring" title="Ajouter au monitoring">
                   <i class="bi bi-plus"></i>
                 </button>
               `}
@@ -526,8 +526,9 @@ class FoldersTreeManager {
         throw new Error(result?.error || 'Erreur lors de l\'ajout');
       }
 
-      this.loadFolders(); // Recharger la liste
-      this.showSuccess('Dossier ajouté au monitoring');
+  this.loadFolders(); // Recharger la liste
+  const count = result.count || 1;
+  this.showSuccess(`${count} dossier(s) ajouté(s) au monitoring`);
 
     } catch (error) {
       console.error('❌ Erreur ajout dossier:', error);

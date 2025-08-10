@@ -40,6 +40,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // API Paramètres de l'application
   saveAppSettings: (settings) => ipcRenderer.invoke('api-app-settings-save', settings),
   loadAppSettings: () => ipcRenderer.invoke('api-app-settings-load'),
+
+  // Version applicative (source unique)
+  getAppVersion: () => ipcRenderer.invoke('app-get-version'),
+
+  // API Commentaires hebdomadaires
+  addWeeklyComment: (payload) => ipcRenderer.invoke('api-weekly-comments-add', payload),
+  listWeeklyComments: (weekIdentifier) => ipcRenderer.invoke('api-weekly-comments-list', { week_identifier: weekIdentifier }),
+  updateWeeklyComment: (id, comment_text, category) => ipcRenderer.invoke('api-weekly-comments-update', { id, comment_text, category }),
+  deleteWeeklyComment: (id) => ipcRenderer.invoke('api-weekly-comments-delete', { id }),
+  listWeeksForComments: (limit) => ipcRenderer.invoke('api-weekly-weeks-list', { limit }),
   
   // API Base de données
   getCategoryStats: () => ipcRenderer.invoke('api-database-category-stats'),

@@ -1,6 +1,6 @@
 {
   "name": "mailmonitor",
-  "version": "1.0.0",
+  "version": "0.8.0",
   "description": "Application de monitoring des emails Outlook avec interface moderne",
   "main": "src/main/index.js",
   "scripts": {
@@ -18,12 +18,13 @@
   ],
   "author": {
     "name": "Tanguy Raingeard",
-    "email": "tanguy.raingeard@example.com"
+    "email": "erkaekanon@outlook.com"
   },
-  "license": "UNLICENSED",
+  "license": "LICENSED",
   "copyright": "Copyright (c) 2025 Tanguy Raingeard. Tous droits réservés.",
   "dependencies": {
     "better-sqlite3": "^12.2.0",
+  "electron-updater": "^6.1.8",
   "xlsx": "^0.18.5",
     "node-cache": "^5.1.2"
   },
@@ -37,6 +38,14 @@
     "directories": {
       "output": "dist"
     },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "Erkaek",
+        "repo": "AutoMailMonitor",
+        "releaseType": "release"
+      }
+    ],
     "files": [
       "src/**/*",
       "public/**/*",
@@ -55,7 +64,9 @@
     ],
     "win": {
       "target": "nsis",
-      "icon": "resources/new logo/logo.ico"
+  "icon": "resources/new logo/logo.ico",
+  "signingHashAlgorithms": ["sha256"],
+  "rfc3161TimeStampServer": "http://timestamp.digicert.com"
     },
     "nsis": {
       "oneClick": false,

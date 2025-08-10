@@ -1,0 +1,328 @@
+/* Mail Monitor - Thèmes personnalisés 2025
+  Deux thèmes: light et dark */
+
+/* Default tokens are defined in style.css; themes override via data-theme */
+
+/* Theme scopes by [data-theme] on <body> */
+
+/* 1) Light (Lumineux) */
+body[data-theme="light"] {
+  --bg-app: #f5f7fb;
+  --bg-surface: #ffffff;
+  --text-primary: #1f2937;
+  --text-secondary: #6b7280;
+  --border-color: #e5e7eb;
+  --card-shadow: 0 8px 24px rgba(16, 24, 40, 0.06);
+  --brand-1: #0d6efd;
+  --brand-2: #66b2ff;
+  /* Tables */
+  --table-head-bg: #f3f4f6; /* soft gray for light header */
+  --table-row-hover-bg: rgba(0,0,0,0.035);
+  --table-row-read-bg: #fafafa;
+  --table-row-unread-bg: rgba(0, 0, 0, 0.04);
+}
+
+/* 2) Dark (Noir) */
+body[data-theme="dark"] {
+  --bg-app: #0b0f14;
+  --bg-surface: #111827;
+  --text-primary: #e5e7eb;
+  --text-secondary: #9ca3af;
+  --border-color: #1f2937;
+  --card-shadow: 0 10px 30px rgba(0,0,0,0.4);
+  --brand-1: #2563eb; /* primary accents - darker blue for better contrast */
+  --brand-2: #34d399; /* secondary accents */
+  /* Tables */
+  --table-head-bg: rgba(255,255,255,0.06);
+  --table-row-hover-bg: rgba(255,255,255,0.04);
+  --table-row-read-bg: rgba(255,255,255,0.02);
+  --table-row-unread-bg: rgba(255, 255, 255, 0.06);
+}
+
+/* Global application of tokens */
+body[data-theme] {
+  background: var(--bg-app) !important;
+  color: var(--text-primary) !important;
+}
+
+/* Generic surface utility used in JS-rendered blocks */
+body[data-theme] .bg-surface { background: var(--bg-surface) !important; color: var(--text-primary) !important; }
+
+/* Hover state for tree items on any theme */
+body[data-theme] .hover-surface { background: rgba(255,255,255,0.08) !important; }
+body[data-theme="light"] .hover-surface { background: rgba(0,0,0,0.04) !important; }
+
+/* Sidebar adaptation */
+body[data-theme] .sidebar {
+  /* Fallback gradient (no color-mix) */
+  background: linear-gradient(180deg, var(--brand-1) 0%, #0a0a0a 100%);
+  /* If color-mix supported, browsers will pick the latter rule; Electron may vary by version */
+  /* background: linear-gradient(180deg, var(--brand-1) 0%, color-mix(in oklab, var(--brand-1), #000 30%) 100%); */
+}
+body[data-theme] .sidebar .nav-link { color: #fff !important; }
+body[data-theme] .sidebar .nav-link.active { background: rgba(255,255,255,0.18) !important; }
+/* Ensure full white text in Light theme sidebar nav */
+body[data-theme="light"] .sidebar,
+body[data-theme="light"] .sidebar h5,
+body[data-theme="light"] .sidebar small,
+body[data-theme="light"] .sidebar .nav-link,
+body[data-theme="light"] .sidebar .nav-link i,
+body[data-theme="light"] .sidebar .nav-link.active {
+  color: #fff !important;
+}
+
+/* Cards and surfaces */
+body[data-theme] .card { background: var(--bg-surface) !important; color: var(--text-primary) !important; border-color: var(--border-color) !important; box-shadow: var(--card-shadow); }
+body[data-theme] .card-header { background: var(--bg-surface) !important; border-bottom-color: var(--border-color) !important; }
+/* Preserve colored headers (e.g., weekly current header) */
+body[data-theme] .card-header.bg-primary { background-color: var(--brand-1) !important; color: #fff !important; }
+body[data-theme] .border-0.shadow-sm { box-shadow: var(--card-shadow) !important; }
+/* Alerts */
+body[data-theme] .alert { background: var(--bg-surface) !important; color: var(--text-primary) !important; border-color: var(--border-color) !important; }
+
+/* Modals */
+body[data-theme] .modal-content { background: var(--bg-surface) !important; color: var(--text-primary) !important; border-color: var(--border-color) !important; }
+body[data-theme] .modal-header, body[data-theme] .modal-footer { background: var(--bg-surface) !important; border-color: var(--border-color) !important; }
+
+/* Dropdowns */
+body[data-theme] .dropdown-menu { background: var(--bg-surface) !important; color: var(--text-primary) !important; border-color: var(--border-color) !important; }
+body[data-theme] .dropdown-item { color: var(--text-primary) !important; }
+body[data-theme] .dropdown-item:hover { background: rgba(255,255,255,0.08) !important; }
+
+/* Text utilities override for perfect clarity */
+body[data-theme] .text-muted { color: var(--text-secondary) !important; opacity: 1 !important; }
+
+/* Tables */
+body[data-theme] .table { color: var(--text-primary); }
+/* Ensure container under the table is also themed */
+body[data-theme] .table-responsive { background: var(--bg-surface) !important; }
+/* Header background and cells */
+body[data-theme] thead.table-light {
+  /* Set Bootstrap table CSS variables at the thead scope */
+  --bs-table-bg: var(--table-head-bg) !important;
+  --bs-table-color: var(--text-primary) !important;
+  --bs-table-border-color: var(--border-color) !important;
+  background: var(--table-head-bg) !important;
+}
+/* Weekly history header explicit scope (in case of selector specificity issues) */
+body[data-theme] #weekly-history-table thead.table-light {
+  --bs-table-bg: var(--table-head-bg) !important;
+  --bs-table-color: var(--text-primary) !important;
+  --bs-table-border-color: var(--border-color) !important;
+  background: var(--table-head-bg) !important;
+}
+body[data-theme] thead.table-light th {
+  background: var(--table-head-bg) !important;
+  color: var(--text-primary) !important;
+  border-color: var(--border-color) !important;
+}
+/* Generic table border/cell colors */
+body[data-theme] .table > :not(caption) > * > * { color: var(--text-primary) !important; border-color: var(--border-color) !important; }
+/* Hover */
+body[data-theme] .table tbody tr:hover { background: var(--table-row-hover-bg) !important; }
+body[data-theme] .table-hover > tbody > tr:hover > * { background: var(--table-row-hover-bg) !important; }
+/* Bootstrap table-light variable overrides for consistency when applied on table */
+body[data-theme] .table.table-light {
+  --bs-table-bg: var(--table-head-bg) !important;
+  --bs-table-border-color: var(--border-color) !important;
+  --bs-table-color: var(--text-primary) !important;
+  --bs-table-striped-bg: var(--table-row-hover-bg) !important;
+  --bs-table-striped-color: var(--text-primary) !important;
+  --bs-table-hover-bg: var(--table-row-hover-bg) !important;
+  --bs-table-hover-color: var(--text-primary) !important;
+}
+
+/* Emails table default variables (scope only this table) */
+body[data-theme] #emails .table {
+  --bs-table-bg: var(--table-row-read-bg) !important;
+  --bs-table-color: var(--text-primary) !important;
+  --bs-table-border-color: var(--border-color) !important;
+  --bs-table-hover-bg: var(--table-row-hover-bg) !important;
+}
+
+/* Personal performance tables (6 last weeks) */
+body[data-theme] #personal-performance .table {
+  --bs-table-bg: var(--bg-surface) !important;
+  --bs-table-color: var(--text-primary) !important;
+  --bs-table-border-color: var(--border-color) !important;
+  --bs-table-hover-bg: var(--table-row-hover-bg) !important;
+}
+
+/* Weekly history table */
+body[data-theme] #weekly-history-table {
+  --bs-table-bg: var(--bg-surface) !important;
+  --bs-table-color: var(--text-primary) !important;
+  --bs-table-border-color: var(--border-color) !important;
+  --bs-table-hover-bg: var(--table-row-hover-bg) !important;
+}
+
+/* Email rows stateful backgrounds (read vs unread) */
+.table > tbody > tr.email-row.email-read > * { background-color: var(--table-row-read-bg) !important; }
+.table > tbody > tr.email-row.email-unread > * { background-color: var(--table-row-unread-bg) !important; }
+/* Ensure hover remains distinct and consistent */
+.table.table-hover > tbody > tr.email-row:hover > * { background-color: var(--table-row-hover-bg) !important; }
+
+/* Neutralize Bootstrap warning backgrounds if present on rows */
+body[data-theme] .table > tbody > tr.table-warning > * { background-color: var(--table-row-unread-bg) !important; color: var(--text-primary) !important; }
+
+/* Cards, list groups, nav pills generic backgrounds */
+body[data-theme] .list-group-item { background: var(--bg-surface) !important; color: var(--text-primary) !important; border-color: var(--border-color) !important; }
+body[data-theme] .nav-pills .nav-link { color: var(--text-primary) !important; }
+body[data-theme] .nav-pills .nav-link.active { background: rgba(255,255,255,0.12) !important; color: var(--text-primary) !important; }
+
+/* Weekly subtabs navbar: themed background, borders and states */
+body[data-theme] .modern-subtabs { 
+  background: var(--bg-surface) !important; 
+  border-color: var(--border-color) !important; 
+}
+body[data-theme] .modern-subtabs .nav-link { 
+  color: var(--text-primary) !important; 
+}
+/* Softer hover per theme for better contrast */
+body[data-theme="light"] .modern-subtabs .nav-link:hover { background: rgba(0,0,0,0.05) !important; }
+body[data-theme="dark"] .modern-subtabs .nav-link:hover { background: rgba(255,255,255,0.08) !important; }
+/* Active state: use brand color with strong contrast */
+body[data-theme] .modern-subtabs .nav-link.active { 
+  background: var(--brand-1) !important; 
+  color: #fff !important; 
+}
+
+/* Light header blocks should follow theme instead of staying white/grey */
+body[data-theme] .card-header.bg-light {
+  background: var(--bg-surface) !important;
+  color: var(--text-primary) !important;
+  border-bottom-color: var(--border-color) !important;
+}
+
+/* Inputs/selects */
+body[data-theme] .form-control, body[data-theme] .form-select, body[data-theme] .input-group-text { background: var(--bg-surface) !important; color: var(--text-primary) !important; border-color: var(--border-color) !important; }
+body[data-theme] .form-control::placeholder { color: rgba(255,255,255,0.6); }
+body[data-theme] .form-check-input { background-color: var(--bg-surface) !important; border-color: var(--border-color) !important; }
+body[data-theme] .form-check-label { color: var(--text-primary) !important; }
+
+/* Gradients and accents */
+body[data-theme] .bg-gradient { background: linear-gradient(135deg, var(--brand-1) 0%, var(--brand-2) 100%) !important; }
+/* Improve contrast for titles on gradient headers without forcing all children (keeps buttons readable) */
+body[data-theme] .card-header.bg-gradient h1,
+body[data-theme] .card-header.bg-gradient h2,
+body[data-theme] .card-header.bg-gradient h3,
+body[data-theme] .card-header.bg-gradient h4,
+body[data-theme] .card-header.bg-gradient h5,
+body[data-theme] .card-header.bg-gradient h6,
+body[data-theme] .card-header.bg-gradient .card-title,
+body[data-theme] .card-header.bg-gradient .fw-semibold { color: #fff !important; }
+
+/* Badges and status indicators keep Bootstrap hues but adapt text contrast */
+body[data-theme] .badge.bg-light { background: rgba(255,255,255,0.08) !important; color: var(--text-primary) !important; }
+/* Keep readable text on warning badges even in dark themes */
+body[data-theme] .badge.bg-warning.text-dark { color: #111 !important; }
+/* Improve contrast for neutral badges in dark theme (e.g., folder name in list) */
+body[data-theme="dark"] .badge.bg-secondary { background-color: rgba(255,255,255,0.12) !important; color: var(--text-primary) !important; border: 1px solid var(--border-color) !important; }
+
+/* Scrollbars themed */
+body[data-theme] .tab-pane::-webkit-scrollbar-thumb,
+body[data-theme] .pane-scroll::-webkit-scrollbar-thumb,
+body[data-theme] #monitoring #folders-tree::-webkit-scrollbar-thumb,
+body[data-theme] .table-responsive::-webkit-scrollbar-thumb,
+body[data-theme] .modal .modal-body::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, var(--brand-1), var(--brand-2));
+  border: 3px solid var(--bg-app);
+}
+body[data-theme] .tab-pane::-webkit-scrollbar-track,
+body[data-theme] .pane-scroll::-webkit-scrollbar-track,
+body[data-theme] #monitoring #folders-tree::-webkit-scrollbar-track,
+body[data-theme] .table-responsive::-webkit-scrollbar-track,
+body[data-theme] .modal .modal-body::-webkit-scrollbar-track { background: var(--bg-app); }
+
+/* Titlebar tint */
+body[data-theme] .custom-titlebar { background: linear-gradient(90deg, var(--brand-1), var(--brand-2)); }
+/* Ensure titlebar text/icons remain white on light theme (overrides global themed text color) */
+body[data-theme="light"] .custom-titlebar,
+body[data-theme="light"] .custom-titlebar * { color: #fff !important; }
+
+/* Buttons primary accent */
+body[data-theme] .btn-primary { background-color: var(--brand-1) !important; border-color: var(--brand-1) !important; }
+body[data-theme] .btn-outline-primary { color: var(--brand-1) !important; border-color: var(--brand-1) !important; }
+body[data-theme] .btn-outline-primary:hover { background-color: rgba(255,255,255,0.15) !important; }
+body[data-theme] .btn, body[data-theme] .btn-secondary, body[data-theme] .btn-outline-secondary { color: var(--text-primary) !important; border-color: var(--border-color) !important; }
+
+/* Cards used as stats tiles */
+body[data-theme] .stat-card i { color: var(--brand-1) !important; }
+
+/* Folder repartition row bg */
+body[data-theme] #folders-stats-grid .border { border-color: var(--border-color) !important; }
+/* Override stat tiles and sticky filters that used light gradients */
+body[data-theme] #folders-stats-grid .folder-stat-card { background: var(--bg-surface) !important; border-color: var(--border-color) !important; }
+body[data-theme] #monitoring .sticky-filter { background: var(--bg-surface) !important; }
+/* Monitoring folder cards/list */
+body[data-theme] .folder-card { background: var(--bg-surface) !important; color: var(--text-primary) !important; border-color: var(--border-color) !important; box-shadow: var(--card-shadow) !important; }
+body[data-theme] .folder-card .folder-header { background: var(--bg-surface) !important; border-bottom-color: var(--border-color) !important; }
+body[data-theme] .folder-path { background: var(--bg-app) !important; color: var(--text-secondary) !important; }
+/* Folder tree hover/selected states across themes */
+body[data-theme] #monitoring #folders-tree .folder-item:hover { background: rgba(255,255,255,0.08) !important; }
+body[data-theme="light"] #monitoring #folders-tree .folder-item:hover { background: rgba(0,0,0,0.04) !important; }
+body[data-theme] #monitoring #folders-tree .folder-item.selected { background: rgba(255,255,255,0.12) !important; }
+/* Folder list lines default/hover/selected styling */
+body[data-theme] #monitoring #folders-tree .folder-line { 
+  background: var(--bg-surface) !important; 
+  color: var(--text-primary) !important; 
+  border: 1px solid var(--border-color) !important; 
+}
+body[data-theme] #monitoring #folders-tree .folder-line .folder-name { color: var(--text-primary) !important; }
+body[data-theme] #monitoring #folders-tree .folder-toggle { color: var(--text-secondary) !important; }
+body[data-theme="dark"] #monitoring #folders-tree .folder-line:hover { background: rgba(255,255,255,0.06) !important; }
+body[data-theme="light"] #monitoring #folders-tree .folder-line:hover { background: rgba(0,0,0,0.04) !important; }
+body[data-theme] #monitoring #folders-tree .folder-selectable.bg-primary { background-color: var(--brand-1) !important; color: #fff !important; }
+body[data-theme] #monitoring #folders-tree .folder-selectable.bg-primary i { color: #fff !important; }
+/* Chips and footer tint */
+body[data-theme] .chip { background: rgba(255,255,255,0.08) !important; color: var(--text-primary) !important; }
+/* Footer: use transparent background and theme-driven border/text */
+body[data-theme] footer { background: transparent !important; color: var(--text-secondary) !important; }
+body[data-theme] footer .text-muted { color: var(--text-secondary) !important; }
+body[data-theme] footer.border-top { border-top-color: var(--border-color) !important; }
+
+/* Generic white/gray backgrounds fallback to themed surfaces */
+body[data-theme] .bg-white, body[data-theme] .bg-light, body[data-theme] .modal, body[data-theme] .card-body, body[data-theme] .offcanvas, body[data-theme] .accordion-item {
+  background: var(--bg-surface) !important;
+  color: var(--text-primary) !important;
+}
+/* Borders in compound card sections */
+body[data-theme] .border-top, body[data-theme] .border-bottom, body[data-theme] .border-start, body[data-theme] .border-end { border-color: var(--border-color) !important; }
+/* Emails filters bar bottom border */
+body[data-theme] #emails .card-body.border-bottom { border-bottom-color: var(--border-color) !important; }
+/* Emails pagination/top/bottom borders */
+body[data-theme] #emails .border-top { border-top-color: var(--border-color) !important; }
+
+/* Improve readable small text */
+body[data-theme] small, body[data-theme] .form-text, body[data-theme] .text-secondary { color: var(--text-secondary) !important; }
+
+/* Navbar footer label contrast in sidebar */
+body[data-theme] .sidebar .form-label { color: rgba(255,255,255,0.85) !important; }
+body[data-theme] .sidebar .form-select { background: rgba(255,255,255,0.12) !important; color: #fff !important; border-color: rgba(255,255,255,0.2) !important; }
+body[data-theme] .sidebar .form-select option { color: #000; }
+/* Sidebar theme toggle button */
+body[data-theme] .sidebar #theme-toggle {
+  background: rgba(255,255,255,0.12) !important;
+  color: #fff !important;
+  border-color: rgba(255,255,255,0.25) !important;
+}
+body[data-theme] .sidebar #theme-toggle:hover {
+  background: rgba(255,255,255,0.18) !important;
+}
+
+/* Sidebar nav: keep white text/icons on light theme (override generic nav-pills gray) */
+body[data-theme="light"] .sidebar,
+body[data-theme="light"] .sidebar h5,
+body[data-theme="light"] .sidebar small,
+body[data-theme="light"] .sidebar .nav-link,
+body[data-theme="light"] .sidebar .nav-link i,
+body[data-theme="light"] .sidebar .nav-link.active {
+  color: #fff !important;
+}
+
+/* Neutralize Bootstrap hardcoded utilities in dark themes */
+body[data-theme="dark"] {
+  --neutralize-text-dark: var(--text-primary);
+}
+body[data-theme="dark"] .text-dark { color: var(--neutralize-text-dark) !important; }
+body[data-theme="dark"] .bg-light { background: var(--bg-surface) !important; color: var(--text-primary) !important; }

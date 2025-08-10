@@ -32,6 +32,21 @@ class OptimizedDatabaseService {
         };
     }
 
+    // Normalise les valeurs de catégorie (accepte anciens slugs et renvoie libellés humains)
+    normalizeCategory(category) {
+        if (!category) return category;
+        const map = {
+            'declarations': 'Déclarations',
+            'reglements': 'Règlements',
+            'mails_simples': 'Mails simples',
+            'mails simple': 'Mails simples',
+            'mail simple': 'Mails simples'
+        };
+        const key = String(category).trim();
+        if (['Déclarations', 'Règlements', 'Mails simples'].includes(key)) return key;
+        return map[key] || key;
+    }
+
     /**
      * Initialisation avec optimisations WAL et performance
      */
@@ -66,6 +81,10 @@ class OptimizedDatabaseService {
             // S'assurer que les colonnes de suppression existent
                 // this.ensureDeletedColumn(); // supprimé, colonne gérée dans la migration
             this.ensureWeeklyStatsTable();
+            // Assurer la table des commentaires hebdomadaires
+            this.ensureWeeklyCommentsTable();
+            // Normaliser d'anciennes valeurs de catégories si besoin
+            this.migrateNormalizeFolderCategories();
             
             // Préparer les statements pour performance
             this.prepareStatements();
@@ -82,12 +101,25 @@ class OptimizedDatabaseService {
         }
     }
 
+    // Migration légère: normaliser les catégories héritées (slugs -> libellés)
+    migrateNormalizeFolderCategories() {
+        try {
+            this.db.exec(`UPDATE folder_configurations SET category = 'Mails simples' WHERE LOWER(category) IN ('mails_simples','mail simple','mails simple')`);
+            this.db.exec(`UPDATE folder_configurations SET category = 'Déclarations' WHERE LOWER(category) = 'declarations'`);
+            this.db.exec(`UPDATE folder_configurations SET category = 'Règlements' WHERE LOWER(category) = 'reglements'`);
+        } catch (e) {
+            console.warn('⚠️ Migration categories skipped:', e.message);
+        }
+    }
+
     /**
      * Configuration des optimisations SQLite
      */
     setupOptimizations() {
         // WAL Mode pour performance concurrente
         this.db.pragma('journal_mode = WAL');
+    // S'assurer que l'encodage SQLite est en UTF-8 (par défaut, mais explicite)
+    try { this.db.pragma('encoding = "UTF-8"'); } catch (_) {}
         
         // Optimisations de performance
         this.db.pragma('synchronous = NORMAL'); // Balance sécurité/performance
@@ -121,7 +153,27 @@ class OptimizedDatabaseService {
             )
         `);
 
-    // (activity_weekly supprimé)
+        // (activity_weekly supprimé)
+
+        // Table des configurations de dossiers surveillés
+        this.db.exec(`
+            CREATE TABLE IF NOT EXISTS folder_configurations (
+                folder_path TEXT PRIMARY KEY,
+                folder_name TEXT NOT NULL,
+                category TEXT NOT NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        `);
+
+        // Table des paramètres applicatifs (clé/valeur)
+        this.db.exec(`
+            CREATE TABLE IF NOT EXISTS app_settings (
+                key TEXT PRIMARY KEY,
+                value TEXT,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        `);
 
         // Index optimisés pour les requêtes fréquentes
         this.db.exec(`
@@ -171,12 +223,18 @@ class OptimizedDatabaseService {
             `),
             
             insertFolderConfig: this.db.prepare(`
-                INSERT OR REPLACE INTO folder_configurations (folder_name, category, folder_name, updated_at)
+                INSERT OR REPLACE INTO folder_configurations (folder_path, category, folder_name, updated_at)
                 VALUES (?, ?, ?, CURRENT_TIMESTAMP)
             `),
             
             deleteFolderConfig: this.db.prepare(`
-                DELETE FROM folder_configurations WHERE folder_name = ?
+                DELETE FROM folder_configurations WHERE folder_path = ?
+            `),
+
+            updateFolderCategory: this.db.prepare(`
+                UPDATE folder_configurations
+                SET category = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE folder_path = ?
             `),
             
             // Settings
@@ -280,10 +338,13 @@ class OptimizedDatabaseService {
         
         // Calculer le week_identifier (semaine ISO)
         const weekId = this.calculateWeekIdentifier(emailData.received_time);
+        // Normaliser le sujet par sécurité (si l'amont fournit Subject/ConversationTopic)
+        const rawSubject = (emailData.subject ?? emailData.Subject ?? emailData.ConversationTopic ?? '').toString();
+        const normalizedSubject = rawSubject.trim() !== '' ? rawSubject : '(Sans objet)';
         
         const result = this.statements.insertEmail.run(
             emailData.outlook_id || emailData.id || '',
-            emailData.subject || '',
+            normalizedSubject,
             emailData.sender_email || '',
             emailData.received_time || new Date().toISOString(),
             emailData.folder_name || '',
@@ -299,7 +360,7 @@ class OptimizedDatabaseService {
             this.updateWeeklyEmailCount(emailData, true, false);
             
             // Si l'email est déjà lu, le comptabiliser aussi comme "traité" selon le paramètre
-            const countReadAsTreated = this.getAppSetting('count_read_as_treated', 'false') === 'true';
+            const countReadAsTreated = !!this.getAppSetting('count_read_as_treated', false);
             if (countReadAsTreated && emailData.is_read) {
                 this.updateWeeklyEmailCount(emailData, false, true);
             }
@@ -328,13 +389,15 @@ class OptimizedDatabaseService {
             for (const email of emails) {
                 // Calculer le week_identifier (semaine ISO)
                 const weekId = this.calculateWeekIdentifier(email.received_time);
+                const rawSubject = (email.subject ?? email.Subject ?? email.ConversationTopic ?? '').toString();
+                const normalizedSubject = rawSubject.trim() !== '' ? rawSubject : '(Sans objet)';
                 
                 this.statements.insertEmail.run(
                     email.outlook_id || email.id || '',
-                    email.subject || '',
+                    normalizedSubject,
                     email.sender_email || '',
                     email.received_time || new Date().toISOString(),
-                    email.folder_name || email.folder_name || '',
+                    email.folder_name || '',
                     email.category || 'Mails simples',
                     email.is_read ? 1 : 0,
                     email.is_treated ? 1 : 0,
@@ -390,7 +453,12 @@ class OptimizedDatabaseService {
         const cacheKey = 'folders_config';
         
         return this.executeWithCache(cacheKey, () => {
-            return this.statements.getFoldersConfig.all();
+            const rows = this.statements.getFoldersConfig.all();
+            // Normaliser les catégories à l'affichage
+            return rows.map(r => ({
+                ...r,
+                category: this.normalizeCategory(r.category)
+            }));
         }, 300); // Cache 5 minutes
     }
 
@@ -399,7 +467,8 @@ class OptimizedDatabaseService {
      */
     addFolderConfiguration(folderPath, category, folderName) {
         this.cache.del('folders_config'); // Invalider cache
-        return this.statements.insertFolderConfig.run(folderPath, category, folderName);
+    const cat = this.normalizeCategory(category);
+    return this.statements.insertFolderConfig.run(folderPath, cat, folderName);
     }
 
     /**
@@ -408,6 +477,61 @@ class OptimizedDatabaseService {
     deleteFolderConfiguration(folderPath) {
         this.cache.del('folders_config'); // Invalider cache
         return this.statements.deleteFolderConfig.run(folderPath);
+    }
+
+    /**
+     * Met à jour la catégorie d'un dossier surveillé
+     */
+    updateFolderCategory(folderPath, category) {
+        this.cache.del('folders_config');
+        const cat = this.normalizeCategory(category);
+        const info = this.statements.updateFolderCategory.run(cat, folderPath);
+        // Si aucune ligne affectée, faire un upsert minimal avec folderName dérivé du path
+        if (info.changes === 0) {
+            const name = String(folderPath || '').split('\\').pop() || folderPath;
+            this.statements.insertFolderConfig.run(folderPath, cat, name);
+            return 1;
+        }
+        return info.changes;
+    }
+
+    /**
+     * Remplace la configuration complète des dossiers à surveiller
+     * Accepts either { folderCategories: { [path]: {category,name} } } or
+     * an array of { folder_path, category, folder_name }
+     */
+    saveFoldersConfiguration(payload) {
+        this.cache.del('folders_config');
+        const tx = this.db.transaction((rows) => {
+            // Remplacer tout pour garder la source unique (UI) en cohérence
+            this.db.prepare('DELETE FROM folder_configurations').run();
+            const insert = this.statements.insertFolderConfig;
+            for (const r of rows) {
+                const folderPath = r.folder_path || r.path || r.key || r.folderPath;
+                if (!folderPath) continue;
+                const category = this.normalizeCategory(r.category || '');
+                const name = r.folder_name || r.name || String(folderPath).split('\\').pop();
+                if (!category) continue;
+                insert.run(folderPath, category, name);
+            }
+        });
+
+        // Normaliser payload en tableau de lignes
+        let rows = [];
+    if (payload && typeof payload === 'object' && payload.folderCategories && typeof payload.folderCategories === 'object') {
+            rows = Object.entries(payload.folderCategories).map(([folder_path, cfg]) => ({
+                folder_path,
+        category: this.normalizeCategory(cfg?.category),
+                folder_name: cfg?.name || String(folder_path).split('\\').pop()
+            }));
+        } else if (Array.isArray(payload)) {
+            rows = payload;
+        } else if (payload && typeof payload === 'object' && Array.isArray(payload.rows)) {
+            rows = payload.rows;
+        }
+
+        tx(rows);
+        return { success: true, count: rows.length };
     }
 
     /**
@@ -563,27 +687,65 @@ class OptimizedDatabaseService {
             const rows = this.db.prepare('SELECT key, value FROM app_settings').all();
             // Construire un objet à partir des clés plates "section.sousCle"
             const flat = {};
-            rows.forEach(row => {
+            const coerceValue = (raw) => {
+                // 1) Essayer JSON.parse d'abord (stockage normalisé)
                 try {
-                    flat[row.key] = JSON.parse(row.value);
-                } catch {
-                    flat[row.key] = row.value;
+                    const parsed = JSON.parse(raw);
+                    // Certains anciens enregistrements ont été stockés comme chaîne "true"/"false"
+                    if (parsed === 'true') return true;
+                    if (parsed === 'false') return false;
+                    return parsed;
+                } catch {}
+                // 2) Gérer anciens formats: chaînes 'true'/'false' éventuellement avec quotes simples
+                if (typeof raw === 'string') {
+                    const trimmed = raw.trim().replace(/^['"]|['"]$/g, '');
+                    if (trimmed.toLowerCase() === 'true') return true;
+                    if (trimmed.toLowerCase() === 'false') return false;
                 }
+                // 3) Retourner brut si rien d'autre ne convient
+                return raw;
+            };
+
+            rows.forEach(row => {
+                flat[row.key] = coerceValue(row.value);
             });
 
+            // Build nested object robustly: if both 'a' and 'a.b' exist, keep shallow 'a' (primitive)
             const nested = {};
-            for (const [key, value] of Object.entries(flat)) {
+            const entries = Object.entries(flat).sort((a, b) => {
+                const da = a[0].split('.').length;
+                const db = b[0].split('.').length;
+                return da - db; // process shallow keys first
+            });
+
+            let collisionCount = 0;
+            for (const [key, value] of entries) {
                 const parts = key.split('.');
                 let cur = nested;
-                for (let i = 0; i < parts.length; i++) {
+                let skip = false;
+                for (let i = 0; i < parts.length - 1; i++) {
                     const p = parts[i];
-                    if (i === parts.length - 1) {
-                        cur[p] = value;
-                    } else {
-                        cur[p] = cur[p] || {};
-                        cur = cur[p];
+                    // If a primitive already exists here, we ignore deeper keys under it
+                    if (cur[p] !== undefined && (typeof cur[p] !== 'object' || cur[p] === null || Array.isArray(cur[p]))) {
+                        collisionCount++;
+                        skip = true;
+                        break;
                     }
+                    if (cur[p] === undefined) cur[p] = {};
+                    cur = cur[p];
                 }
+                if (skip) continue;
+
+                const leaf = parts[parts.length - 1];
+                // If an object already exists at the leaf due to previous deeper keys, don't overwrite with a primitive
+                if (cur[leaf] && typeof cur[leaf] === 'object' && cur[leaf] !== null && !Array.isArray(cur[leaf])) {
+                    collisionCount++;
+                    continue;
+                }
+                cur[leaf] = value;
+            }
+            if (collisionCount > 0) {
+                console.warn(`⚠️ [SETTINGS] Collisions ignorées lors du chargement des paramètres: ${collisionCount}`);
             }
 
             this.cache.set(cacheKey, nested, 300); // Cache 5 minutes
@@ -660,6 +822,30 @@ class OptimizedDatabaseService {
             // console.log('✅ Table weekly_stats assurée');
         } catch (error) {
             console.error('❌ Erreur ensureWeeklyStatsTable:', error);
+        }
+    }
+
+    /**
+     * Assurer table des commentaires hebdomadaires
+     */
+    ensureWeeklyCommentsTable() {
+        try {
+            this.db.exec(`
+                CREATE TABLE IF NOT EXISTS weekly_comments (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    week_identifier TEXT NOT NULL,
+                    week_year INTEGER NOT NULL,
+                    week_number INTEGER NOT NULL,
+                    category TEXT NULL,
+                    comment_text TEXT NOT NULL,
+                    author TEXT NULL,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                );
+                CREATE INDEX IF NOT EXISTS idx_weekly_comments_week ON weekly_comments(week_identifier);
+            `);
+        } catch (error) {
+            console.error('❌ Erreur ensureWeeklyCommentsTable:', error);
         }
     }
 
@@ -925,7 +1111,7 @@ class OptimizedDatabaseService {
             // Invalider le cache de l'interface utilisateur pour mise à jour en temps réel
             if (result.changes > 0) {
                 // Mettre à jour les statistiques hebdomadaires si "mail lu = traité"
-                const countReadAsTreated = this.getAppSetting('count_read_as_treated', 'false') === 'true';
+                const countReadAsTreated = !!this.getAppSetting('count_read_as_treated', false);
                 
                 if (countReadAsTreated) {
                     // Récupérer les infos de l'email pour les stats hebdomadaires
@@ -1339,7 +1525,7 @@ class OptimizedDatabaseService {
             const weekInfo = this.getISOWeekInfo();
             
             // Vérifier le paramètre compterLuCommeTraite depuis la config
-            const compterLuCommeTraite = this.getAppSetting('count_read_as_treated', 'false') === 'true';
+            const compterLuCommeTraite = !!this.getAppSetting('count_read_as_treated', false);
             
             // Récupérer tous les emails ARRIVÉS (ajoutés en BDD) de la semaine actuelle groupés par dossier
             const emailStats = this.db.prepare(`
@@ -1504,12 +1690,13 @@ class OptimizedDatabaseService {
      */
     mapFolderToCategory(folderPath) {
         try {
-            // Utiliser directement la configuration des dossiers
+            // Utiliser directement la configuration des dossiers (schéma actuel)
             const stmt = this.db.prepare(`
-                SELECT category FROM folder_configs 
-                WHERE folder_path = ? AND enabled = 1
+                SELECT category FROM folder_configurations
+                WHERE folder_path = ?
+                LIMIT 1
             `);
-            
+
             const result = stmt.get(folderPath);
             if (result) {
                 return result.category;
@@ -1813,6 +2000,103 @@ class OptimizedDatabaseService {
         };
     }
 
+    // ==================== WEEKLY COMMENTS ====================
+    /**
+     * Ajoute un commentaire pour une semaine donnée
+     */
+    addWeeklyComment({ week_identifier, week_year, week_number, category = null, comment_text, author = null }) {
+        try {
+            if (!week_identifier || !comment_text) throw new Error('Paramètres obligatoires manquants');
+            if ((!week_year || !week_number) && week_identifier) {
+                // Extraire depuis S{num}-{year}
+                const m = String(week_identifier).match(/S(\d+)-?(\d{4})/);
+                if (m) { week_number = week_number || parseInt(m[1], 10); week_year = week_year || parseInt(m[2], 10); }
+            }
+            const stmt = this.db.prepare(`
+                INSERT INTO weekly_comments (week_identifier, week_year, week_number, category, comment_text, author, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            `);
+            const res = stmt.run(week_identifier, week_year, week_number, category, comment_text, author);
+            return { success: true, id: res.lastInsertRowid };
+        } catch (error) {
+            console.error('❌ [WEEKLY-COMMENTS] Erreur ajout:', error);
+            return { success: false, error: error.message };
+        }
+    }
+
+    /**
+     * Récupère les commentaires d'une semaine
+     */
+    getWeeklyComments(week_identifier) {
+        try {
+            const stmt = this.db.prepare(`
+                SELECT id, week_identifier, week_year, week_number, category, comment_text, author, created_at, updated_at
+                FROM weekly_comments
+                WHERE week_identifier = ?
+                ORDER BY created_at DESC
+            `);
+            const rows = stmt.all(week_identifier);
+            return { success: true, rows };
+        } catch (error) {
+            console.error('❌ [WEEKLY-COMMENTS] Erreur lecture:', error);
+            return { success: false, rows: [], error: error.message };
+        }
+    }
+
+    /**
+     * Met à jour le texte d'un commentaire
+     */
+    updateWeeklyComment(id, comment_text, category = undefined) {
+        try {
+            if (!id) throw new Error('ID requis');
+            let sql = 'UPDATE weekly_comments SET comment_text = ?, updated_at = CURRENT_TIMESTAMP';
+            const params = [comment_text];
+            if (category !== undefined) { sql += ', category = ?'; params.push(category); }
+            sql += ' WHERE id = ?';
+            params.push(id);
+            const stmt = this.db.prepare(sql);
+            const res = stmt.run(...params);
+            return { success: res.changes > 0, changes: res.changes };
+        } catch (error) {
+            console.error('❌ [WEEKLY-COMMENTS] Erreur mise à jour:', error);
+            return { success: false, error: error.message };
+        }
+    }
+
+    /**
+     * Supprime un commentaire
+     */
+    deleteWeeklyComment(id) {
+        try {
+            const stmt = this.db.prepare('DELETE FROM weekly_comments WHERE id = ?');
+            const res = stmt.run(id);
+            return { success: res.changes > 0, changes: res.changes };
+        } catch (error) {
+            console.error('❌ [WEEKLY-COMMENTS] Erreur suppression:', error);
+            return { success: false, error: error.message };
+        }
+    }
+
+    /**
+     * Liste les semaines distinctes (pour le sélecteur de commentaires)
+     */
+    listDistinctWeeks(limit = 52) {
+        try {
+            const rows = this.db.prepare(`
+                SELECT week_identifier, MAX(week_year) AS week_year, MAX(week_number) AS week_number,
+                       MAX(week_start_date) AS week_start_date, MAX(week_end_date) AS week_end_date
+                FROM weekly_stats
+                GROUP BY week_identifier
+                ORDER BY week_year DESC, week_number DESC
+                LIMIT ?
+            `).all(limit);
+            return { success: true, rows };
+        } catch (error) {
+            console.error('❌ [WEEKS] Erreur liste semaines:', error);
+            return { success: false, rows: [], error: error.message };
+        }
+    }
+
     /**
      * Méthodes pour gérer les paramètres d'application
      */
@@ -1820,7 +2104,18 @@ class OptimizedDatabaseService {
         try {
             const stmt = this.db.prepare('SELECT value FROM app_settings WHERE key = ?');
             const result = stmt.get(key);
-            return result ? result.value : defaultValue;
+            if (!result) return defaultValue;
+            const raw = result.value;
+            // Les valeurs sont stockées en JSON string; fallback si legacy texte
+            try {
+                return JSON.parse(raw);
+            } catch {
+                if (typeof raw === 'string') {
+                    if (raw.toLowerCase() === 'true') return true;
+                    if (raw.toLowerCase() === 'false') return false;
+                }
+                return raw ?? defaultValue;
+            }
         } catch (error) {
             console.error(`❌ [SETTINGS] Erreur lecture paramètre ${key}:`, error);
             return defaultValue;
@@ -1829,15 +2124,15 @@ class OptimizedDatabaseService {
 
     setAppSetting(key, value) {
         try {
-            const storedValue = (value !== null && typeof value === 'object') ? JSON.stringify(value) : value;
+            const storedValue = JSON.stringify(value);
             const stmt = this.db.prepare(`
                 INSERT OR REPLACE INTO app_settings (key, value, updated_at) 
                 VALUES (?, ?, CURRENT_TIMESTAMP)
             `);
             const result = stmt.run(key, storedValue);
-            // Invalider le cache des paramètres après écriture
             this.cache.del && this.cache.del('app_settings');
-            console.log(`⚙️ [SETTINGS] Paramètre sauvegardé: ${key} = ${value}`);
+            this.cache.del && this.cache.del(`setting_${key}`);
+            console.log(`⚙️ [SETTINGS] Paramètre sauvegardé: ${key} = ${storedValue}`);
             return result.changes > 0;
         } catch (error) {
             console.error(`❌ [SETTINGS] Erreur sauvegarde paramètre ${key}:`, error);
@@ -1850,7 +2145,8 @@ class OptimizedDatabaseService {
      */
     saveAppConfig(key, value) {
         try {
-            const storedValue = (value !== null && typeof value === 'object') ? JSON.stringify(value) : value;
+            // Toujours sérialiser en chaîne (évite l'erreur de binding pour les booléens)
+            const storedValue = JSON.stringify(value);
             const stmt = this.db.prepare(`
                 INSERT OR REPLACE INTO app_settings (key, value, updated_at)
                 VALUES (?, ?, CURRENT_TIMESTAMP)
