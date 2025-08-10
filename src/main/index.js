@@ -84,6 +84,21 @@ const APP_CONFIG = {
 autoUpdater.autoDownload = true;
 autoUpdater.autoInstallOnAppQuit = true;
 
+// If repo is private, allow providing a GitHub token bundled or via env to authorize release access
+try {
+  let bundledToken = null;
+  try {
+    // Optional local file included at build time (not committed): src/main/updaterToken.js exports a string
+    bundledToken = require('./updaterToken');
+  } catch {}
+  const envToken = process.env.GH_TOKEN || process.env.UPDATER_TOKEN || process.env.ELECTRON_UPDATER_TOKEN;
+  const updaterToken = (typeof bundledToken === 'string' && bundledToken.trim()) ? bundledToken.trim() : envToken;
+  if (updaterToken) {
+    autoUpdater.requestHeaders = { Authorization: `token ${updaterToken}` };
+    logClean('🔑 Token GitHub pour mises a jour configure (repo prive pris en charge)');
+  }
+} catch {}
+
 function setupAutoUpdater() {
   autoUpdater.on('error', (err) => {
     logClean('⚠️ Mise à jour: erreur: ' + (err?.message || String(err)));
@@ -243,8 +258,18 @@ function createLoadingWindow() {
 app.on('ready', () => {
   setupAutoUpdater();
   // Vérifie à froid puis toutes les 30 minutes
-  setTimeout(() => autoUpdater.checkForUpdatesAndNotify().catch(() => {}), 5000);
-  setInterval(() => autoUpdater.checkForUpdatesAndNotify().catch(() => {}), 30 * 60 * 1000);
+  setTimeout(() => {
+    logClean('🔎 Verification des mises a jour au demarrage...');
+    autoUpdater.checkForUpdatesAndNotify().catch((e) => {
+      logClean('⚠️ Echec verification MAJ: ' + (e?.message || String(e)));
+    });
+  }, 5000);
+  setInterval(() => {
+    logClean('🔎 Verification periodique des mises a jour...');
+    autoUpdater.checkForUpdatesAndNotify().catch((e) => {
+      logClean('⚠️ Echec verification MAJ (periodique): ' + (e?.message || String(e)));
+    });
+  }, 30 * 60 * 1000);
   // En mode dev: vérifie s'il y a des commits distants et propose un pull
   setTimeout(() => { checkDevGitUpdatesOnStartup(); }, 3000);
 });
@@ -1557,7 +1582,7 @@ ipcMain.handle('api-weekly-current-stats', async () => {
         
         categories[categoryName] = {
           received: row.emails_received || 0,
-          treated: row.emails_treated || 0,
+          treated: Math.max(0, row.emails_treated || 0),
           adjustments: row.manual_adjustments || 0,
           total: (row.emails_received || 0) + (row.manual_adjustments || 0)
         };
@@ -1668,7 +1693,7 @@ ipcMain.handle('api-weekly-history', async (event, { limit = 5, page = 1, pageSi
       let category = toDisplayCategory(row.folder_type);
       
       const received = row.emails_received || 0;
-      const treated = row.emails_treated || 0;
+  const treated = Math.max(0, row.emails_treated || 0);
       const adjustments = row.manual_adjustments || 0;
       
       // Mettre à jour les données de la catégorie

@@ -1,6 +1,6 @@
 {
   "name": "mailmonitor",
-  "version": "0.8.1",
+  "version": "0.8.2",
   "description": "Application de monitoring des emails Outlook avec interface moderne",
   "main": "src/main/index.js",
   "scripts": {
@@ -43,7 +43,8 @@
         "provider": "github",
         "owner": "Erkaek",
         "repo": "AutoMailMonitor",
-        "releaseType": "release"
+  "releaseType": "release",
+  "private": true
       }
     ],
     "files": [

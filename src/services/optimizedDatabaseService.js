@@ -80,6 +80,8 @@ class OptimizedDatabaseService {
             
             // S'assurer que les colonnes de suppression existent
                 // this.ensureDeletedColumn(); // supprimé, colonne gérée dans la migration
+            // Nouvelle colonne: treated_at (date de traitement)
+            this.ensureTreatedAtColumn();
             this.ensureWeeklyStatsTable();
             // Assurer la table des commentaires hebdomadaires
             this.ensureWeeklyCommentsTable();
@@ -134,7 +136,7 @@ class OptimizedDatabaseService {
      * Création des tables optimisées (compatible avec schéma existant)
      */
     createTables() {
-        // Table emails avec structure optimisée (compatible logique VBA)
+    // Table emails avec structure optimisée (compatible logique VBA)
         this.db.exec(`
             CREATE TABLE IF NOT EXISTS emails (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -147,6 +149,7 @@ class OptimizedDatabaseService {
                 is_read BOOLEAN DEFAULT 0,
                 is_treated BOOLEAN DEFAULT 0,
                 deleted_at DATETIME NULL,
+        treated_at DATETIME NULL,
                 week_identifier TEXT,
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
@@ -185,7 +188,39 @@ class OptimizedDatabaseService {
             CREATE INDEX IF NOT EXISTS idx_emails_week_identifier ON emails(week_identifier);
             CREATE INDEX IF NOT EXISTS idx_emails_deleted_at ON emails(deleted_at);
             CREATE INDEX IF NOT EXISTS idx_emails_is_treated ON emails(is_treated);
+            CREATE INDEX IF NOT EXISTS idx_emails_treated_at ON emails(treated_at);
         `);
+    }
+
+    /**
+     * Migration: ajoute la colonne treated_at si absente et pré-remplit depuis is_treated/deleted_at
+     */
+    ensureTreatedAtColumn() {
+        try {
+            const cols = this.db.prepare(`PRAGMA table_info(emails)`).all();
+            const hasTreatedAt = cols.some(c => String(c.name).toLowerCase() === 'treated_at');
+            if (!hasTreatedAt) {
+                this.db.exec(`ALTER TABLE emails ADD COLUMN treated_at DATETIME NULL`);
+            }
+            // Index idempotent
+            this.db.exec(`CREATE INDEX IF NOT EXISTS idx_emails_treated_at ON emails(treated_at)`);
+            // Pré-remplissage: si is_treated=1 et treated_at NULL => treated_at = updated_at (ou now)
+            this.db.exec(`
+                UPDATE emails
+                SET treated_at = COALESCE(updated_at, CURRENT_TIMESTAMP)
+                WHERE (is_treated = 1 OR is_treated = '1' OR is_treated = TRUE)
+                  AND (treated_at IS NULL)
+            `);
+            // Si deleted_at défini et treated_at NULL => treated_at = deleted_at
+            this.db.exec(`
+                UPDATE emails
+                SET treated_at = deleted_at
+                WHERE deleted_at IS NOT NULL
+                  AND treated_at IS NULL
+            `);
+        } catch (e) {
+            console.warn('⚠️ Migration treated_at ignorée:', e.message);
+        }
     }
 
     /**
@@ -195,11 +230,27 @@ class OptimizedDatabaseService {
         // Statements les plus utilisés
         this.statements = {
             // Emails - compatible avec nouvelle structure optimisée
-            insertEmail: this.db.prepare(`
-                INSERT OR REPLACE INTO emails 
+            // Insertion stricte (pas de REPLACE) pour éviter les réinsertions involontaires
+            insertEmailNew: this.db.prepare(`
+                INSERT INTO emails 
                 (outlook_id, subject, sender_email, received_time, folder_name, 
-                 category, is_read, is_treated, week_identifier, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                 category, is_read, is_treated, deleted_at, treated_at, week_identifier, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, CURRENT_TIMESTAMP)
+            `),
+            // Mise à jour par outlook_id (sans toucher received_time ni week_identifier)
+            updateEmailByOutlookId: this.db.prepare(`
+                UPDATE emails SET 
+                    subject = ?,
+                    sender_email = ?,
+                    folder_name = ?,
+                    category = ?,
+                    is_read = ?,
+                    -- Keep legacy is_treated in sync only if explicitly provided
+                    is_treated = ?,
+                    -- Do not overwrite treated_at unless a non-null value is provided
+                    treated_at = COALESCE(?, treated_at),
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE outlook_id = ?
             `),
             
             getRecentEmails: this.db.prepare(`
@@ -208,12 +259,12 @@ class OptimizedDatabaseService {
                 LIMIT ?
             `),
             
-            getEmailStats: this.db.prepare(`
+        getEmailStats: this.db.prepare(`
                 SELECT 
                     COUNT(*) as totalEmails,
                     SUM(CASE WHEN is_read = 0 THEN 1 ELSE 0 END) as unreadTotal,
                     SUM(CASE WHEN DATE(received_time) = DATE('now') THEN 1 ELSE 0 END) as emailsToday,
-                    SUM(CASE WHEN DATE(deleted_at) = DATE('now') THEN 1 ELSE 0 END) as treatedToday
+            SUM(CASE WHEN DATE(treated_at) = DATE('now') THEN 1 ELSE 0 END) as treatedToday
                 FROM emails
             `),
             
@@ -335,40 +386,67 @@ class OptimizedDatabaseService {
     saveEmail(emailData) {
         const cacheKey = `email_${emailData.outlook_id || emailData.id}`;
         this.cache.del(cacheKey); // Invalider le cache
-        
-        // Calculer le week_identifier (semaine ISO)
+
+    // Calculer le week_identifier (semaine ISO)
         const weekId = this.calculateWeekIdentifier(emailData.received_time);
         // Normaliser le sujet par sécurité (si l'amont fournit Subject/ConversationTopic)
         const rawSubject = (emailData.subject ?? emailData.Subject ?? emailData.ConversationTopic ?? '').toString();
         const normalizedSubject = rawSubject.trim() !== '' ? rawSubject : '(Sans objet)';
-        
-        const result = this.statements.insertEmail.run(
-            emailData.outlook_id || emailData.id || '',
-            normalizedSubject,
-            emailData.sender_email || '',
-            emailData.received_time || new Date().toISOString(),
-            emailData.folder_name || '',
-            emailData.category || 'Mails simples',
-            emailData.is_read ? 1 : 0,
-            emailData.is_treated ? 1 : 0,
-            weekId
-        );
-        
-        // Mettre à jour les statistiques hebdomadaires
-        if (result.changes > 0) {
-            // Comptabiliser comme "arrivé"
-            this.updateWeeklyEmailCount(emailData, true, false);
-            
-            // Si l'email est déjà lu, le comptabiliser aussi comme "traité" selon le paramètre
+
+        // Id unique
+        const outlookId = emailData.outlook_id || emailData.id || '';
+        const existed = this.statements.getEmailByEntryId.get(outlookId);
+
+        let result;
+        if (existed) {
+            // Mise à jour sans réinsérer (évite de compter une nouvelle arrivée)
+            // Déterminer treated_at s'il faut le définir
+            let treatedAtParam = null;
             const countReadAsTreated = !!this.getAppSetting('count_read_as_treated', false);
-            if (countReadAsTreated && emailData.is_read) {
-                this.updateWeeklyEmailCount(emailData, false, true);
+            if (!existed.treated_at) {
+                if (emailData.is_treated) {
+                    treatedAtParam = new Date().toISOString();
+                } else if (countReadAsTreated && emailData.is_read && !existed.is_read) {
+                    treatedAtParam = new Date().toISOString();
+                } else if (emailData.deleted_at) {
+                    treatedAtParam = emailData.deleted_at;
+                }
             }
+            result = this.statements.updateEmailByOutlookId.run(
+                normalizedSubject,
+                emailData.sender_email || '',
+                emailData.folder_name || '',
+                emailData.category || 'Mails simples',
+                emailData.is_read ? 1 : 0,
+                emailData.is_treated ? 1 : 0,
+                treatedAtParam,
+                outlookId
+            );
+        } else {
+            // Insertion d'un nouvel email (véritable arrivée)
+            // treated_at initial: si déjà traité ou supprimé à l'insertion
+            const initialTreatedAt = emailData.is_treated ? (emailData.treated_at || new Date().toISOString()) : (emailData.deleted_at ? emailData.deleted_at : null);
+            result = this.statements.insertEmailNew.run(
+                outlookId,
+                normalizedSubject,
+                emailData.sender_email || '',
+                emailData.received_time || new Date().toISOString(),
+                emailData.folder_name || '',
+                emailData.category || 'Mails simples',
+                emailData.is_read ? 1 : 0,
+                emailData.is_treated ? 1 : 0,
+                emailData.deleted_at || null,
+                initialTreatedAt,
+                weekId
+            );
         }
-        
+
+        // Recalcule déterministe des stats (évite les doubles comptages)
+        this.updateCurrentWeekStats();
+
         // Invalider le cache de l'interface utilisateur en temps réel
         this.invalidateUICache();
-        
+
         return result;
     }
 
@@ -387,22 +465,38 @@ class OptimizedDatabaseService {
 
         const transaction = this.db.transaction((emails) => {
             for (const email of emails) {
-                // Calculer le week_identifier (semaine ISO)
-                const weekId = this.calculateWeekIdentifier(email.received_time);
+                const outlookId = email.outlook_id || email.id || '';
+                const existed = this.statements.getEmailByEntryId.get(outlookId);
                 const rawSubject = (email.subject ?? email.Subject ?? email.ConversationTopic ?? '').toString();
                 const normalizedSubject = rawSubject.trim() !== '' ? rawSubject : '(Sans objet)';
-                
-                this.statements.insertEmail.run(
-                    email.outlook_id || email.id || '',
-                    normalizedSubject,
-                    email.sender_email || '',
-                    email.received_time || new Date().toISOString(),
-                    email.folder_name || '',
-                    email.category || 'Mails simples',
-                    email.is_read ? 1 : 0,
-                    email.is_treated ? 1 : 0,
-                    weekId
-                );
+                if (existed) {
+                    this.statements.updateEmailByOutlookId.run(
+                        normalizedSubject,
+                        email.sender_email || '',
+                        email.folder_name || '',
+                        email.category || 'Mails simples',
+                        email.is_read ? 1 : 0,
+                        email.is_treated ? 1 : 0,
+                        null,
+                        outlookId
+                    );
+                } else {
+                    const weekId = this.calculateWeekIdentifier(email.received_time);
+                    const initialTreatedAt = email.is_treated ? (email.treated_at || new Date().toISOString()) : null;
+                    this.statements.insertEmailNew.run(
+                        outlookId,
+                        normalizedSubject,
+                        email.sender_email || '',
+                        email.received_time || new Date().toISOString(),
+                        email.folder_name || '',
+                        email.category || 'Mails simples',
+                        email.is_read ? 1 : 0,
+                        email.is_treated ? 1 : 0,
+                        null,
+                        initialTreatedAt,
+                        weekId
+                    );
+                }
             }
         });
 
@@ -875,9 +969,14 @@ class OptimizedDatabaseService {
                 last_updated: new Date().toISOString()
             };
 
-            // Insérer l'email
-            const stmt = this.getStatement('insertEmail');
-            const result = stmt.run(emailRecord);
+            // Insérer l'email (via prepared SQL classique sur email_id)
+            if (!this.statements.insertEmailByEmailId) {
+                this.statements.insertEmailByEmailId = this.db.prepare(`
+                    INSERT INTO emails (email_id, subject, sender_email, received_time, folder_name, is_read, category, last_updated)
+                    VALUES (@email_id, @subject, @sender_email, @received_time, @folder_name, @is_read, @category, @last_updated)
+                `);
+            }
+            const result = this.statements.insertEmailByEmailId.run(emailRecord);
 
             // Invalider le cache pour ce dossier
             this.invalidateFolderCache(emailData.folderPath);
@@ -974,11 +1073,10 @@ class OptimizedDatabaseService {
             }
 
             // Pas en cache, requête DB
-            const stmt = this.getStatement('getEmailById', 
-                'SELECT * FROM emails WHERE email_id = ?'
-            );
-            
-            email = stmt.get(emailId);
+            if (!this.statements.getEmailById) {
+                this.statements.getEmailById = this.db.prepare('SELECT * FROM emails WHERE email_id = ?');
+            }
+            email = this.statements.getEmailById.get(emailId);
             
             if (email) {
                 // Mettre en cache pour 10 minutes
@@ -1089,15 +1187,34 @@ class OptimizedDatabaseService {
             console.log(`🔧 [updateEmailStatus] CORRECTION: Recherche par outlook_id uniquement (sans folder pour éviter problèmes d'encodage)`);
             
             // Utiliser toujours la requête sans dossier pour éviter les problèmes d'encodage
-            if (!this.statements.updateEmailStatus) {
-                this.statements.updateEmailStatus = this.db.prepare(`
+            // Définir treated_at si on passe à lu et le réglage l'autorise et que treated_at est encore NULL
+            const countReadAsTreated = !!this.getAppSetting('count_read_as_treated', false);
+            const existing = this.statements.getEmailByEntryId.get(entryId);
+            const shouldSetTreatedAt = countReadAsTreated && isRead && existing && !existing.treated_at;
+            if (!this.statements.updateEmailStatusWithTreated) {
+                this.statements.updateEmailStatusWithTreated = this.db.prepare(`
+                    UPDATE emails 
+                    SET is_read = ?,
+                        is_treated = CASE WHEN ? = 1 THEN 1 ELSE is_treated END,
+                        treated_at = CASE WHEN ? = 1 THEN COALESCE(treated_at, CURRENT_TIMESTAMP) ELSE treated_at END,
+                        updated_at = CURRENT_TIMESTAMP 
+                    WHERE outlook_id = ?
+                `);
+            }
+            if (!this.statements.updateEmailStatusSimple) {
+                this.statements.updateEmailStatusSimple = this.db.prepare(`
                     UPDATE emails 
                     SET is_read = ?, updated_at = CURRENT_TIMESTAMP 
                     WHERE outlook_id = ?
                 `);
             }
-            stmt = this.statements.updateEmailStatus;
-            params = [isRead ? 1 : 0, entryId];
+            if (shouldSetTreatedAt) {
+                stmt = this.statements.updateEmailStatusWithTreated;
+                params = [isRead ? 1 : 0, 1, 1, entryId];
+            } else {
+                stmt = this.statements.updateEmailStatusSimple;
+                params = [isRead ? 1 : 0, entryId];
+            }
             console.log(`🔧 [updateEmailStatus] Requête simplifiée: params = [${params.join(', ')}]`);
             
             const result = stmt.run(...params);
@@ -1108,32 +1225,9 @@ class OptimizedDatabaseService {
                 this.invalidateFolderCache(folderPath);
             }
             
-            // Invalider le cache de l'interface utilisateur pour mise à jour en temps réel
+            // Recalcul déterministe des stats pour la semaine en cours (évite les doubles comptages et négatifs)
             if (result.changes > 0) {
-                // Mettre à jour les statistiques hebdomadaires si "mail lu = traité"
-                const countReadAsTreated = !!this.getAppSetting('count_read_as_treated', false);
-                
-                if (countReadAsTreated) {
-                    // Récupérer les infos de l'email pour les stats hebdomadaires
-                    const emailInfo = this.db.prepare('SELECT * FROM emails WHERE outlook_id = ?').get(entryId);
-                    if (emailInfo) {
-                        if (isRead) {
-                            // Email marqué comme lu = traité
-                            this.updateWeeklyEmailCount(emailInfo, false, true);
-                            console.log(`📊 [WEEKLY] Email marqué comme traité: ${entryId}`);
-                        } else {
-                            // Email marqué comme non lu = non traité (décrémenter si possible)
-                            this.adjustWeeklyCount(
-                                this.getISOWeekInfo().identifier, // Semaine courante
-                                this.mapFolderToCategory(emailInfo.folder_name),
-                                -1,
-                                'emails_treated'
-                            );
-                            console.log(`📊 [WEEKLY] Email marqué comme non traité: ${entryId}`);
-                        }
-                    }
-                }
-                
+                this.updateCurrentWeekStats();
                 this.invalidateUICache();
             }
             
@@ -1329,6 +1423,24 @@ class OptimizedDatabaseService {
             console.log('✅ Better-SQLite3 fermé proprement');
         }
     }
+
+    /**
+     * Sécurité: remet à zéro toute valeur négative dans weekly_stats
+     */
+    clampWeeklyStatsNonNegative() {
+        try {
+            this.db.exec(`
+                UPDATE weekly_stats
+                SET 
+                    emails_received = CASE WHEN emails_received < 0 THEN 0 ELSE emails_received END,
+                    emails_treated = CASE WHEN emails_treated < 0 THEN 0 ELSE emails_treated END,
+                    manual_adjustments = CASE WHEN manual_adjustments < 0 THEN 0 ELSE manual_adjustments END
+                WHERE emails_received < 0 OR emails_treated < 0 OR manual_adjustments < 0
+            `);
+        } catch (e) {
+            console.warn('⚠️ [WEEKLY] Clamp non-negatif échoué:', e.message);
+        }
+    }
     /**
      * NOUVEAU: Met à jour un champ spécifique d'un email
      */
@@ -1386,7 +1498,11 @@ class OptimizedDatabaseService {
             // Option 1: Marquer comme supprimé (soft delete)
             const stmt = this.db.prepare(`
                 UPDATE emails 
-                SET is_deleted = 1, deleted_at = datetime('now'), updated_at = datetime('now')
+                SET is_deleted = 1,
+                    deleted_at = datetime('now'),
+                    is_treated = 1,
+                    treated_at = COALESCE(treated_at, datetime('now')),
+                    updated_at = datetime('now')
                 WHERE outlook_id = ?
             `);
 
@@ -1395,6 +1511,7 @@ class OptimizedDatabaseService {
             if (result.changes > 0) {
                 console.log(`✅ [DB-DELETE] Email marqué comme supprimé: ${entryId}`);
                 this.invalidateFolderCache(''); // Invalider tout le cache
+                this.updateCurrentWeekStats();
                 return { deleted: true, changes: result.changes };
             } else {
                 console.log(`⚠️ [DB-DELETE] Aucun email trouvé avec EntryID: ${entryId}`);
@@ -1539,32 +1656,16 @@ class OptimizedDatabaseService {
             `).all(weekInfo.startDate, weekInfo.endDate);
 
             // Récupérer tous les emails TRAITÉS de la semaine actuelle groupés par dossier
-            let treatedQuery;
-            if (compterLuCommeTraite) {
-                // Traité = lu OU supprimé (et mis à jour pendant la semaine)
-                treatedQuery = `
-                    SELECT 
-                        folder_name,
-                        COUNT(*) as treated_emails
-                    FROM emails 
-                    WHERE (is_read = 1 OR deleted_at IS NOT NULL)
-                    AND DATE(updated_at) BETWEEN ? AND ?
-                    GROUP BY folder_name
-                `;
-            } else {
-                // Traité = marqué explicitement comme traité
-                treatedQuery = `
-                    SELECT 
-                        folder_name,
-                        COUNT(*) as treated_emails
-                    FROM emails 
-                    WHERE is_treated = 1
-                    AND DATE(updated_at) BETWEEN ? AND ?
-                    GROUP BY folder_name
-                `;
-            }
-            
-            const treatedStats = this.db.prepare(treatedQuery).all(weekInfo.startDate, weekInfo.endDate);
+                        // Nouveau modèle: traité = treated_at non nul, et tombant dans la semaine
+                        const treatedStats = this.db.prepare(`
+                                SELECT 
+                                        folder_name,
+                                        COUNT(*) as treated_emails
+                                FROM emails 
+                                WHERE treated_at IS NOT NULL
+                                    AND DATE(treated_at) BETWEEN ? AND ?
+                                GROUP BY folder_name
+                        `).all(weekInfo.startDate, weekInfo.endDate);
 
             console.log(`📊 [WEEKLY] Mise à jour stats semaine ${weekInfo.identifier}:`, { emailStats, treatedStats, compterLuCommeTraite });
 
@@ -1631,6 +1732,8 @@ class OptimizedDatabaseService {
                 );
             }
 
+            // Clamp de sécurité: éviter toute valeur négative en base
+            this.clampWeeklyStatsNonNegative();
             return true;
         } catch (error) {
             console.error('❌ [WEEKLY] Erreur updateCurrentWeekStats:', error);
@@ -1638,52 +1741,7 @@ class OptimizedDatabaseService {
         }
     }
 
-    /**
-     * Met à jour les compteurs d'emails pour une semaine (arrivés/traités)
-     */
-    updateWeeklyEmailCount(emailData, isArrival = true, isTreated = false) {
-        try {
-            // Pour les arrivées, utiliser la semaine courante (moment de l'ajout en BDD)
-            // Pour les traitements, utiliser aussi la semaine courante (moment du traitement)
-            const weekInfo = this.getISOWeekInfo(); // Semaine courante
-            
-            // Mapper le dossier vers une catégorie (comme dans le VBA)
-            const folderType = this.mapFolderToCategory(emailData.folder_name || emailData.folder_name || 'Inconnu');
-            
-            // Obtenir ou créer les stats de la semaine
-            const weeklyStats = this.getOrCreateWeeklyStats(weekInfo, folderType);
-            
-            // Mettre à jour les compteurs
-            let updateQuery = '';
-            let params = [];
-            
-            if (isArrival) {
-                updateQuery = 'UPDATE weekly_stats SET emails_received = emails_received + 1, updated_at = CURRENT_TIMESTAMP WHERE week_identifier = ? AND folder_type = ?';
-                params = [weekInfo.identifier, folderType];
-            }
-            
-            if (isTreated) {
-                updateQuery = 'UPDATE weekly_stats SET emails_treated = emails_treated + 1, updated_at = CURRENT_TIMESTAMP WHERE week_identifier = ? AND folder_type = ?';
-                params = [weekInfo.identifier, folderType];
-            }
-            
-            if (updateQuery) {
-                const updateStmt = this.db.prepare(updateQuery);
-                const result = updateStmt.run(...params);
-                
-                console.log(`📊 [WEEKLY] Compteur mis à jour: ${weekInfo.displayName} - ${folderType} - ${isArrival ? 'Arrivé' : 'Traité'}`);
-                
-                // Invalider le cache des stats
-                this.invalidateUICache();
-                
-                return result.changes > 0;
-            }
-            
-        } catch (error) {
-            console.error('❌ [WEEKLY] Erreur mise à jour compteur hebdomadaire:', error);
-            return false;
-        }
-    }
+    // updateWeeklyEmailCount supprimé: on s'appuie sur updateCurrentWeekStats() déterministe pour éviter les doubles comptages
 
     /**
      * Mappe un chemin de dossier vers une catégorie (équivalent du mapping VBA)
@@ -2195,9 +2253,8 @@ class OptimizedDatabaseService {
             const result = stmt.run(deleteTime, outlookId);
             
             if (result.changes > 0 && emailInfo) {
-                // Email supprimé = toujours traité, indépendamment du paramètre
-                this.updateWeeklyEmailCount(emailInfo, false, true);
-                console.log(`📊 [WEEKLY] Email supprimé comptabilisé comme traité: ${outlookId}`);
+                // Recalculer les stats de la semaine (déterministe)
+                this.updateCurrentWeekStats();
             }
             
             console.log(`📧 [VBA-LOGIC] Email ${outlookId} marqué supprimé à ${deleteTime}`);
@@ -2213,15 +2270,31 @@ class OptimizedDatabaseService {
      */
     markEmailAsRead(outlookId, isRead = true) {
         try {
-            const stmt = this.db.prepare(`
-                UPDATE emails 
-                SET is_read = ?, updated_at = CURRENT_TIMESTAMP 
-                WHERE outlook_id = ?
-            `);
-            
-            stmt.run(isRead ? 1 : 0, outlookId);
-            
+            const existing = this.statements.getEmailByEntryId.get(outlookId);
+            const countReadAsTreated = !!this.getAppSetting('count_read_as_treated', false);
+            const shouldSetTreated = countReadAsTreated && isRead && existing && !existing.treated_at;
+            let stmt;
+            if (shouldSetTreated) {
+                stmt = this.db.prepare(`
+                    UPDATE emails 
+                    SET is_read = 1,
+                        is_treated = 1,
+                        treated_at = COALESCE(treated_at, CURRENT_TIMESTAMP),
+                        updated_at = CURRENT_TIMESTAMP 
+                    WHERE outlook_id = ?
+                `);
+                stmt.run(outlookId);
+            } else {
+                stmt = this.db.prepare(`
+                    UPDATE emails 
+                    SET is_read = ?, updated_at = CURRENT_TIMESTAMP 
+                    WHERE outlook_id = ?
+                `);
+                stmt.run(isRead ? 1 : 0, outlookId);
+            }
+
             console.log(`📧 [VBA-LOGIC] Email ${outlookId} marqué ${isRead ? 'lu' : 'non lu'}`);
+            this.updateCurrentWeekStats();
             return true;
         } catch (error) {
             console.error('❌ [VBA-LOGIC] Erreur marquage lecture:', error);
@@ -2234,15 +2307,29 @@ class OptimizedDatabaseService {
      */
     markEmailAsTreated(outlookId, isTreated = true) {
         try {
-            const stmt = this.db.prepare(`
-                UPDATE emails 
-                SET is_treated = ?, updated_at = CURRENT_TIMESTAMP 
-                WHERE outlook_id = ?
-            `);
-            
-            stmt.run(isTreated ? 1 : 0, outlookId);
+            let stmt;
+            if (isTreated) {
+                stmt = this.db.prepare(`
+                    UPDATE emails 
+                    SET is_treated = 1,
+                        treated_at = COALESCE(treated_at, CURRENT_TIMESTAMP),
+                        updated_at = CURRENT_TIMESTAMP 
+                    WHERE outlook_id = ?
+                `);
+                stmt.run(outlookId);
+            } else {
+                stmt = this.db.prepare(`
+                    UPDATE emails 
+                    SET is_treated = 0,
+                        -- ne pas effacer treated_at si on "détrait"; on garde l'historique
+                        updated_at = CURRENT_TIMESTAMP 
+                    WHERE outlook_id = ?
+                `);
+                stmt.run(outlookId);
+            }
             
             console.log(`� [VBA-LOGIC] Email ${outlookId} marqué ${isTreated ? 'traité' : 'non traité'}`);
+            this.updateCurrentWeekStats();
             return true;
         } catch (error) {
             console.error('❌ [VBA-LOGIC] Erreur marquage traitement:', error);
@@ -2279,32 +2366,17 @@ class OptimizedDatabaseService {
      */
     getWeeklyTreatments(weekStart, weekEnd, compterLuCommeTraite = false) {
         try {
-            let whereClause;
-            if (compterLuCommeTraite) {
-                // Traité = lu OU supprimé
-                whereClause = `
-                    WHERE (is_read = 1 OR deleted_at IS NOT NULL)
-                    AND (updated_at BETWEEN ? AND ?)
-                `;
-            } else {
-                // Traité = marqué explicitement comme traité
-                whereClause = `
-                    WHERE is_treated = 1
-                    AND (updated_at BETWEEN ? AND ?)
-                `;
-            }
-            
+            // Nouveau: se base uniquement sur treated_at
             const stmt = this.db.prepare(`
                 SELECT 
                     folder_name,
                     category,
                     COUNT(*) as treatments
                 FROM emails 
-                ${whereClause}
+                WHERE treated_at IS NOT NULL AND (treated_at BETWEEN ? AND ?)
                 GROUP BY folder_name, category
                 ORDER BY folder_name, category
             `);
-            
             return stmt.all(weekStart, weekEnd);
         } catch (error) {
             console.error('❌ [VBA-LOGIC] Erreur stats traitements:', error);

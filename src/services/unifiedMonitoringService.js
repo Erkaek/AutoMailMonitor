@@ -969,6 +969,7 @@ class UnifiedMonitoringService extends EventEmitter {
                 size: processedEmail.size || 0,
                 folder_name: folderConfig.path,
                 folder_type: folderConfig.category || folderConfig.type,
+                // Legacy flag kept false on insert; treated_at is the source of truth
                 is_treated: false,
                 created_at: new Date().toISOString()
             };
@@ -1376,13 +1377,29 @@ class UnifiedMonitoringService extends EventEmitter {
                 return; // Email déjà traité récemment
             }
             
-            // Vérifier si l'email existe déjà en base (optimisé)
-            const existingEmail = await this.dbService.getEmailByEntryId(emailId, folder.path);
+            // Vérifier si l'email existe déjà en base (recherche par outlook_id uniquement pour gérer les déplacements entre dossiers)
+            const existingEmail = await this.dbService.getEmailByEntryId(emailId);
 
             if (existingEmail) {
-                // Vérification rapide des changements
-                if (this.needsUpdateOptimized(existingEmail, emailData)) {
-                    await this.updateEmail(emailData, folder);
+                // Détecter un déplacement de dossier
+                const movedFolder = existingEmail.folder_name !== folder.path;
+                const needsUpdate = this.needsUpdateOptimized(existingEmail, emailData);
+
+                if (movedFolder || needsUpdate) {
+                    // Normaliser les champs et utiliser saveEmail pour mettre à jour dossier/statut/sujet
+                    const rawSubject = (emailData.subject ?? emailData.Subject ?? emailData.ConversationTopic ?? '').toString();
+                    const subject = rawSubject.trim() !== '' ? rawSubject : '(Sans objet)';
+                    const saveRecord = {
+                        outlook_id: emailId,
+                        subject,
+                        sender_email: emailData.senderEmail || emailData.SenderEmailAddress || emailData.senderName || emailData.SenderName || '',
+                        received_time: emailData.receivedTime || emailData.ReceivedTime || existingEmail.received_time,
+                        folder_name: folder.path,
+                        category: folder.category || folder.type,
+                        is_read: emailData.UnRead !== undefined ? !emailData.UnRead : (emailData.isRead ?? existingEmail.is_read ?? false),
+                        is_treated: existingEmail.is_treated || 0
+                    };
+                    await this.dbService.saveEmail(saveRecord);
                     this.stats.emailsUpdated++;
                 }
             } else {
@@ -2285,6 +2302,12 @@ class UnifiedMonitoringService extends EventEmitter {
                         // Fallback: invalider le cache de la base de données
                         this.dbService.cache.flushAll();
                     }
+
+                    // Déclencher une synchronisation partielle ciblée pour capter les emails déplacés
+                    const folderConfig = this.getFolderConfigByPath(data.folderPath);
+                    if (folderConfig) {
+                        this.schedulePartialSync(folderConfig);
+                    }
                     
                 } catch (error) {
                     this.log(`❌ Erreur traitement changement de nombre: ${error.message}`, 'ERROR');
@@ -2327,14 +2350,20 @@ class UnifiedMonitoringService extends EventEmitter {
                 return;
             }
 
-            // Enrichir les données email avec la catégorie
+            // Mapper et enrichir les données pour le schéma BDD optimisé
             const enrichedEmailData = {
-                ...emailData,
-                category: folderConfig.category || 'autres'
+                outlook_id: emailData.entryId || emailData.EntryID || emailData.id || '',
+                subject: emailData.subject,
+                sender_email: emailData.senderEmail || emailData.SenderEmailAddress || emailData.senderName || emailData.SenderName || '',
+                received_time: emailData.receivedTime || emailData.ReceivedTime || new Date().toISOString(),
+                folder_name: folderConfig.path,
+                category: folderConfig.category || 'Mails simples',
+                is_read: emailData.UnRead !== undefined ? !emailData.UnRead : (emailData.isRead || false),
+                is_treated: false
             };
 
-            // Sauvegarder en base de données
-            await this.databaseService.saveEmail(enrichedEmailData);
+            // Sauvegarder en base de données via le service optimisé
+            await this.dbService.saveEmail(enrichedEmailData);
             
             this.log(`💾 Email sauvegardé en temps réel: ${emailData.subject}`, 'REALTIME');
 

@@ -47,6 +47,9 @@ release/
 dist/latest.yml
 release/latest.yml
 
+# Private updater token (do not commit)
+src/main/updaterToken.js
+
 ## Coverage and reports
 coverage/
 *.lcov

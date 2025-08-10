@@ -197,7 +197,12 @@ body[data-theme] .card-header.bg-light {
 /* Inputs/selects */
 body[data-theme] .form-control, body[data-theme] .form-select, body[data-theme] .input-group-text { background: var(--bg-surface) !important; color: var(--text-primary) !important; border-color: var(--border-color) !important; }
 body[data-theme] .form-control::placeholder { color: rgba(255,255,255,0.6); }
+/* Checkboxes/radios: conserver le style par défaut de Bootstrap mais assurer la lisibilité en thème */
 body[data-theme] .form-check-input { background-color: var(--bg-surface) !important; border-color: var(--border-color) !important; }
+body[data-theme] .form-check-input:focus { border-color: var(--brand-1) !important; box-shadow: 0 0 0 .2rem rgba(13,110,253,.25) !important; }
+body[data-theme] .form-check-input:checked { background-color: var(--brand-1) !important; border-color: var(--brand-1) !important; }
+/* Form switch (si utilisé) */
+body[data-theme] .form-switch .form-check-input:checked { background-color: var(--brand-1) !important; border-color: var(--brand-1) !important; }
 body[data-theme] .form-check-label { color: var(--text-primary) !important; }
 
 /* Gradients and accents */
