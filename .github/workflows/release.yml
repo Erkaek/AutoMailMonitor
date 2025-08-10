@@ -1,9 +1,8 @@
-name: Release (Windows)
+name: Release on Push (Windows)
 
 on:
   push:
-    tags:
-      - 'v*.*.*'
+    branches: [ main ]
   workflow_dispatch: {}
 
 jobs:
@@ -26,6 +25,21 @@ jobs:
 
       - name: Prepare native deps for Electron
         run: npx electron-builder install-app-deps
+
+      - name: Create version tag if missing
+        shell: bash
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          echo "Version: $VERSION"
+          git fetch --tags --force
+          if git rev-parse -q --verify "refs/tags/v$VERSION" >/dev/null; then
+            echo "Tag v$VERSION exists. Skipping tag creation."
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git tag -a "v$VERSION" -m "Release v$VERSION"
+            git push origin "v$VERSION"
+          fi
 
       - name: Build and publish (electron-builder)
         env:
