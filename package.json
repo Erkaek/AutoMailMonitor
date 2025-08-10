@@ -1,13 +1,15 @@
 {
   "name": "mailmonitor",
-  "version": "0.8.2",
+  "version": "0.8.3",
   "description": "Application de monitoring des emails Outlook avec interface moderne",
   "main": "src/main/index.js",
   "scripts": {
   "start": "npx electron .",
   "import-activity": "node src/cli/import-activity.js",
   "test:carry": "set ELECTRON_RUN_AS_NODE=1&& npx electron scripts/test-carry-over.js",
-  "postinstall": "electron-builder install-app-deps"
+  "postinstall": "electron-builder install-app-deps",
+  "version:bump": "node -e \"const p=require('./package.json');const v=p.version;console.log('Current',v);\"",
+  "release": "npx electron-builder --win --x64 --publish always"
   },
   "keywords": [
     "electron",
