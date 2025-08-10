@@ -414,6 +414,13 @@ class MailMonitor {
     // Actualisation légère après chaque cycle
     this.performStatsRefresh();
     this.updateLastRefreshTime();
+    // Rafraîchir aussi le suivi hebdomadaire à chaque cycle (traitements/reçus évoluent)
+    // On ne spamme pas: appels idempotents et peu coûteux côté IPC
+    try {
+      this.loadCurrentWeekStats();
+      this.loadWeeklyHistory();
+      this.loadPersonalPerformance?.();
+    } catch(_) {}
   }
 
   /**
@@ -3653,9 +3660,11 @@ class MailMonitor {
 
   // Bouton de rafraîchissement manuel supprimé: l'onglet se met à jour automatiquement (événements + intervalle)
 
-    // Actualisation automatique des stats hebdomadaires
+    // Actualisation automatique des stats hebdomadaires (toujours, même si l'onglet n'est pas actif)
     setInterval(() => {
-      this.refreshCurrentWeekStats();
+      this.loadCurrentWeekStats();
+      this.loadWeeklyHistory();
+      this.loadPersonalPerformance?.();
     }, 30000); // Toutes les 30 secondes
 
     // Pagination historique hebdomadaire
@@ -4032,10 +4041,8 @@ class MailMonitor {
    * Rafraîchit les statistiques de la semaine actuelle
    */
   async refreshCurrentWeekStats() {
-    const weeklyTab = document.getElementById('weekly-tab');
-    if (weeklyTab && weeklyTab.classList.contains('active')) {
-      await this.loadCurrentWeekStats();
-    }
+  // Conserve pour compatibilité: rafraîchit à la demande (même si onglet inactif)
+  await this.loadCurrentWeekStats();
   }
 
   /**
