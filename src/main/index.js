@@ -375,66 +375,70 @@ function createWindow() {
   show: false,
   frame: true, // Réactive la barre d'outils/titre native Windows
   titleBarStyle: 'default',
-  autoHideMenuBar: false,
+  autoHideMenuBar: true,
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
       enableRemoteModule: false,
-      devTools: true,
+      devTools: !app.isPackaged,
       preload: path.join(__dirname, 'preload.js')
     }
   });
 
-  // Menu application avec outils de debug
+  // Menu application: aucun menu en production; menu avec outils seulement en dev
   try {
-    const isMac = process.platform === 'darwin';
-    const template = [
-      // macOS app menu
-      ...(isMac ? [{
-        label: app.name,
-        submenu: [
-          { role: 'about' },
-          { type: 'separator' },
-          { role: 'services' },
-          { type: 'separator' },
-          { role: 'hide' },
-          { role: 'hideOthers' },
-          { role: 'unhide' },
-          { type: 'separator' },
-          { role: 'quit' }
-        ]
-      }] : []),
-      {
-        label: 'Fichier',
-        submenu: [
-          ...(isMac ? [] : [{ role: 'quit', label: 'Quitter' }])
-        ]
-      },
-      {
-        label: 'Affichage',
-        submenu: [
-          { role: 'reload', label: 'Recharger' },
-          { role: 'forceReload', label: 'Forcer le rechargement' },
-          { type: 'separator' },
-          { role: 'toggleDevTools', label: 'Outils de développement', accelerator: 'F12' },
-          { type: 'separator' },
-          { role: 'resetZoom', label: 'Zoom 100%' },
-          { role: 'zoomIn', label: 'Zoom +' },
-          { role: 'zoomOut', label: 'Zoom -' },
-          { type: 'separator' },
-          { role: 'togglefullscreen', label: 'Plein écran' }
-        ]
-      },
-      {
-        label: 'Fenêtre',
-        submenu: [
-          { role: 'minimize', label: 'Réduire' },
-          { role: 'close', label: 'Fermer la fenêtre' }
-        ]
-      }
-    ];
-    const menu = Menu.buildFromTemplate(template);
-    Menu.setApplicationMenu(menu);
+    if (!app.isPackaged) {
+      const isMac = process.platform === 'darwin';
+      const template = [
+        ...(isMac ? [{
+          label: app.name,
+          submenu: [
+            { role: 'about' },
+            { type: 'separator' },
+            { role: 'services' },
+            { type: 'separator' },
+            { role: 'hide' },
+            { role: 'hideOthers' },
+            { role: 'unhide' },
+            { type: 'separator' },
+            { role: 'quit' }
+          ]
+        }] : []),
+        {
+          label: 'Fichier',
+          submenu: [
+            ...(isMac ? [] : [{ role: 'quit', label: 'Quitter' }])
+          ]
+        },
+        {
+          label: 'Affichage',
+          submenu: [
+            { role: 'reload', label: 'Recharger' },
+            { role: 'forceReload', label: 'Forcer le rechargement' },
+            { type: 'separator' },
+            { role: 'toggleDevTools', label: 'Outils de développement', accelerator: 'F12' },
+            { type: 'separator' },
+            { role: 'resetZoom', label: 'Zoom 100%' },
+            { role: 'zoomIn', label: 'Zoom +' },
+            { role: 'zoomOut', label: 'Zoom -' },
+            { type: 'separator' },
+            { role: 'togglefullscreen', label: 'Plein écran' }
+          ]
+        },
+        {
+          label: 'Fenêtre',
+          submenu: [
+            { role: 'minimize', label: 'Réduire' },
+            { role: 'close', label: 'Fermer la fenêtre' }
+          ]
+        }
+      ];
+      const menu = Menu.buildFromTemplate(template);
+      Menu.setApplicationMenu(menu);
+    } else {
+      Menu.setApplicationMenu(null);
+      try { mainWindow.removeMenu(); } catch {}
+    }
   } catch (e) {
     console.warn('Menu non défini:', e?.message);
   }
@@ -457,16 +461,27 @@ function createWindow() {
     }
   });
 
-  // Clic droit -> Inspecter l'élément
+  // Clic droit -> Inspecter l'élément: uniquement en dev
   try {
-    mainWindow.webContents.on('context-menu', (_event, params) => {
-      Menu.buildFromTemplate([
-        { label: 'Inspecter l\'élément', click: () => mainWindow.webContents.inspectElement(params.x, params.y) },
-        { type: 'separator' },
-        { role: 'copy', label: 'Copier' },
-        { role: 'paste', label: 'Coller' }
-      ]).popup();
-    });
+    if (!app.isPackaged) {
+      mainWindow.webContents.on('context-menu', (_event, params) => {
+        Menu.buildFromTemplate([
+          { label: 'Inspecter l\'élément', click: () => mainWindow.webContents.inspectElement(params.x, params.y) },
+          { type: 'separator' },
+          { role: 'copy', label: 'Copier' },
+          { role: 'paste', label: 'Coller' }
+        ]).popup();
+      });
+    }
+  } catch {}
+
+  // Par sécurité, fermer DevTools si ouverts en production
+  try {
+    if (app.isPackaged) {
+      mainWindow.webContents.on('devtools-opened', () => {
+        try { mainWindow.webContents.closeDevTools(); } catch {}
+      });
+    }
   } catch {}
 
   return mainWindow;

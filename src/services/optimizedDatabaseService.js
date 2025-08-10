@@ -188,7 +188,6 @@ class OptimizedDatabaseService {
             CREATE INDEX IF NOT EXISTS idx_emails_week_identifier ON emails(week_identifier);
             CREATE INDEX IF NOT EXISTS idx_emails_deleted_at ON emails(deleted_at);
             CREATE INDEX IF NOT EXISTS idx_emails_is_treated ON emails(is_treated);
-            CREATE INDEX IF NOT EXISTS idx_emails_treated_at ON emails(treated_at);
         `);
     }
 
