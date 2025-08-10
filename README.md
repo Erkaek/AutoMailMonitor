@@ -1,307 +1,154 @@
 # AutoMailMonitor
 
-Application de surveillance des emails Outlook avec classification automatique basée sur la localisation des dossiers.
+Surveillance professionnelle d’emails Outlook (Electron) avec dashboard, suivi hebdo et mises à jour automatiques.
 
-## 🎯 Vue d'ensemble
+## 🚀 Vue d’ensemble
 
-AutoMailMonitor est une application de bureau basée sur Electron qui surveille les emails dans Outlook et les classe automatiquement selon leur localisation dans l'arborescence des dossiers, tout en respectant strictement la confidentialité des utilisateurs.
+AutoMailMonitor surveille Outlook et agrège des métriques sans lire le contenu des emails. L’app fournit:
 
-### Fonctionnalités Principales
+- Dashboard en temps réel (KPIs, graphiques Chart.js)
+- Répartition par dossiers, analyse temporelle, performance système
+- Suivi hebdomadaire avec commentaires (CRUD) et sélection de semaine
+- Monitoring des dossiers Outlook (arbre, catégories Déclarations/Règlements/Mails simples)
+- Thèmes clair/sombre, sidebar repliable, UI responsive
+- SQLite (better-sqlite3, WAL) + cache
+- Mise à jour automatique (builds) + vérification Git au démarrage (dev)
 
-- 🔒 **Protection de la confidentialité** : Aucun accès automatique au contenu des emails
-- 📁 **Classification par localisation** : Classification basée sur la position des dossiers, pas sur le contenu
-- 🏷️ **3 catégories simplifiées** : Déclarations, Règlements, Mails simples
-- 📊 **Dashboard en temps réel** : Interface web intégrée avec métriques et analytics
-- 🗄️ **Base SQLite** : Persistance des données et historique complet
-- 🔄 **Monitoring intelligent** : Surveillance continue avec polling optimisé
+Confidentialité: pas d’analyse du contenu des emails; classification par localisation de dossiers.
 
-## 🏗️ Architecture
-
-### Structure du Projet
-
-```
-AutoMailMonitor/
-├── data/                          # 📁 Données centralisées
-│   ├── emails.db                  # Base SQLite principale
-│   ├── folders-config.json        # Mapping dossier → catégorie
-│   ├── settings.json              # Configuration utilisateur
-│   └── vba-categories.json        # Définition des 3 catégories
-├── src/
-│   ├── main/                      # 🚀 Process principal Electron
-│   │   ├── index.js               # Point d'entrée et IPC handlers
-│   │   └── preload.js             # Script de sécurité Electron
-│   ├── server/                    # 🔗 Interface Outlook
-│   │   ├── outlookConnector.js    # Connecteur PowerShell/COM
-│   │   └── outlookConnector.js    # Connecteur Outlook (PowerShell/COM wrappers & checks)
-│   ├── services/                  # ⚙️ Services métier
-│   │   ├── monitoringService.js   # Service principal de monitoring
-│   │   ├── vbaMetricsService.js   # Métriques et analytics
-│   │   └── databaseService.js     # Gestion base de données
-│   └── utils/                     # 🛠️ Utilitaires
-├── public/                        # 🌐 Interface web
-│   ├── index.html                 # Interface principale
-│   ├── css/style.css              # Styles Bootstrap
-│   └── js/app.js                  # Logique frontend
-├── docs/                          # 📚 Documentation
-│   └── ARCHITECTURE.md            # Architecture détaillée
-└── resources/                     # 📋 Ressources et exemples
-```
-
-### Services Principaux
-
-#### 1. MonitoringService (`src/services/monitoringService.js`)
-- Service principal de surveillance des emails
-- Gestion du polling intelligent et des cycles de monitoring
-- Synchronisation avec la base de données
-- Export singleton pour usage global
-
-#### 2. VBAMetricsService (`src/services/vbaMetricsService.js`)
-- Collecte et calcul des métriques email
-- Classification automatique par localisation de dossier
-- Analytics et rapports de performance
-- Compatible avec les macros VBA existantes
-
-#### 3. DatabaseService (`src/services/databaseService.js`)
-- Interface SQLite pour persistance des données
-- Gestion des schémas et migrations
-- Optimisations de performance pour gros volumes
-
-#### 4. OutlookConnector (`src/server/outlookConnector.js`)
-- Interface PowerShell vers COM Outlook
-- Gestion des connexions et de la robustesse
-- Support UTF-8 pour caractères français
-- Validation et sécurisation des accès
-
-## 🚀 Installation et Configuration
-
-### Prérequis
+## 🧩 Prérequis
 
 - Windows 10/11
 - Microsoft Outlook installé et configuré
-- Node.js 16+ et npm
-- PowerShell avec droits d'exécution
+- Node.js 16+ et Git
+- PowerShell (par défaut sous Windows)
 
-### Installation
+## ⚙️ Installation & exécution
 
-1. **Cloner le projet**
-   ```bash
-   git clone <repository-url>
-   cd AutoMailMonitor
-   ```
+```powershell
+# Cloner et installer
+git clone https://github.com/Erkaek/AutoMailMonitor.git
+cd AutoMailMonitor
+npm install
 
-2. **Installer les dépendances**
-   ```bash
-   npm install
-   ```
+# Démarrer en dev
+npm start
+```
 
-3. **Démarrer l'application**
-   ```bash
-   npm start
-   ```
+Au premier lancement:
 
-### Configuration Initiale
+- Configurez les dossiers surveillés depuis l’onglet Monitoring/Paramètres
+- Choisissez un thème (clair/sombre) dans la sidebar
 
-1. **Lancer l'application** : L'interface web s'ouvre automatiquement
-2. **Configurer les dossiers** : Aller dans l'onglet "Configuration"
-3. **Sélectionner les dossiers Outlook** à surveiller
-4. **Assigner les catégories** : Déclarations, Règlements, ou Mails simples
-5. **Sauvegarder** : Le monitoring démarre automatiquement
 
-## 📊 Système de Classification
+## 📦 Build (Electron)
 
-### 3 Catégories Uniques
+Les builds utilisent electron-builder et publient sur GitHub Releases (déjà configuré dans package.json → build.publish).
 
-| Catégorie | Couleur | Icône | Description |
-|-----------|---------|-------|-------------|
-| **Déclarations** | `#ff6b6b` | 📋 | Documents officiels et déclarations |
-| **Règlements** | `#4ecdc4` | ⚖️ | Factures, paiements, règlements |
-| **Mails simples** | `#45b7d1` | 📧 | Correspondance générale |
+```powershell
+# Build Windows (NSIS)
+npx electron-builder -w
 
-### Logique de Classification
+# Publier (si GH_TOKEN configuré)
+npx electron-builder -w --publish always
+```
 
-- **Basée sur la localisation** : Classification selon le dossier Outlook où se trouve l'email
-- **Configuration flexible** : Mapping personnalisable dans `data/folders-config.json`
-- **Pas d'analyse de contenu** : Respect total de la confidentialité
+Paramètres clés (package.json):
 
-Exemple de configuration :
+- appId/productName: com.tanguy.mailmonitor / “Mail Monitor”
+- publish: GitHub (owner: Erkaek, repo: AutoMailMonitor)
+- win.target: nsis
+
+## 🔄 Mises à jour
+
+- Application packagée: auto-update via GitHub Releases.
+  - Vérification au démarrage, puis toutes les 30 minutes.
+  - Téléchargement + prompt de redémarrage.
+- Mode développement: vérification Git au démarrage.
+  - fetch + comparaison HEAD..origin/BRANCHE
+  - prompt “pull & redémarrer” si des commits distants existent.
+
+## 🧾 Versionnement (source unique)
+
+- Changez la version UNIQUEMENT dans `package.json` (clé `version`).
+- L’UI (footer, À propos) lit dynamiquement `app.getVersion()` via IPC — aucune autre mise à jour nécessaire.
+
+## 🗂️ Structure du projet (simplifiée)
+
+```plaintext
+AutoMailMonitor/
+├─ public/                 # UI (Bootstrap/Chart.js)
+│  ├─ index.html
+│  ├─ css/style.css, css/themes.css
+│  └─ js/app.js
+├─ src/
+│  ├─ main/                # Processus principal Electron
+│  │  ├─ index.js          # Fenêtres, IPC, auto-update, check Git dev
+│  │  ├─ preload.js        # API sécurisée vers le renderer
+│  │  └─ preload-loading.js
+│  ├─ server/
+│  │  └─ outlookConnector.js   # Bridge PowerShell/COM Outlook
+│  └─ services/
+│     ├─ optimizedDatabaseService.js
+│     ├─ cacheService.js
+│     └─ (autres services)
+├─ resources/new logo/
+├─ config/app-settings.json
+├─ data/                   # Données locales (ignorées par Git)
+└─ package.json
+```
+
+## 🧪 Scripts npm utiles
+
 ```json
 {
-  "\\FlotteAuto\\Boîte de réception\\Déclarations": {
-    "category": "declarations",
-    "name": "Dossier Déclarations"
-  },
-  "\\FlotteAuto\\Boîte de réception\\Factures": {
-    "category": "reglements", 
-    "name": "Dossier Factures"
-  }
+  "start": "npx electron .",
+  "import-activity": "node src/cli/import-activity.js",
+  "postinstall": "electron-builder install-app-deps"
 }
 ```
 
-## 🔒 Confidentialité et Sécurité
+## 🔧 Dépannage (Windows/Outlook/Git)
 
-### Principes de Protection
+- Outlook COM: assurez-vous qu’Outlook est ouvert et configuré. Les chemins PowerShell 32/64 bits sont gérés dans `outlookConnector.js`.
+- SQLite verrouillée: fermez les instances de l’app; l’utilisation de WAL réduit les conflits.
+- Fins de ligne (LF/CRLF): `.gitattributes` est fourni; vous pouvez normaliser avec:
 
-- ✅ **Surveillance des structures de dossiers uniquement**
-- ✅ **Aucune lecture automatique du contenu des emails**
-- ✅ **Classification basée sur la localisation géographique**
-- ✅ **Validation et sanitisation de toutes les entrées**
-- ❌ **Aucun accès aux pièces jointes**
-- ❌ **Aucune indexation du contenu textuel**
-
-### Données Collectées
-
-1. **Métadonnées uniquement** : Expéditeur, destinataire, sujet, date
-2. **Statuts de lecture** : Lu/non-lu, traité/non-traité
-3. **Localisation** : Chemin du dossier Outlook
-4. **Identifiants** : EntryID Outlook pour synchronisation
-
-## 📈 Métriques et Analytics
-
-### Dashboard Principal
-
-- **Statistiques temps réel** : Emails reçus, traités, non-lus
-- **Évolution hebdomadaire** : Tendances et performances
-- **Répartition par catégorie** : Distribution des emails
-- **Alertes et notifications** : Statut de monitoring
-
-### Métriques Avancées
-
-- **Temps de traitement moyen** par catégorie
-- **Volume d'emails par dossier** et période
-- **Détection des pics d'activité** et tendances
-- **Rapports d'efficacité** et de performance
-
-## 🛠️ Développement
-
-### Architecture Technique
-
-- **Frontend** : HTML5, Bootstrap 5, JavaScript ES6+
-- **Backend** : Electron, Node.js (IPC, pas d'Express)
-- **Base de données** : SQLite3 avec optimisations
-- **Interface Outlook** : PowerShell + COM Automation
-- **Communication** : IPC Electron pour sécurité
-
-### Scripts de Développement
-
-```bash
-# Démarrage en mode développement
-npm run dev
-
-# Tests unitaires
-npm test
-
-# Build pour production
-npm run build
-
-# Nettoyage des dépendances
-npm run clean
+```powershell
+# Stratégie recommandée (LF global, CRLF pour .bat/.ps1)
+git config --global core.autocrlf input
+git config --global core.eol lf
+# Normalisation
+git add --renormalize .
+git commit -m "chore: normalize line endings" ; git push
 ```
 
-### Structure des Logs
+- .gitignore: si des fichiers ignorés sont déjà suivis, “désuivez-les” sans les supprimer:
 
-```
-[TIMESTAMP] [SERVICE] [LEVEL] Message
-[2024-03-15T10:30:45.123Z] [MonitoringService] [INFO] 📁 3 dossiers configurés
-[2024-03-15T10:30:46.456Z] [OutlookConnector] [SUCCESS] ✅ Connexion établie
-```
-
-## 🔧 Configuration Avancée
-
-### Variables d'Environnement
-
-```bash
-# Mode de logging détaillé
-NODE_ENV=development
-
-# Niveau de log (debug, info, warn, error)
-LOG_LEVEL=info
-
-# Intervalle de monitoring (ms)
-MONITORING_INTERVAL=30000
-
-# Limite d'emails par scan
-EMAIL_SCAN_LIMIT=1000
+```powershell
+git rm -r --cached -- data temp logs dist out release archives node_modules
+git rm -r --cached -- *.db *.db-wal *.db-shm *.log
+git commit -m "chore: stop tracking ignored files" ; git push
 ```
 
-### Paramètres de Performance
+## 🔐 Confidentialité
 
-Dans `data/settings.json` :
-```json
-{
-  "monitoring": {
-    "scanInterval": 30000,
-    "treatReadEmailsAsProcessed": false,
-    "autoStart": true
-  },
-  "database": {
-    "purgeOldDataAfterDays": 365,
-    "enableEventLogging": true
-  },
-  "ui": {
-    "emailsLimit": 50,
-    "theme": "default",
-    "language": "fr"
-  }
-}
-```
+- Pas d’accès automatique au contenu des emails
+- Classification par localisation (dossier) uniquement
+- Métadonnées minimales pour les métriques
 
-## 🐛 Dépannage
+## 📣 Astuces UI
 
-### Problèmes Courants
+- Une seule zone de défilement par onglet (ergonomie améliorée)
+- Sidebar repliable + bouton flottant
+- Thèmes clair/sombre persistants
 
-1. **Erreur connexion Outlook**
-   ```
-   Solution : Vérifier qu'Outlook est ouvert et configuré
-   ```
+## 📜 Licence
 
-2. **Caractères français corrompus**
-   ```
-   Solution : Vérifier l'encoding UTF-8 (chcp 65001)
-   ```
-
-3. **Monitoring ne démarre pas**
-   ```
-   Solution : Configurer au moins un dossier dans l'interface
-   ```
-
-4. **Base de données corrompue**
-   ```
-   Solution : Supprimer data/emails.db (reconstruction automatique)
-   ```
-
-### Logs de Diagnostic
-
-Les logs sont disponibles dans :
-- **Console développeur** : F12 dans l'interface
-- **Console Electron** : Terminal de lancement
-- **Logs PowerShell** : Sortie des scripts COM
-
-## 📋 Changelog
-
-### Version Actuelle (2024-03)
-
-- ✅ **Architecture nettoyée** : Suppression des services redondants
-- ✅ **Centralisation des données** : Migration vers `data/`
-- ✅ **Classification simplifiée** : 3 catégories uniquement
-- ✅ **Protection confidentialité** : Aucun accès automatique emails
-- ✅ **Performance optimisée** : Polling intelligent et cache
-- ✅ **Documentation complète** : Architecture et guide utilisateur
-
-### Roadmap
-
-- 🔄 **API REST** : Interface pour intégration externe
-- 📱 **Notifications système** : Alertes desktop natives
-- 🌐 **Support multi-comptes** : Gestion plusieurs boîtes Outlook
-- 📤 **Export rapports** : PDF et Excel
-- 🎨 **Thèmes personnalisés** : Interface adaptable
-
-## 📄 Licence
-
-Ce projet est développé pour un usage interne et respecte les politiques de confidentialité en vigueur.
+Usage interne. © 2025 Tanguy Raingeard. Tous droits réservés.
 
 ## 🤝 Support
 
-Pour toute question ou problème :
-1. Consulter la documentation dans `docs/`
-2. Vérifier les logs de diagnostic
-3. Contacter l'équipe de développement
+- Ouvrir les DevTools (F12) pour inspecter
+- Vérifier la console Electron (terminal)
+- Issues/PR via GitHub
