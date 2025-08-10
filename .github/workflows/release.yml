@@ -26,6 +26,19 @@ jobs:
       - name: Prepare native deps for Electron
         run: npx electron-builder install-app-deps
 
+      - name: Inject updater token (for private releases)
+        shell: bash
+        run: |
+          TOKEN_VALUE="${PRIVATE_UPDATER_TOKEN:-}"
+          if [ -n "$TOKEN_VALUE" ]; then
+            echo "Creating src/main/updaterToken.js from secret env"
+            mkdir -p src/main
+            printf 'module.exports = "%s";\n' "$TOKEN_VALUE" > src/main/updaterToken.js
+            echo "Token file created (not printed)"
+          else
+            echo "No PRIVATE_UPDATER_TOKEN env provided; skipping token injection"
+          fi
+
       - name: Check if version changed
         shell: bash
         id: check_version
