@@ -7,6 +7,7 @@ const Database = require('better-sqlite3');
 const NodeCache = require('node-cache');
 const path = require('path');
 const fs = require('fs');
+const os = require('os');
 
 class OptimizedDatabaseService {
     constructor() {
@@ -56,21 +57,135 @@ class OptimizedDatabaseService {
         }
 
         try {
-            const dbPath = path.join(__dirname, '../../data/emails.db');
-            
-            // Créer le répertoire si nécessaire
-            const dbDir = path.dirname(dbPath);
-            if (!fs.existsSync(dbDir)) {
-                fs.mkdirSync(dbDir, { recursive: true });
+            // Résolution robuste du chemin DB (toutes possibilités)
+            const resolveDbPath = () => {
+                // 1) Priorité: variable d'environnement explicite
+                const envPath = process.env.MAILMONITOR_DB_PATH || process.env.AUTO_MAIL_MONITOR_DB_PATH;
+                if (envPath) {
+                    const p = path.isAbsolute(envPath) ? envPath : path.resolve(process.cwd(), envPath);
+                    return p;
+                }
+                // 2) En production packagée: %APPDATA%/Mail Monitor/data/emails.db
+                try {
+                    const electron = require('electron');
+                    const app = electron && electron.app;
+                    if (app && typeof app.getPath === 'function' && app.isPackaged) {
+                        const userData = app.getPath('userData');
+                        return path.join(userData, 'data', 'emails.db');
+                    }
+                } catch {}
+                // 3) Développement/CLI (sans Electron): dossier du projet
+                return path.join(__dirname, '../../data/emails.db');
+            };
+
+            let dbPath = resolveDbPath();
+
+            const ensureDir = (dir) => { if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true }); };
+            const canWriteDir = (dir) => {
+                try {
+                    ensureDir(dir);
+                    const test = path.join(dir, `.writetest_${Date.now()}`);
+                    fs.writeFileSync(test, 'ok');
+                    fs.unlinkSync(test);
+                    return true;
+                } catch { return false; }
+            };
+
+            // Si le dossier cible n'est pas inscriptible (cas très rare), fallback vers %LOCALAPPDATA% / Temp
+            let dbDir = path.dirname(dbPath);
+            if (!canWriteDir(dbDir)) {
+                // Essayer LocalAppData/Mail Monitor/data
+                try {
+                    const electron = require('electron');
+                    const app = electron && electron.app;
+                    if (app && typeof app.getPath === 'function') {
+                        const localData = app.getPath('userData').replace(/\\Roaming\\/i, '\\Local\\');
+                        const fallback = path.join(localData, 'data');
+                        if (canWriteDir(fallback)) {
+                            dbPath = path.join(fallback, 'emails.db');
+                            dbDir = fallback;
+                        }
+                    }
+                } catch {}
             }
+            if (!canWriteDir(dbDir)) {
+                const tmp = path.join(os.tmpdir(), 'MailMonitor', 'data');
+                ensureDir(tmp);
+                dbPath = path.join(tmp, 'emails.db');
+                dbDir = tmp;
+                console.warn('⚠️ Dossier non inscriptible, utilisation du dossier temporaire:', dbDir);
+            }
+            
+            // Migration depuis anciens emplacements si le fichier n'existe pas encore
+            const migrateLegacyIfAny = () => {
+                if (fs.existsSync(dbPath)) return;
+                const candidates = [];
+                // Ancienne tentative dans le paquet (non fiable, mais on regarde)
+                try {
+                    const electron = require('electron');
+                    const app = electron && electron.app;
+                    if (app && app.isPackaged) {
+                        const resPath = process.resourcesPath || path.join(path.dirname(app.getPath('exe')), 'resources');
+                        candidates.push(path.join(resPath, 'app.asar', 'data', 'emails.db'));
+                        candidates.push(path.join(resPath, 'data', 'emails.db'));
+                        // Ancien userData sans sous-dossier data
+                        const userData = app.getPath('userData');
+                        candidates.push(path.join(userData, 'emails.db'));
+                    }
+                } catch {}
+                // Portable/ancien: dossier courant
+                candidates.push(path.resolve(process.cwd(), 'data', 'emails.db'));
+                // Développement: dossier du projet (déjà la cible en dev, mais au cas où override env)
+                candidates.push(path.join(__dirname, '../../data/emails.db'));
+
+                for (const c of candidates) {
+                    try {
+                        if (c && fs.existsSync(c)) {
+                            ensureDir(dbDir);
+                            fs.copyFileSync(c, dbPath);
+                            console.log(`📦 Migration DB depuis ancien emplacement: ${c} → ${dbPath}`);
+                            break;
+                        }
+                    } catch (e) { console.warn('⚠️ Migration DB échouée depuis', c, e.message); }
+                }
+            };
+            migrateLegacyIfAny();
 
             console.log('🚀 Initialisation Better-SQLite3 avec optimisations...');
+            console.log(`📁 Base de données: ${dbPath}`);
             
             // Ouvrir avec optimisations de performance
-            this.db = new Database(dbPath, {
-                verbose: null, // Pas de logging verbose en prod
-                fileMustExist: false
-            });
+            try {
+                // Sauvegarde quotidienne simple (si fichier existe)
+                if (fs.existsSync(dbPath)) {
+                    const d = new Date();
+                    const stamp = `${d.getFullYear()}${String(d.getMonth()+1).padStart(2,'0')}${String(d.getDate()).padStart(2,'0')}`;
+                    const bak = path.join(dbDir, `emails-${stamp}.bak`);
+                    if (!fs.existsSync(bak)) {
+                        try { fs.copyFileSync(dbPath, bak); } catch {}
+                    }
+                }
+                this.db = new Database(dbPath, {
+                    verbose: null, // Pas de logging verbose en prod
+                    fileMustExist: false
+                });
+            } catch (e) {
+                // Tentative de récupération en cas de corruption
+                console.error('❌ Ouverture DB échouée:', e?.message || e);
+                if (/SQLITE_CORRUPT|database disk image is malformed/i.test(String(e?.message || e))) {
+                    try {
+                        const corruptPath = path.join(dbDir, `emails.corrupt-${Date.now()}.db`);
+                        fs.renameSync(dbPath, corruptPath);
+                        console.warn('⚠️ DB corrompue renommée en', corruptPath, '; création d\'une nouvelle base');
+                        this.db = new Database(dbPath, { verbose: null, fileMustExist: false });
+                    } catch (e2) {
+                        console.error('❌ Récupération DB impossible:', e2?.message || e2);
+                        throw e;
+                    }
+                } else {
+                    throw e;
+                }
+            }
 
             // OPTIMISATIONS CRITIQUES
             this.setupOptimizations();

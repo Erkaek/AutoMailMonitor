@@ -1630,7 +1630,7 @@ ipcMain.handle('api-weekly-current-stats', async () => {
       
       // S'assurer que la BD est initialisée
       if (!optimizedDatabaseService.isInitialized) {
-        await optimizedDatabaseService.init();
+        await optimizedDatabaseService.initialize();
       }
       
       const currentWeekStats = optimizedDatabaseService.getCurrentWeekStats();
