@@ -2450,6 +2450,21 @@ ipcMain.handle('api-outlook-folder-structure', async (event, storeId) => {
   }
 });
 
+// Handler pour récupérer les sous-dossiers (lazy-load)
+ipcMain.handle('api-outlook-subfolders', async (event, payload) => {
+  try {
+    const { storeId, parentEntryId, parentPath } = payload || {};
+    if (!storeId || !parentEntryId) {
+      return { success: false, error: 'storeId et parentEntryId requis', children: [] };
+    }
+    const children = await outlookConnector.getSubFolders?.(storeId, parentEntryId, parentPath || '');
+    return { success: true, children: children || [] };
+  } catch (error) {
+    console.error('❌ Erreur récupération sous-dossiers:', error.message);
+    return { success: false, error: error.message, children: [] };
+  }
+});
+
 // Handler pour sauvegarder les paramètres de l'application
 ipcMain.handle('api-app-settings-save', async (event, settings) => {
   console.log('🔹 Demande de sauvegarde des paramètres');

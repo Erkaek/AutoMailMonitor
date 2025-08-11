@@ -1450,12 +1450,14 @@ class MailMonitor {
             mailboxSelect.value = this.escapeHtml(allMailboxes[0].StoreID || allMailboxes[0].Name);
           }
 
-          const renderTreeFor = (storeIdOrName) => {
+      const renderTreeFor = (storeIdOrName) => {
             const selected = allMailboxes.find(mb => mb.StoreID === storeIdOrName || mb.Name === storeIdOrName);
             const mb = selected || allMailboxes[0];
             if (mb && Array.isArray(mb.SubFolders)) {
               let treeHtml = '';
-              for (const folder of mb.SubFolders) treeHtml += this.createFolderTree(folder, 0);
+        // Stocker le StoreID sur le conteneur pour lazy-load
+        folderTree.dataset.storeId = mb.StoreID || '';
+        for (const folder of mb.SubFolders) treeHtml += this.createFolderTree(folder, 0);
               folderTree.innerHTML = treeHtml || '<div class="text-warning"><i class="bi bi-info-circle me-2"></i>Aucun dossier trouvé</div>';
               this.initializeFolderTreeEvents();
             } else {
@@ -1707,6 +1709,8 @@ class MailMonitor {
         if (selectedMailbox && selectedMailbox.SubFolders) {
           // Créer l'arbre avec les sous-dossiers du compte sélectionné
           let treeHtml = '';
+          // Stocker le StoreID sur le conteneur pour lazy-load
+          folderTree.dataset.storeId = selectedMailbox.StoreID || '';
           for (const folder of selectedMailbox.SubFolders) {
             treeHtml += this.createFolderTree(folder, 0);
           }
@@ -1732,7 +1736,9 @@ class MailMonitor {
     const folderName = structure.Name;
     const folderPath = structure.Path || structure.FolderPath;
     let subfolders = structure.Subfolders || structure.SubFolders || [];
-    const unreadCount = structure.UnreadCount || 0;
+  const unreadCount = structure.UnreadCount || 0;
+  const entryId = structure.EntryID || '';
+  const childCount = structure.ChildCount || 0;
     
     // Nettoyer SubFolders si ce n'est pas un tableau (fix pour les cas bizarres de PowerShell)
     if (!Array.isArray(subfolders)) {
@@ -1748,7 +1754,7 @@ class MailMonitor {
     }
     
     if (folderName && folderPath) {
-      const hasSubfolders = Array.isArray(subfolders) && subfolders.length > 0;
+      const hasChildren = (childCount > 0) || (Array.isArray(subfolders) && subfolders.length > 0);
       const indent = '  '.repeat(level);
       const folderId = `folder_${Math.random().toString(36).substr(2, 9)}`;
       
@@ -1757,8 +1763,10 @@ class MailMonitor {
           <div class="folder-line d-flex align-items-center py-1 folder-selectable" 
                data-path="${folderPath}" 
                data-name="${folderName}"
+               data-entry-id="${entryId}"
+               data-has-children="${hasChildren ? '1' : '0'}"
                style="cursor: pointer; border-radius: 4px; padding: 4px 8px;">
-            ${hasSubfolders ? 
+            ${hasChildren ? 
               `<i class="bi bi-chevron-right folder-toggle me-2" data-target="${folderId}" style="cursor: pointer; width: 12px;"></i>` : 
               `<span style="width: 12px; margin-right: 8px;"></span>`
             }
@@ -1766,16 +1774,13 @@ class MailMonitor {
             <span class="folder-name">${folderName}</span>
             ${unreadCount > 0 ? `<span class="badge bg-primary ms-2">${unreadCount}</span>` : ''}
           </div>
-          ${hasSubfolders ? `<div class="folder-children" id="${folderId}" style="display: none;">` : ''}
+          ${hasChildren ? `<div class="folder-children" id="${folderId}" style="display: none;"></div>` : ''}
       `;
-      
-      if (hasSubfolders) {
-        for (const subfolder of subfolders) {
-          html += this.createFolderTree(subfolder, level + 1);
-        }
-        html += '</div>';
+      // Si on a déjà des subfolders fournis, les insérer maintenant
+      if (Array.isArray(subfolders) && subfolders.length > 0) {
+        html = html.replace(`id="${folderId}" style="display: none;">`, `id="${folderId}" style="display: none;">` + subfolders.map(sf => this.createFolderTree(sf, level + 1)).join(''));
       }
-      
+
       html += '</div>';
     }
 
@@ -1785,11 +1790,37 @@ class MailMonitor {
   initializeFolderTreeEvents() {
     // Événements pour déplier/replier les dossiers
     document.querySelectorAll('.folder-toggle').forEach(toggle => {
-      toggle.addEventListener('click', (e) => {
+      toggle.addEventListener('click', async (e) => {
         e.stopPropagation();
         const targetId = toggle.getAttribute('data-target');
         const targetDiv = document.getElementById(targetId);
         const isExpanded = targetDiv.style.display !== 'none';
+        // Lazy-load au premier dépliage
+        if (!isExpanded && targetDiv && targetDiv.children.length === 0) {
+          const folderLine = toggle.closest('.folder-item')?.querySelector('.folder-line');
+          if (folderLine && folderLine.getAttribute('data-has-children') === '1') {
+            const storeId = document.getElementById('folder-tree')?.dataset.storeId || '';
+            const parentEntryId = folderLine.getAttribute('data-entry-id') || '';
+            const parentPath = folderLine.getAttribute('data-path') || '';
+            if (storeId && parentEntryId) {
+              targetDiv.innerHTML = '<div class="text-muted ms-4"><i class="bi bi-hourglass-split me-2"></i>Chargement…</div>';
+              try {
+                const res = await window.electronAPI.getSubFolders({ storeId, parentEntryId, parentPath });
+                if (res && res.success && Array.isArray(res.children)) {
+                  const parentItem = toggle.closest('.folder-item');
+                  const level = parseInt(parentItem?.getAttribute('data-level') || '0', 10) + 1;
+                  targetDiv.innerHTML = res.children.map(ch => this.createFolderTree(ch, level)).join('');
+                  this.initializeFolderTreeEvents(); // rebind sur les nouveaux noeuds
+                } else {
+                  targetDiv.innerHTML = '<div class="text-danger ms-4"><i class="bi bi-exclamation-triangle me-2"></i>Erreur de chargement</div>';
+                }
+              } catch (err) {
+                console.error('Lazy-load sous-dossiers échoué:', err);
+                targetDiv.innerHTML = '<div class="text-danger ms-4"><i class="bi bi-exclamation-triangle me-2"></i>Erreur</div>';
+              }
+            }
+          }
+        }
         
         if (isExpanded) {
           targetDiv.style.display = 'none';
@@ -2169,7 +2200,6 @@ class MailMonitor {
               <div class="spinner-border text-primary mb-3" role="status"></div>
               <h6 class="text-muted mb-2">Aucun email à afficher</h6>
               <p class="text-muted mb-0 small">Les nouveaux emails apparaîtront ici dès leur réception</p>
-            </div>
           </td>
         </tr>`;
       return;

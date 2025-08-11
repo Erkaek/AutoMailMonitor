@@ -287,6 +287,20 @@ class OutlookConnector extends EventEmitter {
   }
 
   /**
+   * Legacy name kept for compatibility. We don't actually use Graph here; we ensure Outlook is available.
+   */
+  async connectToGraphAPI() {
+    try {
+      const ok = await this.ensureConnected();
+      return ok;
+    } catch (e) {
+      this.connectionState = 'error';
+      this.lastError = e;
+      return false;
+    }
+  }
+
+  /**
    * Test de connexion Outlook
    */
   async testOutlookConnection() {
@@ -533,137 +547,76 @@ class OutlookConnector extends EventEmitter {
       const safeStoreId = String(storeId || '').replace(/`/g, '``').replace(/"/g, '\"');
 
       const script = `
-        # Force UTF-8 output to preserve accents/diacritics
         $enc = New-Object System.Text.UTF8Encoding $false
         [Console]::OutputEncoding = $enc
         $OutputEncoding = $enc
-
         try {
           $outlook = New-Object -ComObject Outlook.Application
           $ns = $outlook.GetNamespace("MAPI")
-          $accounts = $null
-          try { $accounts = $outlook.Session.Accounts } catch {}
-
-          function Get-FolderTree {
-            param([object]$folder, [string]$prefixPath, [string]$mailboxName)
-            $currentPath = if ($prefixPath -and $prefixPath.Trim() -ne "") { "$prefixPath\\$($folder.Name)" } else { "$mailboxName\\$($folder.Name)" }
-            $children = @()
-            try {
-              foreach ($sf in $folder.Folders) {
-                $children += (Get-FolderTree -folder $sf -prefixPath $currentPath -mailboxName $mailboxName)
-              }
-            } catch {}
-            $unread = 0
-            try { $unread = $folder.UnReadItemCount } catch {}
-            $total = 0
-            try { $total = $folder.Items.Count } catch {}
-            return @{
-              Name = $folder.Name
-              FolderPath = $currentPath
-              UnreadCount = $unread
-              TotalCount = $total
-              SubFolders = $children
-            }
-          }
 
           if ("${safeStoreId}" -eq "") {
-            # Retourner uniquement la liste des boîtes (sans parcourir toute l'arborescence pour rapidité)
-            $mbs = @()
+            # Retourner toutes les boîtes avec uniquement Inbox et enfants directs (léger)
+            $mailboxes = @()
             foreach ($st in $ns.Stores) {
               try {
-                $mailboxName = $st.DisplayName
-                # Tenter de trouver une adresse SMTP correspondante
+                $root = $st.GetRootFolder()
+                $mbName = $st.DisplayName
+                # SMTP si possible
                 $smtp = $null
-        if ($accounts -ne $null) {
-                  foreach ($acc in $accounts) {
-          if ($acc.SmtpAddress -and ($acc.DisplayName -eq $mailboxName -or $mailboxName -like "*$($acc.DisplayName)*")) {
-                      $smtp = $acc.SmtpAddress
-                      break
+                try {
+                  $accounts = $outlook.Session.Accounts
+                  foreach ($acc in $accounts) { if ($acc.SmtpAddress -and ($acc.DisplayName -eq $mbName -or $mbName -like "*$($acc.DisplayName)*")) { $smtp = $acc.SmtpAddress; break } }
+                } catch {}
+                $tree = @()
+                try {
+                  $inbox = $null
+                  try { $inbox = $st.GetDefaultFolder([Microsoft.Office.Interop.Outlook.OlDefaultFolders]::olFolderInbox) } catch {}
+                  if (-not $inbox) { foreach ($sf in $root.Folders) { if ($sf.Name -match 'Inbox|Boîte de réception|Posteingang|Posta in arrivo|Bandeja de entrada') { $inbox = $sf; break } } }
+                  if ($inbox) {
+                    $children = @()
+                    foreach ($sf in $inbox.Folders) {
+                      $childCount = 0; try { $childCount = $sf.Folders.Count } catch {}
+                      $children += @{ Name = $sf.Name; FolderPath = "$mbName\\$($inbox.Name)\\$($sf.Name)"; EntryID = $sf.EntryID; ChildCount = $childCount; SubFolders = @() }
                     }
+                    $tree += @{ Name = $inbox.Name; FolderPath = "$mbName\\$($inbox.Name)"; EntryID = $inbox.EntryID; ChildCount = ($inbox.Folders.Count); SubFolders = $children }
                   }
-                }
-                $mb = @{
-                  Name = $mailboxName
-                  StoreID = $st.StoreID
-                  SmtpAddress = $smtp
-                  SubFolders = @()
-                }
-                $mbs += $mb
+                } catch {}
+                $mailboxes += @{ Name = $mbName; StoreID = $st.StoreID; SmtpAddress = $smtp; SubFolders = $tree }
               } catch {}
             }
-            $res = @{ success = $true; folders = $mbs } | ConvertTo-Json -Depth 24 -Compress
+            $res = @{ success = $true; folders = $mailboxes } | ConvertTo-Json -Depth 24 -Compress
             Write-Output $res
             return
           }
 
-          # Sélection ciblée d'un Store
+          # Déterminer le store cible (par StoreID ou défaut)
           $target = $null
-          foreach ($st in $ns.Stores) {
-            if ($st.StoreID -eq "${safeStoreId}" -or $st.DisplayName -eq "${safeStoreId}" -or $st.DisplayName -like "*${safeStoreId}*") {
-              $target = $st
-              break
-            }
-          }
+          foreach ($st in $ns.Stores) { if ($st.StoreID -eq "${safeStoreId}" -or $st.DisplayName -eq "${safeStoreId}" -or $st.DisplayName -like "*${safeStoreId}*") { $target = $st; break } }
           if (-not $target) { $target = $ns.DefaultStore }
 
           $root = $target.GetRootFolder()
           $mailboxName = $target.DisplayName
-          # Tenter de trouver une adresse SMTP correspondante
+          # SMTP si possible
           $smtp = $null
-          try {
-            $accounts = $outlook.Session.Accounts
-            foreach ($acc in $accounts) {
-              if ($acc.SmtpAddress -and ($acc.DisplayName -eq $mailboxName -or $mailboxName -like "*$($acc.DisplayName)*")) {
-                $smtp = $acc.SmtpAddress
-                break
-              }
-            }
-          } catch {}
+          try { $accounts = $outlook.Session.Accounts; foreach ($acc in $accounts) { if ($acc.SmtpAddress -and ($acc.DisplayName -eq $mailboxName -or $mailboxName -like "*$($acc.DisplayName)*")) { $smtp = $acc.SmtpAddress; break } } } catch {}
+
+          # Construire un arbre minimal: Inbox et ses enfants directs, sans compter les Items
           $tree = @()
           try {
-            # Sélectionner Inbox et énumérer uniquement ses sous-dossiers directs
             $inbox = $null
-            try {
-              $inbox = $target.GetDefaultFolder([Microsoft.Office.Interop.Outlook.OlDefaultFolders]::olFolderInbox)
-            } catch {}
-            if (-not $inbox) {
-              # Fallback: chercher par nom localisé
-              foreach ($sf in $root.Folders) {
-                if ($sf.Name -match 'Inbox|Boîte de réception|Posteingang|Posta in arrivo|Bandeja de entrada') { $inbox = $sf; break }
-              }
-            }
+            try { $inbox = $target.GetDefaultFolder([Microsoft.Office.Interop.Outlook.OlDefaultFolders]::olFolderInbox) } catch {}
+            if (-not $inbox) { foreach ($sf in $root.Folders) { if ($sf.Name -match 'Inbox|Boîte de réception|Posteingang|Posta in arrivo|Bandeja de entrada') { $inbox = $sf; break } } }
             if ($inbox) {
-              $inboxUnread = 0; try { $inboxUnread = $inbox.UnReadItemCount } catch {}
-              $inboxTotal = 0; try { $inboxTotal = $inbox.Items.Count } catch {}
               $children = @()
               foreach ($sf in $inbox.Folders) {
-                $un = 0; try { $un = $sf.UnReadItemCount } catch {}
-                $tot = 0; try { $tot = $sf.Items.Count } catch {}
-                $children += @{
-                  Name = $sf.Name
-                  FolderPath = "$mailboxName\\$($inbox.Name)\\$($sf.Name)"
-                  UnreadCount = $un
-                  TotalCount = $tot
-                  SubFolders = @()
-                }
+                $childCount = 0; try { $childCount = $sf.Folders.Count } catch {}
+                $children += @{ Name = $sf.Name; FolderPath = "$mailboxName\\$($inbox.Name)\\$($sf.Name)"; EntryID = $sf.EntryID; ChildCount = $childCount; SubFolders = @() }
               }
-              $tree += @{
-                Name = $inbox.Name
-                FolderPath = "$mailboxName\\$($inbox.Name)"
-                UnreadCount = $inboxUnread
-                TotalCount = $inboxTotal
-                SubFolders = $children
-              }
+              $tree += @{ Name = $inbox.Name; FolderPath = "$mailboxName\\$($inbox.Name)"; EntryID = $inbox.EntryID; ChildCount = ($inbox.Folders.Count); SubFolders = $children }
             }
           } catch {}
 
-          $mb = @{
-            Name = $mailboxName
-            StoreID = $target.StoreID
-            SmtpAddress = $smtp
-            SubFolders = $tree
-          }
-
+          $mb = @{ Name = $mailboxName; StoreID = $target.StoreID; SmtpAddress = $smtp; SubFolders = $tree }
           $res = @{ success = $true; folders = @($mb) } | ConvertTo-Json -Depth 24 -Compress
           Write-Output $res
         } catch {
@@ -696,6 +649,79 @@ class OutlookConnector extends EventEmitter {
       return folders;
     } catch (error) {
       console.error('❌ Erreur getFolderStructure:', error.message);
+      return [];
+    }
+  }
+
+  /**
+   * Lazy-load: Récupère les sous-dossiers directs d'un dossier par EntryID pour un store donné.
+   * Retour: Array<{ Name, FolderPath, EntryID, ChildCount, SubFolders: [] }>
+   */
+  async getSubFolders(storeId, parentEntryId, parentPath) {
+    try {
+      const ok = await this.ensureConnected();
+      if (!ok) return [];
+
+      // Cache simple en mémoire avec TTL 5 min
+      if (!this.subfolderCache) this.subfolderCache = new Map();
+      const cacheKey = `${storeId}|${parentEntryId}`;
+      const cached = this.subfolderCache.get(cacheKey);
+      if (cached && (Date.now() - cached.at) < 300_000) {
+        return cached.data;
+      }
+
+      const safeStoreId = String(storeId || '').replace(/`/g, '``').replace(/"/g, '\"');
+      const safeParentId = String(parentEntryId || '').replace(/`/g, '``').replace(/"/g, '\"');
+      const safeParentPath = String(parentPath || '').replace(/`/g, '``').replace(/"/g, '\"');
+
+      const script = `
+        $enc = New-Object System.Text.UTF8Encoding $false
+        [Console]::OutputEncoding = $enc
+        $OutputEncoding = $enc
+        try {
+          $outlook = New-Object -ComObject Outlook.Application
+          $ns = $outlook.GetNamespace("MAPI")
+          $store = $null
+          foreach ($st in $ns.Stores) { if ($st.StoreID -eq "${safeStoreId}") { $store = $st; break } }
+          if (-not $store) { throw "Store introuvable" }
+          $root = $store.GetRootFolder()
+          $mbName = $store.DisplayName
+          $parent = $ns.GetFolderFromID("${safeParentId}", "${safeStoreId}")
+          if (-not $parent) { throw "Dossier parent introuvable" }
+          $children = @()
+          foreach ($sf in $parent.Folders) {
+            $childCount = 0; try { $childCount = $sf.Folders.Count } catch {}
+            $path = if ("${safeParentPath}" -ne "") { "${safeParentPath}\\$($sf.Name)" } else { "$mbName\\$($sf.Name)" }
+            $children += @{
+              Name = $sf.Name
+              FolderPath = $path
+              EntryID = $sf.EntryID
+              ChildCount = $childCount
+              SubFolders = @()
+            }
+          }
+          $res = @{ success = $true; children = $children } | ConvertTo-Json -Depth 12 -Compress
+          Write-Output $res
+        } catch {
+          $err = $_.Exception.Message
+          $res = @{ success = $false; error = $err; children = @() } | ConvertTo-Json -Depth 3 -Compress
+          Write-Output $res
+        }
+      `;
+
+      let result = await this.executePowerShellScript(script, 20000);
+      if (!result.success) {
+        result = await this.executePowerShellScript(script, 20000, { force32Bit: true });
+      }
+      if (!result.success) throw new Error(result.error || 'Échec récupération sous-dossiers');
+
+      let json; try { json = JSON.parse(result.output || '{}'); } catch { json = {}; }
+      const children = Array.isArray(json.children) ? json.children : [];
+
+      this.subfolderCache.set(cacheKey, { at: Date.now(), data: children });
+      return children;
+    } catch (error) {
+      console.error('❌ Erreur getSubFolders:', error.message);
       return [];
     }
   }

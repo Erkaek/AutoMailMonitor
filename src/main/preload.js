@@ -11,6 +11,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   outlookStatus: () => ipcRenderer.invoke('api-outlook-status'),
   getMailboxes: () => ipcRenderer.invoke('api-outlook-mailboxes'),
   getFolderStructure: (storeId) => ipcRenderer.invoke('api-outlook-folder-structure', storeId),
+  getSubFolders: (payload) => ipcRenderer.invoke('api-outlook-subfolders', payload),
   
   // API Stats
   getStatsSummary: () => ipcRenderer.invoke('api-stats-summary'),
