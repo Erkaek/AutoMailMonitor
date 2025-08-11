@@ -28,6 +28,8 @@ jobs:
 
       - name: Inject updater token (for private releases)
         shell: bash
+        env:
+          PRIVATE_UPDATER_TOKEN: ${{ secrets.PRIVATE_UPDATER_TOKEN }}
         run: |
           TOKEN_VALUE="${PRIVATE_UPDATER_TOKEN:-}"
           if [ -n "$TOKEN_VALUE" ]; then
