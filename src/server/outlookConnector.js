@@ -19,13 +19,11 @@ class OutlookConnector extends EventEmitter {
     // État de connexion
     this.isOutlookConnected = false;
     this.connectionState = 'disconnected';
-    this.lastError = null;
-    
     // Configuration optimisée
     this.config = {
-      timeout: 15000, // Réduit pour Graph API
-      realtimePollingInterval: 15000, // 15s optimal pour Graph API
-      enableDetailedLogs: false, // Performance
+      timeout: 15000,
+      realtimePollingInterval: 15000,
+      enableDetailedLogs: false,
       autoReconnect: true,
       maxRetries: 3
     };
@@ -36,6 +34,10 @@ class OutlookConnector extends EventEmitter {
     // Données en cache
     this.folders = new Map();
     this.stats = new Map();
+  // Cache boîtes mail pour fallback en cas de lenteur/timeout
+  this.lastMailboxes = [];
+  this.lastMailboxesAt = 0;
+    
     // Auto-connexion
     this.autoConnect();
   }
@@ -46,61 +48,20 @@ class OutlookConnector extends EventEmitter {
   async autoConnect() {
     try {
       console.log('[AUTO-CONNECT] Tentative de connexion automatique Graph API...');
-        // En mode dégradé, considérer Outlook comme "connecté" si le processus est disponible
-        const isRunning = await this.checkOutlookProcess();
-        if (isRunning) {
-          this.isOutlookConnected = true;
-          this.connectionState = 'connected';
-          this.emit('connected');
-          console.log('✅ Mode dégradé actif: Outlook détecté, fonctionnalités de base disponibles');
-        } else {
-          this.connectionState = 'error';
-        }
+      // Mode dégradé: considérer Outlook comme "connecté" si le process existe
+      const isRunning = await this.checkOutlookProcess();
+      if (isRunning) {
+        this.isOutlookConnected = true;
+        this.connectionState = 'connected';
+        this.emit('connected');
+        console.log('✅ Mode dégradé actif: Outlook détecté, fonctionnalités de base disponibles');
+      } else {
+        this.connectionState = 'error';
+      }
     } catch (error) {
       console.error('[AUTO-CONNECT] Erreur:', error.message);
       this.connectionState = 'error';
       this.lastError = error;
-    }
-  }
-
-  /**
-   * PERFORMANCE: Connexion Graph API
-   */
-  async connectToGraphAPI() {
-    try {
-      this.connectionState = 'connecting';
-      console.log('🚀 Connexion à Microsoft Graph API...');
-      
-      // Vérifier si Outlook est réellement disponible via PowerShell
-      let isOutlookRunning = await this.checkOutlookProcess();
-      
-      if (!isOutlookRunning) {
-        console.log('📱 Outlook n\'est pas démarré - Lancement automatique...');
-        
-        try {
-          await this.launchOutlook();
-          console.log('⏳ Attente du démarrage d\'Outlook...');
-          await this.waitForOutlookReady();
-          isOutlookRunning = true;
-        } catch (launchError) {
-          throw new Error(`Impossible de lancer Outlook automatiquement: ${launchError.message}\n\nVeuillez démarrer Microsoft Outlook manuellement et réessayer.`);
-        }
-      }
-      
-      // Pour l'instant, on simule une connexion réussie si Outlook est présent
-      this.isOutlookConnected = true;
-      this.connectionState = 'connected';
-      
-      console.log('✅ Connexion Graph API simulée (authentification utilisateur requise)');
-      this.emit('connected');
-      
-      return true;
-      
-    } catch (error) {
-      this.connectionState = 'error';
-      this.lastError = error;
-      console.error('❌ Erreur connexion Graph API:', error);
-      throw error;
     }
   }
 
@@ -506,10 +467,11 @@ class OutlookConnector extends EventEmitter {
         }
       `;
 
-      let result = await this.executePowerShellScript(script);
+      // Tentative 1 (64-bit) avec délai élargi
+      let result = await this.executePowerShellScript(script, 30000);
       if (!result.success) {
-        // Retry in 32-bit if first attempt fails
-        result = await this.executePowerShellScript(script, 15000, { force32Bit: true });
+        // Tentative 1 bis (32-bit)
+        result = await this.executePowerShellScript(script, 30000, { force32Bit: true });
       }
       if (!result.success) {
         throw new Error(result.error || 'Échec récupération boîtes mail');
@@ -517,16 +479,38 @@ class OutlookConnector extends EventEmitter {
       let json;
       try { json = JSON.parse(result.output || '{}'); } catch (_) { json = {}; }
       let mailboxes = Array.isArray(json.mailboxes) ? json.mailboxes : [];
+
+      // Si vide, petit backoff puis seconde tentative (64-bit puis 32-bit)
       if (mailboxes.length === 0) {
-        // Retry parsing or force 32-bit once more if not yet
-        const res32 = await this.executePowerShellScript(script, 15000, { force32Bit: true });
-        if (res32.success) {
+        console.log('⏳ [Mailboxes] Résultat vide - nouvelle tentative après courte attente...');
+        await new Promise(r => setTimeout(r, 1500));
+        let retry = await this.executePowerShellScript(script, 45000);
+        if (!retry.success) {
+          retry = await this.executePowerShellScript(script, 45000, { force32Bit: true });
+        }
+        if (retry.success) {
           try {
-            const j2 = JSON.parse(res32.output || '{}');
+            const j2 = JSON.parse(retry.output || '{}');
             mailboxes = Array.isArray(j2.mailboxes) ? j2.mailboxes : mailboxes;
           } catch {}
         }
       }
+
+      // Fallback: si toujours vide, renvoyer le dernier cache récent (< 1h)
+      if (mailboxes.length === 0 && Array.isArray(this.lastMailboxes) && this.lastMailboxes.length > 0) {
+        const age = Date.now() - (this.lastMailboxesAt || 0);
+        if (age < 3600_000) {
+          console.log('♻️ [Mailboxes] Résultat vide - retour au cache récent');
+          return this.lastMailboxes;
+        }
+      }
+
+      // Mettre en cache si non vide
+      if (mailboxes.length > 0) {
+        this.lastMailboxes = mailboxes;
+        this.lastMailboxesAt = Date.now();
+      }
+
       return mailboxes;
     } catch (error) {
       console.error('❌ Erreur getMailboxes:', error.message);
@@ -583,11 +567,10 @@ class OutlookConnector extends EventEmitter {
           }
 
           if ("${safeStoreId}" -eq "") {
-            # Retourner l'arborescence de toutes les boîtes pour permettre la sélection côté UI
+            # Retourner uniquement la liste des boîtes (sans parcourir toute l'arborescence pour rapidité)
             $mbs = @()
             foreach ($st in $ns.Stores) {
               try {
-                $root = $st.GetRootFolder()
                 $mailboxName = $st.DisplayName
                 # Tenter de trouver une adresse SMTP correspondante
                 $smtp = $null
@@ -599,15 +582,11 @@ class OutlookConnector extends EventEmitter {
                     }
                   }
                 }
-                $tree = @()
-                foreach ($sf in $root.Folders) {
-                  $tree += (Get-FolderTree -folder $sf -prefixPath $mailboxName -mailboxName $mailboxName)
-                }
                 $mb = @{
                   Name = $mailboxName
                   StoreID = $st.StoreID
                   SmtpAddress = $smtp
-                  SubFolders = $tree
+                  SubFolders = @()
                 }
                 $mbs += $mb
               } catch {}
@@ -642,8 +621,39 @@ class OutlookConnector extends EventEmitter {
           } catch {}
           $tree = @()
           try {
-            foreach ($sf in $root.Folders) {
-              $tree += (Get-FolderTree -folder $sf -prefixPath $mailboxName -mailboxName $mailboxName)
+            # Sélectionner Inbox et énumérer uniquement ses sous-dossiers directs
+            $inbox = $null
+            try {
+              $inbox = $target.GetDefaultFolder([Microsoft.Office.Interop.Outlook.OlDefaultFolders]::olFolderInbox)
+            } catch {}
+            if (-not $inbox) {
+              # Fallback: chercher par nom localisé
+              foreach ($sf in $root.Folders) {
+                if ($sf.Name -match 'Inbox|Boîte de réception|Posteingang|Posta in arrivo|Bandeja de entrada') { $inbox = $sf; break }
+              }
+            }
+            if ($inbox) {
+              $inboxUnread = 0; try { $inboxUnread = $inbox.UnReadItemCount } catch {}
+              $inboxTotal = 0; try { $inboxTotal = $inbox.Items.Count } catch {}
+              $children = @()
+              foreach ($sf in $inbox.Folders) {
+                $un = 0; try { $un = $sf.UnReadItemCount } catch {}
+                $tot = 0; try { $tot = $sf.Items.Count } catch {}
+                $children += @{
+                  Name = $sf.Name
+                  FolderPath = "$mailboxName\\$($inbox.Name)\\$($sf.Name)"
+                  UnreadCount = $un
+                  TotalCount = $tot
+                  SubFolders = @()
+                }
+              }
+              $tree += @{
+                Name = $inbox.Name
+                FolderPath = "$mailboxName\\$($inbox.Name)"
+                UnreadCount = $inboxUnread
+                TotalCount = $inboxTotal
+                SubFolders = $children
+              }
             }
           } catch {}
 

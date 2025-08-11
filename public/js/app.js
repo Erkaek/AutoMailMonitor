@@ -116,7 +116,11 @@ class MailMonitor {
       try {
         this.applyResponsiveSidebar();
         this.bindSidebarToggle();
-        window.addEventListener('resize', () => this.applyResponsiveSidebar());
+        window.addEventListener('resize', (e) => {
+          // Si le resize est programmatique, on ignore pour éviter la boucle
+          if (e && e.isProgrammaticResize) return;
+          this.applyResponsiveSidebar();
+        });
       } catch(_) {}
       
       console.log('✅ MailMonitor app initialisée avec succès');
@@ -134,6 +138,8 @@ class MailMonitor {
       const body = document.body;
       const collapsed = body.classList.toggle('sidebar-collapsed');
       try { localStorage.setItem('sidebarCollapsed', collapsed ? '1' : '0'); } catch(_) {}
+  // Force layout recalculation so content adapts to new width
+  this.deferLayoutResize();
     };
     const burger = document.getElementById('sidebar-burger');
     if (burger) burger.addEventListener('click', toggle);
@@ -152,6 +158,33 @@ class MailMonitor {
       if (w < 1100) body.classList.add('sidebar-collapsed');
       else body.classList.remove('sidebar-collapsed');
     }
+    // After applying state, ensure charts and tables resize to fit
+    this.deferLayoutResize();
+  }
+
+  // Trigger a layout resize on next frame (and again after transition) to ensure responsive components adapt
+  deferLayoutResize() {
+    // Immediate resize
+    this.forceLayoutResize();
+    // After CSS transition (300ms in CSS vars), run again
+    setTimeout(() => this.forceLayoutResize(), 320);
+  }
+
+  forceLayoutResize() {
+    try {
+      // Notify responsive libs (Chart.js listens to window resize)
+      const evt = new Event('resize');
+      evt.isProgrammaticResize = true;
+      window.dispatchEvent(evt);
+    } catch(_) {}
+    try {
+      if (this.charts) {
+        Object.values(this.charts).forEach(c => {
+          if (c && typeof c.resize === 'function') c.resize();
+          if (c && c.update) c.update('none');
+        });
+      }
+    } catch(_) {}
   }
 
   // === GESTIONNAIRE DE CHARGEMENT ===
@@ -732,6 +765,14 @@ class MailMonitor {
       tab.addEventListener('shown.bs.tab', (e) => {
         const target = e.target.getAttribute('data-bs-target');
         this.handleTabChange(target);
+        // Si on ouvre l'onglet monitoring, afficher la vue active (par défaut: tableau)
+        if (target === '#monitoring') {
+          if (window.foldersTree && typeof window.foldersTree.renderCurrentView === 'function') {
+            window.foldersTree.renderCurrentView();
+          } else if (window.foldersTree && typeof window.foldersTree.renderBoard === 'function') {
+            window.foldersTree.renderBoard();
+          }
+        }
       });
     });
     
@@ -1154,64 +1195,80 @@ class MailMonitor {
 
   // Nouvelle méthode pour afficher les statistiques des dossiers
   updateFoldersStatsDisplay(folders) {
-    const container = document.getElementById('folders-stats-grid');
-    if (!container) return;
-    
-    if (!folders || folders.length === 0) {
-      container.innerHTML = `
-        <div class="col-12 text-center text-muted py-4">
-          <i class="bi bi-folder-x fs-1 mb-3"></i>
-          <p>Aucun dossier configuré pour le monitoring</p>
-          <small>Ajoutez des dossiers dans l'onglet Configuration</small>
-        </div>
-      `;
-      return;
-    }
-
-    // Préparer données triées selon préférence utilisateur (par défaut: alphabétique)
-    const safeFolders = folders.map(f => ({
-      name: f.name || 'Dossier',
-      path: f.path || '',
-      category: f.category || '',
-      total: Number.isFinite(+f.total) ? +f.total : 0,
-      unread: Number.isFinite(+f.unread) ? +f.unread : 0
-    }));
-
-    const sortMode = this.state?.ui?.foldersSort || 'alpha';
-    const sorted = safeFolders.sort((a, b) => {
-      if (sortMode === 'unread') {
-        const du = (b.unread || 0) - (a.unread || 0);
-        if (du !== 0) return du;
-      }
-      const an = (a.name || '').toString();
-      const bn = (b.name || '').toString();
-      return an.localeCompare(bn, 'fr', { sensitivity: 'base', numeric: true });
-    });
-
-  // Rendu compact: éléments légers en grille
-    const html = sorted.map(f => {
-      const domId = `fold-${(f.path || f.name).toString().replace(/[^a-zA-Z0-9_-]/g, '')}`;
-      const catIcon = this.getCategoryIcon(f.category);
-      const catClass = this.getCategoryColor(f.category);
-      return `
-        <div class="col-12 col-md-6 col-lg-4">
-      <div class="d-flex justify-content-between align-items-center p-2 rounded border bg-surface" 
-               id="${domId}" data-folder-key="${this.escapeHtml(f.path || f.name)}">
-            <div class="d-flex align-items-center text-truncate" style="max-width: 70%;">
-              <span class="me-2 ${catClass}">${catIcon.startsWith('bi ') ? `<i class=\"bi ${catIcon}\"></i>` : this.escapeHtml(catIcon)}</span>
-              <div class="text-truncate">
-                <div class="fw-semibold text-truncate" title="${this.escapeHtml(f.name)}">${this.escapeHtml(f.name)}</div>
-                ${f.category ? `<small class="text-muted">${this.escapeHtml(f.category)}</small>` : ''}
-              </div>
-            </div>
-            <div class="d-flex align-items-center gap-2 ms-2">
-              <span class="badge bg-warning text-dark" title="Non lus">${f.unread}</span>
-            </div>
+    // Dashboard : grille classique
+    const grid = document.getElementById('folders-stats-grid');
+    if (grid) {
+      if (!folders || folders.length === 0) {
+        grid.innerHTML = `
+          <div class="col-12 text-center text-muted py-4">
+            <i class="bi bi-folder-x fs-1 mb-3"></i>
+            <p>Aucun dossier configuré pour le monitoring</p>
+            <small>Ajoutez des dossiers dans l'onglet Configuration</small>
           </div>
-        </div>`;
-    }).join('');
-
-    container.innerHTML = html;
+        `;
+      } else {
+        // Préparer données triées selon préférence utilisateur (par défaut: alphabétique)
+        const safeFolders = folders.map(f => ({
+          name: f.name || 'Dossier',
+          path: f.path || '',
+          category: f.category || '',
+          total: Number.isFinite(+f.total) ? +f.total : 0,
+          unread: Number.isFinite(+f.unread) ? +f.unread : 0
+        }));
+        const sortMode = this.state?.ui?.foldersSort || 'alpha';
+        const sorted = safeFolders.sort((a, b) => {
+          if (sortMode === 'unread') {
+            const du = (b.unread || 0) - (a.unread || 0);
+            if (du !== 0) return du;
+          }
+          const an = (a.name || '').toString();
+          const bn = (b.name || '').toString();
+          return an.localeCompare(bn, 'fr', { sensitivity: 'base', numeric: true });
+        });
+        // Rendu compact: éléments légers en grille
+        const html = sorted.map(f => {
+          const domId = `fold-${(f.path || f.name).toString().replace(/[^a-zA-Z0-9_-]/g, '')}`;
+          const catIcon = this.getCategoryIcon(f.category);
+          const catClass = this.getCategoryColor(f.category);
+          return `
+            <div class="col-12 col-md-6 col-lg-4">
+              <div class="d-flex justify-content-between align-items-center p-2 rounded border bg-surface" 
+                   id="${domId}" data-folder-key="${this.escapeHtml(f.path || f.name)}">
+                <div class="d-flex align-items-center text-truncate" style="max-width: 70%;">
+                  <span class="me-2 ${catClass}">${catIcon.startsWith('bi ') ? `<i class=\"bi ${catIcon}\"></i>` : this.escapeHtml(catIcon)}</span>
+                  <div class="text-truncate">
+                    <div class="fw-semibold text-truncate" title="${this.escapeHtml(f.name)}">${this.escapeHtml(f.name)}</div>
+                    ${f.category ? `<small class="text-muted">${this.escapeHtml(f.category)}</small>` : ''}
+                  </div>
+                </div>
+                <div class="d-flex align-items-center gap-2 ms-2">
+                  <span class="badge bg-warning text-dark" title="Non lus">${f.unread}</span>
+                </div>
+              </div>
+            </div>`;
+        }).join('');
+        grid.innerHTML = html;
+      }
+    }
+    // Onglet monitoring : arborescence
+    const tree = document.getElementById('monitoring-folder-tree');
+    if (tree) {
+      if (!folders || folders.length === 0) {
+        tree.innerHTML = `
+          <div class="text-center text-muted py-4">
+            <i class="bi bi-folder-x fs-1 mb-3"></i>
+            <p>Aucun dossier configuré pour le monitoring</p>
+            <small>Ajoutez des dossiers dans l'onglet Configuration</small>
+          </div>
+        `;
+      } else {
+        let treeHtml = '';
+        for (const folder of folders) {
+          treeHtml += this.createFolderTree(folder, 0);
+        }
+        tree.innerHTML = treeHtml;
+      }
+    }
   }
 
   // Méthodes utilitaires pour les catégories
@@ -2145,8 +2202,12 @@ class MailMonitor {
   }
 
   updateFolderConfigDisplay() {
-    const container = document.getElementById('folders-tree');
-    if (!container) return;
+  // Ne plus gérer le rendu list/card ici: l'onglet Monitoring est désormais
+  // entièrement géré par FoldersTreeManager (public/js/folders-tree.js)
+  // Cette méthode conserve uniquement la mise à jour d'UI légère (compteurs)
+  // et délègue le filtrage au gestionnaire d'arborescence.
+  const container = document.getElementById('folders-tree');
+  if (!container) return;
 
     const folders = Object.entries(this.state.folderCategories);
     // Appliquer les filtres UI
@@ -2166,108 +2227,18 @@ class MailMonitor {
     if (countBadge) {
       countBadge.textContent = filtered.length;
     }
-    
-  if (filtered.length === 0) {
-      container.innerHTML = `
-        <div class="empty-state">
-          <i class="bi bi-folder-plus"></i>
-          <h4>Aucun dossier configuré</h4>
-          <p>Commencez par ajouter un dossier à surveiller</p>
-          <button class="btn btn-primary btn-modern mt-3" onclick="document.getElementById('add-folder').click()">
-            <i class="bi bi-plus-circle me-2"></i>Ajouter votre premier dossier
-          </button>
-        </div>
-      `;
-      return;
+    // Déléguer l'affichage/filtrage à l'arborescence UNIQUEMENT si les critères ont changé
+    if (window.foldersTree) {
+      const prevSearch = (window.foldersTree.searchTerm || '').toLowerCase();
+      const prevCategory = window.foldersTree.categoryFilter || '';
+      const changed = prevSearch !== search || prevCategory !== categoryFilter;
+      if (changed && typeof window.foldersTree.filterFolders === 'function') {
+        window.foldersTree.searchTerm = search;
+        window.foldersTree.categoryFilter = categoryFilter;
+        window.foldersTree.filterFolders();
+      }
     }
-
-    // Générer les cartes modernes pour chaque dossier (structure stable)
-  const foldersHtml = filtered.map(([path, config]) => {
-      const categoryClass = this.getCategoryClass(config.category);
-      const categoryIcon = this.getCategoryIcon(config.category);
-      // Compteurs par dossier basés sur les emails récents (robuste)
-      const emails = Array.isArray(this.state.recentEmails) ? this.state.recentEmails : [];
-      const cfgNameLc = (config.name || '').toLowerCase();
-      const pathLc = (path || '').toLowerCase();
-      const byFolder = emails.filter(e => {
-        const eName = (e.folder_name || e.Folder || '').toLowerCase();
-        const ePath = (e.folder_path || e.FolderPath || '').toLowerCase();
-        return (eName && eName === cfgNameLc) || (ePath && (ePath === pathLc || ePath.endsWith(pathLc)));
-      });
-      const total = byFolder.length;
-      const treated = byFolder.filter(e => (e.is_treated === true) || (e.is_read === true) || e.IsRead === true).length;
-      const pending = Math.max(0, total - treated);
-      const activityPct = total > 0 ? Math.round((treated / total) * 100) : 0;
-      const safeKey = path.replace(/[^a-zA-Z0-9_-]/g, '_');
-      
-      return `
-        <div class="folder-card mb-2 animate-slide-up" data-folder-key="${this.escapeHtml(path)}" id="monCard-${safeKey}">
-          <div class="folder-header p-2">
-            <div class="d-flex justify-content-between align-items-start">
-              <div class="flex-grow-1">
-                <div class="d-flex align-items-center mb-1">
-                  <i class="bi bi-folder-fill text-warning me-2 fs-5"></i>
-                  <h6 class="mb-0 fw-semibold">${this.escapeHtml(config.name || 'Dossier sans nom')}</h6>
-                  <span class="badge ${categoryClass} modern ms-2">
-                    ${categoryIcon} ${this.escapeHtml(config.category)}
-                  </span>
-                </div>
-                <div class="folder-path">${this.escapeHtml(this.truncatePath(path))}</div>
-              </div>
-              <div class="btn-group btn-group-sm ms-2" role="group" aria-label="Actions dossier">
-                <button class="btn btn-outline-primary" title="Modifier la catégorie" onclick='app.editFolderCategory(${JSON.stringify(path)})'>
-                  <i class="bi bi-pencil"></i>
-                </button>
-                <button class="btn btn-outline-danger" title="Supprimer ce dossier" onclick='app.removeFolderConfig(${JSON.stringify(path)})'>
-                  <i class="bi bi-trash"></i>
-                </button>
-              </div>
-            </div>
-          </div>
-        <!-- Bloc de statistiques détaillées supprimé à la demande -->
-        </div>
-      `;
-    }).join('');
-
-    // Si le conteneur est vide ou structure absente, injecter tout. Sinon, patcher in-place.
-    const hadList = container.querySelector('.folders-list');
-    if (!hadList) {
-      container.innerHTML = `<div class="folders-list">${foldersHtml}</div>`;
-    } else {
-      // Mettre à jour/ajouter/retirer cartes sans tout reconstruire pour éviter le flicker
-      const list = container.querySelector('.folders-list');
-      const existing = new Map(Array.from(list.querySelectorAll('[data-folder-key]')).map(el => [el.getAttribute('data-folder-key'), el]));
-      const currentKeys = new Set();
-
-    filtered.forEach(([path, config]) => {
-        currentKeys.add(path);
-        const el = existing.get(path);
-        // Recalcule des chiffres
-        const emails = Array.isArray(this.state.recentEmails) ? this.state.recentEmails : [];
-        const cfgNameLc = (config.name || '').toLowerCase();
-        const pathLc = (path || '').toLowerCase();
-        const byFolder = emails.filter(e => {
-          const eName = (e.folder_name || e.Folder || '').toLowerCase();
-          const ePath = (e.folder_path || e.FolderPath || '').toLowerCase();
-          return (eName && eName === cfgNameLc) || (ePath && (ePath === pathLc || ePath.endsWith(pathLc)));
-        });
-        // Les statistiques détaillées ont été supprimées de l'UI Monitoring
-        const total = byFolder.length;
-
-        if (!el) {
-          // Ajouter nouvelle carte
-          list.insertAdjacentHTML('beforeend', this._renderFolderCard(path, config, { total }));
-        } else {
-          // Patch in-place
-          // Plus de mise à jour des champs statistiques (supprimés de l'UI)
-        }
-      });
-
-      // Supprimer les cartes qui ne sont plus dans le filtre
-      existing.forEach((el, key) => {
-        if (!currentKeys.has(key)) el.remove();
-      });
-    }
+    return;
   }
 
   // Helper pour générer une carte dossier (utilisé lors d'ajouts)
@@ -4647,15 +4618,16 @@ class MailMonitor {
       `;
     }
     
-    const isPositive = evolution.trend === 'up';
-    const icon = isPositive ? 'bi-arrow-up-right' : 'bi-arrow-down-right';
-    const colorClass = isPositive ? 'text-success' : 'text-danger';
-    const bgClass = isPositive ? 'bg-success' : 'bg-danger';
-    const sign = isPositive ? '+' : '';
+  const isPositive = evolution.trend === 'up';
+  const icon = isPositive ? 'bi-arrow-up-right' : 'bi-arrow-down-right';
+  // Inverser la logique : rouge si ça monte, vert si ça baisse
+  const colorClass = isPositive ? 'text-danger' : 'text-success';
+  const bgClass = isPositive ? 'bg-danger' : 'bg-success';
+  const sign = isPositive ? '+' : '';
     
     return `
       <div class="d-flex align-items-center justify-content-center">
-        <div class="evolution-indicator ${isPositive ? 'positive' : 'negative'}">
+        <div class="evolution-indicator ${isPositive ? 'negative' : 'positive'}">
           <i class="bi ${icon}"></i>
         </div>
         <div class="ms-2 text-start">

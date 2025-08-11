@@ -156,7 +156,9 @@ class CacheService {
 
     // Invalidation intelligente quand config change
     invalidateFoldersConfig() {
-        this.del('config', 'folders_config');
+    this.del('config', 'folders_config');
+    // Also invalidate cached folders tree used by Monitoring
+    this.del('config', 'folders_tree');
         this.delPattern('api', 'folders_');
         this.delPattern('ui', 'dashboard_');
     }

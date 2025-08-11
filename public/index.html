@@ -730,141 +730,123 @@
         <!-- Monitoring Tab -->
         <div class="tab-pane fade" id="monitoring">
           <div class="pane-scroll">
-          <div class="row g-4">
+            <div class="row g-4">
+              <!-- Monitoring (full width card) -->
+              <div class="col-12">
+                <div class="card border-0 shadow-sm card-modern">
+                  <div class="card-header bg-gradient d-flex justify-content-between align-items-center">
+                    <h5 class="mb-0 fw-semibold d-flex align-items-center gap-2">
+                      <i class="bi bi-folder2-open"></i>
+                      Dossiers surveillés
+                      <span class="badge bg-primary rounded-pill ms-2" id="monitored-folders-count">0</span>
+                    </h5>
+                    <div class="d-flex align-items-center gap-2">
+                      <span id="monitoring-status" class="d-none"></span>
+                      <button class="btn btn-outline-secondary btn-sm" id="refresh-folders" type="button">
+                        <i class="bi bi-arrow-clockwise me-1"></i> Actualiser
+                      </button>
+                      <button class="btn btn-primary btn-sm" id="add-folder" type="button">
+                        <i class="bi bi-plus-lg me-1"></i> Ajouter
+                      </button>
+                    </div>
+                  </div>
+                  <div class="card-body p-0 d-flex flex-column">
+                    <!-- Compact Stats Ribbon -->
+                    <div class="border-bottom bg-white stats-ribbon">
+                      <div class="container-fluid py-2">
+                        <div class="d-flex flex-wrap align-items-center gap-3 small">
+                          <div class="ribbon-item">
+                            <i class="bi bi-folder2-open text-primary me-1"></i>
+                            Total: <span id="total-folders" class="fw-semibold ms-1">0</span>
+                          </div>
+                          <div class="ribbon-item">
+                            <i class="bi bi-check2-circle text-success me-1"></i>
+                            Actifs: <span id="active-folders" class="fw-semibold ms-1">0</span>
+                          </div>
+                          <div class="vr"></div>
+                          <div class="ribbon-item">
+                            📋 <span id="declarations-count" class="fw-semibold">0</span>
+                          </div>
+                          <div class="ribbon-item">
+                            💰 <span id="reglements-count" class="fw-semibold">0</span>
+                          </div>
+                          <div class="ribbon-item">
+                            📧 <span id="simples-count" class="fw-semibold">0</span>
+                          </div>
+                          <div class="vr d-none d-md-block"></div>
+                          <div class="ribbon-usage d-flex align-items-center gap-2">
+                            <span class="text-muted">Utilisation</span>
+                            <span id="system-usage" class="fw-semibold">0%</span>
+                            <div class="progress" style="width: 120px; height: 6px;">
+                              <div id="system-progress" class="progress-bar" style="width: 0%"></div>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
 
-            <!-- Gestion des dossiers monitorés -->
-            <div class="col-lg-8">
-              <div class="card border-0 shadow-sm card-modern">
-                <div class="card-header bg-gradient d-flex justify-content-between align-items-center">
-                  <h5 class="mb-0 fw-semibold d-flex align-items-center gap-2">
-                    <i class="bi bi-folder2-open"></i>
-                    Dossiers surveillés
-                  </h5>
-                  <button class="btn btn-primary btn-sm" id="add-folder" type="button">
-                    <i class="bi bi-plus-lg me-1"></i> Ajouter un dossier
-                  </button>
-                </div>
-                <div class="card-body p-0 d-flex flex-column">
-                  <!-- Barre de filtres moderne -->
-                  <div class="p-3 border-bottom bg-light sticky-filter">
-                    <div class="row g-3">
-                      <div class="col-md-6">
-                        <div class="input-group">
-                          <span class="input-group-text bg-white border-end-0">
-                            <i class="bi bi-search text-muted"></i>
-                          </span>
-                          <input type="text" class="form-control border-start-0" id="folder-search" 
-                                 placeholder="Rechercher un dossier..." style="border-left: none !important;">
+                    <!-- Slim Filters Bar -->
+                    <div class="border-bottom bg-light sticky-filter filters-bar">
+                      <div class="container-fluid py-2">
+                        <div class="d-flex align-items-center gap-2 flex-wrap">
+                          <div class="input-group input-group-sm" style="max-width: 380px;">
+                            <span class="input-group-text bg-white border-end-0"><i class="bi bi-search text-muted"></i></span>
+                            <input type="text" class="form-control border-start-0" id="folder-search" placeholder="Rechercher..." style="border-left: none !important;">
+                          </div>
+                          <!-- Accessible select kept for logic; visually hidden -->
+                          <select class="form-select form-select-sm visually-hidden" id="category-filter" tabindex="-1" aria-hidden="true">
+                            <option value=""></option>
+                            <option value="Déclarations"></option>
+                            <option value="Règlements"></option>
+                            <option value="Mails simples"></option>
+                          </select>
+                          <div class="d-flex align-items-center gap-2 flex-wrap">
+                            <span class="chip" data-filter=""><i class="bi bi-ui-checks"></i> Tous</span>
+                            <span class="chip" data-filter="Déclarations">📋 Déclarations</span>
+                            <span class="chip" data-filter="Règlements">💰 Règlements</span>
+                            <span class="chip" data-filter="Mails simples">📧 Simples</span>
+                          </div>
                         </div>
-                        <small class="text-muted">Recherche par nom, chemin ou alias</small>
-                      </div>
-                      <div class="col-md-6">
-                        <select class="form-select" id="category-filter">
-                          <option value="">🏷️ Toutes les catégories</option>
-                          <option value="Déclarations">📋 Déclarations</option>
-                          <option value="Règlements">💰 Règlements</option>
-                          <option value="Mails simples">📧 Mails simples</option>
-                        </select>
                       </div>
                     </div>
-                    <!-- Raccourcis de filtres (non bloquants) -->
-                    <div class="mt-2 d-flex flex-wrap gap-2">
-                      <span class="chip" data-filter=""><i class="bi bi-ui-checks"></i> Tous</span>
-                      <span class="chip" data-filter="Déclarations">📋 Déclarations</span>
-                      <span class="chip" data-filter="Règlements">💰 Règlements</span>
-                      <span class="chip" data-filter="Mails simples">📧 Simples</span>
-                    </div>
-                  </div>
-                  
-                  <!-- Liste moderne des dossiers -->
-                  <div id="folders-tree" class="p-3">
-                    <div class="d-flex justify-content-center align-items-center py-5">
-                      <div class="text-center">
-                        <div class="spinner-border text-primary mb-3" role="status">
-                          <span class="visually-hidden">Chargement...</span>
-                        </div>
-                        <p class="text-muted mb-2">Chargement des dossiers...</p>
-                        <button class="btn btn-outline-primary btn-sm" type="button" onclick="window.foldersTree && window.foldersTree.showAddFolderModal()">
-                          <i class="bi bi-plus me-1"></i>Ajouter votre premier dossier
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                </div><!-- /card-body -->
-              </div>
-            </div>
 
-            <!-- Panneau de contrôle retiré -->
-            <div class="col-lg-4">
-              <!-- Statistiques modernes -->
-              <div class="card border-0 shadow-sm card-modern">
-                <div class="card-header bg-gradient">
-                  <h5 class="mb-0 fw-semibold d-flex align-items-center gap-2">
-                    <i class="bi bi-graph-up"></i>
-                    Statistiques en temps réel
-            </h5>
-                </div>
-                <div class="card-body">
-                  <div id="monitoring-stats">
-                    <!-- Statistiques principales -->
-                    <div class="row g-3 mb-4">
-                      <div class="col-6">
-                        <div class="stat-card bg-primary bg-opacity-10 p-3 rounded-3 text-center">
-                          <div class="h3 mb-1 text-primary fw-bold" id="total-folders">0</div>
-                            <div class="small text-muted fw-medium">Dossiers total</div>
-                        </div>
+                    <!-- Toolbar: view modes + expand/collapse -->
+                    <div class="p-3 border-bottom bg-white monitoring-toolbar d-flex justify-content-between align-items-center flex-wrap gap-2">
+                      <div class="btn-group btn-group-sm" role="group" aria-label="View mode">
+                        <button class="btn btn-outline-primary active" id="view-board" type="button"><i class="bi bi-columns-gap me-1"></i>Tableau</button>
+                        <button class="btn btn-outline-primary" id="view-tree" type="button"><i class="bi bi-diagram-3 me-1"></i>Arborescence</button>
+                        <button class="btn btn-outline-primary" id="view-list" type="button"><i class="bi bi-list-ul me-1"></i>Liste</button>
                       </div>
-                      <div class="col-6">
-                        <div class="stat-card bg-success bg-opacity-10 p-3 rounded-3 text-center">
-                          <div class="h3 mb-1 text-success fw-bold" id="active-folders">0</div>
-                          <div class="small text-muted fw-medium">Dossiers actifs</div>
+                      <div class="d-flex gap-2">
+                        <button class="btn btn-outline-secondary btn-sm" id="expand-all" type="button"><i class="bi bi-arrows-expand me-1"></i>Déplier tout</button>
+                        <button class="btn btn-outline-secondary btn-sm" id="collapse-all" type="button"><i class="bi bi-arrows-collapse me-1"></i>Replier tout</button>
+                      </div>
+                    </div>
+
+                    <!-- Contenu principal: Board/Tree/List -->
+                    <div class="p-3 monitoring-content">
+                      <div id="monitoring-content">
+                        <div id="folders-board" class="folders-board"></div>
+                        <div id="folders-tree" class="d-none"></div>
+                      </div>
+                    </div>
+                    <!-- Modal de détails -->
+                    <div class="modal fade" id="folderDetailsModal" tabindex="-1" aria-hidden="true">
+                      <div class="modal-dialog modal-md">
+                        <div class="modal-content">
+                          <div class="modal-header">
+                            <h5 class="modal-title" id="folderDetailTitle">Détails du dossier</h5>
+                            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                          </div>
+                          <div class="modal-body" id="folderDetailBody"></div>
+                          <div class="modal-footer" id="folderDetailFooter"></div>
                         </div>
                       </div>
                     </div>
-                    
-                    <!-- Répartition par catégories -->
-                    <div class="mb-3">
-                      <h6 class="fw-semibold mb-3">Répartition par catégories</h6>
-                      <div class="category-stats">
-                        <div class="d-flex justify-content-between align-items-center py-2 border-bottom">
-                          <div class="d-flex align-items-center">
-                            <div class="category-dot bg-info me-2"></div>
-                            <span class="small">Déclarations</span>
-                          </div>
-                          <span class="badge bg-info rounded-pill" id="declarations-count">0</span>
-                        </div>
-                        <div class="d-flex justify-content-between align-items-center py-2 border-bottom">
-                          <div class="d-flex align-items-center">
-                            <div class="category-dot bg-warning me-2"></div>
-                            <span class="small">Règlements</span>
-                          </div>
-                          <span class="badge bg-warning rounded-pill" id="reglements-count">0</span>
-                        </div>
-                        <div class="d-flex justify-content-between align-items-center py-2">
-                          <div class="d-flex align-items-center">
-                            <div class="category-dot bg-secondary me-2"></div>
-                            <span class="small">Mails simples</span>
-                          </div>
-                          <span class="badge bg-secondary rounded-pill" id="simples-count">0</span>
-                        </div>
-                      </div>
-                    </div>
-                    
-                    <!-- Barre de progression globale -->
-                    <div class="mt-4 pt-3 border-top">
-                      <div class="d-flex justify-content-between align-items-center mb-2">
-                        <small class="text-muted fw-medium">Utilisation du système</small>
-                        <small class="text-muted" id="system-usage">---%</small>
-                      </div>
-                      <div class="progress" style="height: 8px;">
-                        <div class="progress-bar bg-gradient" role="progressbar" style="width: 0%;" id="system-progress"></div>
-                      </div>
-                    </div>
-                  </div>
+                  </div><!-- /card-body -->
                 </div>
               </div>
             </div>
-          </div>
           </div>
         </div>
 

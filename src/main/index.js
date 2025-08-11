@@ -294,20 +294,22 @@ function createLoadingWindow() {
 
   loadingWindow.once('ready-to-show', () => {
     loadingWindow.show();
-    initializeOutlook();
+    // Étape 1: Vérification de mise à jour en tout début de chargement
+    runInitialUpdateCheck()
+      .catch((e) => {
+        logClean('⚠️ Echec verification MAJ (initiale): ' + (e?.message || String(e)));
+      })
+      .finally(() => {
+        // Étape 2: Initialisation Outlook
+        initializeOutlook();
+      });
   });
 
 
 app.on('ready', () => {
   try { mainLogger.init(); } catch {}
   setupAutoUpdater();
-  // Vérifie à froid puis toutes les 30 minutes
-  setTimeout(() => {
-    logClean('🔎 Verification des mises a jour au demarrage...');
-    autoUpdater.checkForUpdatesAndNotify().catch((e) => {
-      logClean('⚠️ Echec verification MAJ: ' + (e?.message || String(e)));
-    });
-  }, 5000);
+  // Vérification périodique (l'initiale est lancée par la fenêtre de chargement)
   setInterval(() => {
     logClean('🔎 Verification periodique des mises a jour...');
     autoUpdater.checkForUpdatesAndNotify().catch((e) => {
@@ -322,6 +324,39 @@ app.on('ready', () => {
   });
 
   return loadingWindow;
+}
+
+// Lancer la vérification initiale de mise à jour et informer la fenêtre de chargement
+async function runInitialUpdateCheck() {
+  try {
+    if (loadingWindow) {
+      loadingWindow.webContents.send('loading-progress', {
+        step: 1,
+        progress: 5,
+        message: 'Vérification des mises à jour...'
+      });
+    }
+    // Préférer checkForUpdates pour ne pas bloquer l’init sur le téléchargement
+    const res = await autoUpdater.checkForUpdates();
+    const info = res?.updateInfo;
+    if (info && info.version && loadingWindow) {
+      loadingWindow.webContents.send('loading-progress', {
+        step: 1,
+        progress: 10,
+        message: `Version distante: v${info.version}${res?.downloadPromise ? ' (téléchargement en arrière-plan)' : ''}`
+      });
+    }
+  } catch (e) {
+    logClean('⚠️ runInitialUpdateCheck: ' + (e?.message || String(e)));
+  } finally {
+    if (loadingWindow) {
+      loadingWindow.webContents.send('loading-progress', {
+        step: 1,
+        progress: 15,
+        message: 'Vérification des mises à jour terminée'
+      });
+    }
+  }
 }
 
 /**
@@ -967,12 +1002,15 @@ ipcMain.handle('api-settings-folders', async (event, data) => {
 // === HANDLERS IPC POUR LA GESTION HIÉRARCHIQUE DES DOSSIERS ===
 
 // Récupérer l'arbre hiérarchique des dossiers
-ipcMain.handle('api-folders-tree', async () => {
+ipcMain.handle('api-folders-tree', async (_event, payload) => {
   try {
-    // OPTIMIZED: Vérifier le cache d'abord
-    const cachedFolders = cacheService.get('config', 'folders_tree');
-    if (cachedFolders) {
-      return cachedFolders;
+    // OPTIMIZED: Vérifier le cache d'abord (sauf si force=true)
+    const force = payload && payload.force === true;
+    if (!force) {
+      const cachedFolders = cacheService.get('config', 'folders_tree');
+      if (cachedFolders) {
+        return cachedFolders;
+      }
     }
 
     await databaseService.initialize();
@@ -987,16 +1025,19 @@ ipcMain.handle('api-folders-tree', async () => {
     const monitoredFolders = [];
 
     foldersConfig.forEach(config => {
+      const fullPath = config.folder_path || config.folder_name || '';
+      const displayName = config.folder_name || extractFolderName(fullPath);
+
       // Chercher le dossier dans la structure Outlook pour obtenir le nombre d'emails
-      const outlookFolder = allFolders.find(f => f.path === config.folder_name || f.name === config.folder_name);
+      const outlookFolder = allFolders.find(f => f.path === fullPath || f.name === displayName);
 
       monitoredFolders.push({
-        path: config.folder_name,
-        name: config.folder_name || config.folder_name,
+        path: fullPath,
+        name: displayName,
         isMonitored: true,
         category: config.category || 'Mails simples',
-        emailCount: outlookFolder ? outlookFolder.emailCount || 0 : 0,
-        parentPath: getParentPath(config.folder_name)
+        emailCount: outlookFolder ? (outlookFolder.emailCount || 0) : 0,
+        parentPath: getParentPath(fullPath)
       });
     });
 
@@ -1009,8 +1050,8 @@ ipcMain.handle('api-folders-tree', async () => {
       timestamp: new Date().toISOString()
     };
 
-    // OPTIMIZED: Mettre en cache pour 5 minutes
-    cacheService.set('config', 'folders_tree', result, 300);
+  // OPTIMIZED: Mettre en cache pour 5 minutes (même si force=true pour les appels suivants)
+  cacheService.set('config', 'folders_tree', result, 300);
 
     return result;
 
@@ -1154,6 +1195,13 @@ ipcMain.handle('api-folders-update-category', async (event, { folderPath, catego
 
     console.log(`✅ Catégorie de ${folderPath} mise à jour: ${category}`);
 
+    // Invalidate cached folders data so UI refresh sees the change
+    try {
+      cacheService.invalidateFoldersConfig();
+    } catch (e) {
+      console.warn('⚠️ Impossible d\'invalider le cache des dossiers après mise à jour:', e?.message || e);
+    }
+
     // Redémarrer le monitoring en arrière-plan pour prendre en compte le changement
     if (global.unifiedMonitoringService) {
       setTimeout(async () => {
@@ -1200,6 +1248,13 @@ ipcMain.handle('api-folders-remove', async (event, { folderPath }) => {
     }
 
     console.log(`✅ Dossier ${folderPath} supprimé de la configuration`);
+
+    // Invalidate cached folders data so UI refresh sees the deletion
+    try {
+      cacheService.invalidateFoldersConfig();
+    } catch (e) {
+      console.warn('⚠️ Impossible d\'invalider le cache des dossiers après suppression:', e?.message || e);
+    }
 
     // CORRECTION: Redémarrer le service de monitoring avec la nouvelle configuration
     if (global.unifiedMonitoringService) {
