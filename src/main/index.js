@@ -8,6 +8,8 @@ const { autoUpdater } = require('electron-updater');
 const path = require('path');
 const fs = require('fs');
 const { exec } = require('child_process');
+// Logger (captures console and stores to file + memory)
+const mainLogger = require('./logger');
 // CORRECTION: Utiliser le connecteur optimisé 
 const outlookConnector = require('../server/outlookConnector');
 // OPTIMIZED: Utiliser le service de base de données optimisé
@@ -22,6 +24,8 @@ global.outlookConnector = outlookConnector;
 global.databaseService = databaseService;
 global.cacheService = cacheService;
 
+// Initialize logging early
+try { mainLogger.init(); mainLogger.hookConsole(); } catch {}
 console.log('⚡ QUICK WINS: Better-SQLite3 + Cache intelligent activés');
 
 // Fonction utilitaire pour nettoyer les messages d'encodage Windows
@@ -135,6 +139,45 @@ ipcMain.handle('app-get-version', async () => {
     return app.getVersion();
   } catch {
     return null;
+  }
+});
+
+// Logs API
+ipcMain.handle('api-logs-list', async (event, opts) => {
+  try {
+    const { entries, totalBuffered, lastId } = mainLogger.getLogs(opts || {});
+    return { success: true, entries, totalBuffered, lastId };
+  } catch (e) {
+    return { success: false, error: e.message };
+  }
+});
+
+ipcMain.handle('api-logs-export', async () => {
+  try {
+    const content = mainLogger.exportAllAsString();
+    const { canceled, filePath } = await electronDialog.showSaveDialog({
+      title: 'Exporter les logs',
+      defaultPath: `MailMonitor-logs-${new Date().toISOString().slice(0,19).replace(/[:T]/g,'-')}.txt`,
+      filters: [{ name: 'Fichiers texte', extensions: ['txt','log'] }]
+    });
+    if (canceled || !filePath) return { success: false, canceled: true };
+    fs.writeFileSync(filePath, content, 'utf8');
+    return { success: true, filePath };
+  } catch (e) {
+    return { success: false, error: e.message };
+  }
+});
+
+ipcMain.handle('api-logs-open-folder', async () => {
+  try {
+    const { shell } = require('electron');
+    const userData = app.getPath('userData');
+    const dir = require('path').join(userData, 'logs');
+    if (!fs.existsSync(dir)) return { success: false, error: 'Dossier de logs introuvable' };
+    await shell.openPath(dir);
+    return { success: true };
+  } catch (e) {
+    return { success: false, error: e.message };
   }
 });
 
@@ -256,6 +299,7 @@ function createLoadingWindow() {
 
 
 app.on('ready', () => {
+  try { mainLogger.init(); } catch {}
   setupAutoUpdater();
   // Vérifie à froid puis toutes les 30 minutes
   setTimeout(() => {
@@ -449,6 +493,15 @@ function createWindow() {
     mainWindow.show();
     logClean('🎉 Application prete !');
   });
+
+  // Logs: stream real-time entries to renderer
+  try {
+    mainLogger.onEntry((entry) => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('log-entry', entry);
+      }
+    });
+  } catch {}
 
   mainWindow.on('closed', () => {
     mainWindow = null;

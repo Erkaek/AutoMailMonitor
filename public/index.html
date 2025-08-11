@@ -82,6 +82,11 @@
           <i class="bi bi-eye me-2"></i>Monitoring
         </a>
       </li>
+      <li class="nav-item mb-2" id="nav-item-logs">
+        <a class="nav-link text-white" href="#" id="nav-logs" data-bs-toggle="pill" data-bs-target="#logs">
+          <i class="bi bi-journal-text me-2"></i>Logs
+        </a>
+      </li>
       <li class="nav-item mb-2" id="nav-item-settings">
         <a class="nav-link text-white" href="#" id="nav-settings" data-bs-toggle="pill" data-bs-target="#settings">
           <i class="bi bi-gear me-2"></i>Paramètres
@@ -265,6 +270,37 @@
               </div>
             </div>
           </div>
+          </div>
+        </div>
+
+        <!-- Logs Tab -->
+        <div class="tab-pane fade" id="logs">
+          <div class="pane-scroll">
+            <div class="card border-0 shadow-sm mb-3">
+              <div class="card-header bg-white d-flex justify-content-between align-items-center">
+                <h5 class="mb-0"><i class="bi bi-journal-text me-2"></i>Journal d'application</h5>
+                <div class="d-flex gap-2">
+                  <input type="text" class="form-control form-control-sm" id="logs-search" placeholder="Rechercher...">
+                  <select id="logs-level" class="form-select form-select-sm" style="width:auto;">
+                    <option value="all">Tous</option>
+                    <option value="info">Info</option>
+                    <option value="warn">Warn</option>
+                    <option value="error">Error</option>
+                    <option value="debug">Debug</option>
+                  </select>
+                  <button class="btn btn-outline-secondary btn-sm" id="logs-refresh"><i class="bi bi-arrow-clockwise"></i></button>
+                  <button class="btn btn-outline-secondary btn-sm" id="logs-open-folder" title="Ouvrir le dossier de logs"><i class="bi bi-folder2-open"></i></button>
+                  <button class="btn btn-outline-primary btn-sm" id="logs-export"><i class="bi bi-download me-1"></i>Exporter</button>
+                </div>
+              </div>
+              <div class="card-body p-0" style="height: 420px; overflow: auto; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace; font-size: 12px;">
+                <pre id="logs-view" class="m-0 p-3" style="white-space: pre-wrap;"></pre>
+              </div>
+              <div class="card-footer d-flex justify-content-between align-items-center small text-muted">
+                <div>Entrées affichées: <span id="logs-count">0</span> • Tampon: <span id="logs-buffered">0</span></div>
+                <div id="logs-status">—</div>
+              </div>
+            </div>
           </div>
         </div>
 

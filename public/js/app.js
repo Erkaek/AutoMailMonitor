@@ -33,6 +33,8 @@ class MailMonitor {
   theme: 'light' // 'light' | 'dark'
       }
     };
+  // Logs view state
+  this.logsState = { level: 'all', search: '', lastId: 0, autoScroll: true };
     
     // Gestionnaire de chargement centralisé
     this.loadingManager = {
@@ -101,6 +103,8 @@ class MailMonitor {
       ]);
       
       await this.completeLoadingTask('weekly', this.initWeeklyTracking());
+  // Initialize logs tab
+  this.initLogsTab();
       
       this.startPeriodicUpdates();
       this.setupAutoRefresh();
@@ -373,6 +377,131 @@ class MailMonitor {
     }
     
     console.log('✅ Événements temps réel configurés (y compris COM)');
+  }
+
+  // ====== LOGS TAB ======
+  initLogsTab() {
+    const view = document.getElementById('logs-view');
+    const countEl = document.getElementById('logs-count');
+    const bufferedEl = document.getElementById('logs-buffered');
+    const statusEl = document.getElementById('logs-status');
+    const searchEl = document.getElementById('logs-search');
+    const levelEl = document.getElementById('logs-level');
+  const refreshBtn = document.getElementById('logs-refresh');
+    const exportBtn = document.getElementById('logs-export');
+  const openFolderBtn = document.getElementById('logs-open-folder');
+    const container = view?.parentElement;
+  if (!view || !countEl || !bufferedEl || !statusEl || !searchEl || !levelEl || !refreshBtn || !exportBtn || !openFolderBtn) return;
+
+    // Update autoScroll based on user scroll position
+    container.addEventListener('scroll', () => {
+      const nearBottom = container.scrollTop + container.clientHeight >= container.scrollHeight - 24;
+      this.logsState.autoScroll = nearBottom;
+    });
+
+    const render = (entries, totalBuffered) => {
+      // Render compact lines with colors via CSS classes
+      const lines = entries.map(e => {
+        const cls = e.level === 'error' ? 'text-danger' : e.level === 'warn' ? 'text-warning' : e.level === 'debug' ? 'text-secondary' : 'text-body';
+        const msg = (e.message || '').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        return `<div class="${cls}">[${e.ts}] [${e.level.toUpperCase()}] ${msg}</div>`;
+      });
+      view.innerHTML = lines.join('');
+      countEl.textContent = String(entries.length);
+      bufferedEl.textContent = String(totalBuffered);
+      if (this.logsState.autoScroll) container.scrollTop = container.scrollHeight;
+    };
+
+    const fetchInitial = async () => {
+      try {
+        statusEl.textContent = 'Chargement...';
+        const res = await window.electronAPI.getLogs({ limit: 1000, level: this.logsState.level, search: this.logsState.search });
+        if (res && res.success) {
+          this.logsState.lastId = res.lastId || 0;
+          render(res.entries || [], res.totalBuffered || 0);
+          statusEl.textContent = `Dernière mise à jour: ${new Date().toLocaleTimeString()}`;
+        } else {
+          statusEl.textContent = 'Erreur de chargement';
+        }
+      } catch (e) {
+        statusEl.textContent = 'Erreur de chargement';
+      }
+    };
+
+    const fetchDelta = async () => {
+      try {
+        const res = await window.electronAPI.getLogs({ sinceId: this.logsState.lastId, level: this.logsState.level, search: this.logsState.search });
+        if (res && res.success) {
+          if (res.entries && res.entries.length) {
+            // Append incrementally
+            const frag = document.createDocumentFragment();
+            for (const e of res.entries) {
+              const div = document.createElement('div');
+              const cls = e.level === 'error' ? 'text-danger' : e.level === 'warn' ? 'text-warning' : e.level === 'debug' ? 'text-secondary' : 'text-body';
+              div.className = cls;
+              div.textContent = `[${e.ts}] [${e.level.toUpperCase()}] ${e.message || ''}`;
+              frag.appendChild(div);
+            }
+            view.appendChild(frag);
+            countEl.textContent = String((Number(countEl.textContent) || 0) + res.entries.length);
+            bufferedEl.textContent = String(res.totalBuffered || 0);
+            if (this.logsState.autoScroll) container.scrollTop = container.scrollHeight;
+          }
+          this.logsState.lastId = res.lastId || this.logsState.lastId;
+          statusEl.textContent = `Dernière mise à jour: ${new Date().toLocaleTimeString()}`;
+        }
+      } catch {}
+    };
+
+    // Bind filters
+    levelEl.addEventListener('change', async () => {
+      this.logsState.level = levelEl.value || 'all';
+      this.logsState.lastId = 0;
+      await fetchInitial();
+    });
+    let searchTimer = null;
+    searchEl.addEventListener('input', () => {
+      clearTimeout(searchTimer);
+      searchTimer = setTimeout(async () => {
+        this.logsState.search = searchEl.value || '';
+        this.logsState.lastId = 0;
+        await fetchInitial();
+      }, 250);
+    });
+    refreshBtn.addEventListener('click', () => fetchInitial());
+    exportBtn.addEventListener('click', async () => {
+      const res = await window.electronAPI.exportLogs();
+      if (res && res.success) this.showNotification('Export des logs', 'Fichier enregistré', 'success');
+      else if (!(res && res.canceled)) this.showNotification('Export des logs', 'Erreur lors de l\'export', 'danger');
+    });
+    openFolderBtn.addEventListener('click', async () => {
+      const res = await window.electronAPI.openLogsFolder();
+      if (!(res && res.success)) this.showNotification('Dossier de logs', 'Impossible d\'ouvrir le dossier', 'warning');
+    });
+
+    // Stream new entries in real-time (will be additionally fetched by delta for filters)
+    if (window.electronAPI.onLogEntry) {
+      window.electronAPI.onLogEntry(async (entry) => {
+        // Only show if passes current filters
+        const passLevel = this.logsState.level === 'all' || entry.level === this.logsState.level;
+        const passSearch = !this.logsState.search || (entry.message || '').toLowerCase().includes(this.logsState.search.toLowerCase());
+        if (passLevel && passSearch) {
+          const div = document.createElement('div');
+          const cls = entry.level === 'error' ? 'text-danger' : entry.level === 'warn' ? 'text-warning' : entry.level === 'debug' ? 'text-secondary' : 'text-body';
+          div.className = cls;
+          div.textContent = `[${entry.ts}] [${entry.level.toUpperCase()}] ${entry.message || ''}`;
+          view.appendChild(div);
+          countEl.textContent = String((Number(countEl.textContent) || 0) + 1);
+          if (this.logsState.autoScroll) container.scrollTop = container.scrollHeight;
+        }
+      });
+    }
+
+    // Poll for missed entries that didn't match filters previously
+    this.logsPollInterval = setInterval(fetchDelta, 1500);
+
+    // Load initial content
+    fetchInitial();
   }
 
   /**

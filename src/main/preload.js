@@ -44,6 +44,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Version applicative (source unique)
   getAppVersion: () => ipcRenderer.invoke('app-get-version'),
 
+  // Logs API
+  getLogs: (opts) => ipcRenderer.invoke('api-logs-list', opts || {}),
+  exportLogs: () => ipcRenderer.invoke('api-logs-export'),
+  openLogsFolder: () => ipcRenderer.invoke('api-logs-open-folder'),
+  onLogEntry: (callback) => ipcRenderer.on('log-entry', (event, ...args) => callback(...args)),
+
   // API Commentaires hebdomadaires
   addWeeklyComment: (payload) => ipcRenderer.invoke('api-weekly-comments-add', payload),
   listWeeklyComments: (weekIdentifier) => ipcRenderer.invoke('api-weekly-comments-list', { week_identifier: weekIdentifier }),
