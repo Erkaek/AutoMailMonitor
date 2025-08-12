@@ -555,36 +555,20 @@ class OutlookConnector extends EventEmitter {
           $ns = $outlook.GetNamespace("MAPI")
 
           if ("${safeStoreId}" -eq "") {
-            # Retourner toutes les boîtes avec uniquement Inbox et enfants directs (léger)
+            # Retourner uniquement la liste des boîtes (métadonnées), pas d'arborescence
             $mailboxes = @()
             foreach ($st in $ns.Stores) {
               try {
-                $root = $st.GetRootFolder()
                 $mbName = $st.DisplayName
-                # SMTP si possible
                 $smtp = $null
                 try {
                   $accounts = $outlook.Session.Accounts
                   foreach ($acc in $accounts) { if ($acc.SmtpAddress -and ($acc.DisplayName -eq $mbName -or $mbName -like "*$($acc.DisplayName)*")) { $smtp = $acc.SmtpAddress; break } }
                 } catch {}
-                $tree = @()
-                try {
-                  $inbox = $null
-                  try { $inbox = $st.GetDefaultFolder([Microsoft.Office.Interop.Outlook.OlDefaultFolders]::olFolderInbox) } catch {}
-                  if (-not $inbox) { foreach ($sf in $root.Folders) { if ($sf.Name -match 'Inbox|Boîte de réception|Posteingang|Posta in arrivo|Bandeja de entrada') { $inbox = $sf; break } } }
-                  if ($inbox) {
-                    $children = @()
-                    foreach ($sf in $inbox.Folders) {
-                      $childCount = 0; try { $childCount = $sf.Folders.Count } catch {}
-                      $children += @{ Name = $sf.Name; FolderPath = "$mbName\\$($inbox.Name)\\$($sf.Name)"; EntryID = $sf.EntryID; ChildCount = $childCount; SubFolders = @() }
-                    }
-                    $tree += @{ Name = $inbox.Name; FolderPath = "$mbName\\$($inbox.Name)"; EntryID = $inbox.EntryID; ChildCount = ($inbox.Folders.Count); SubFolders = $children }
-                  }
-                } catch {}
-                $mailboxes += @{ Name = $mbName; StoreID = $st.StoreID; SmtpAddress = $smtp; SubFolders = $tree }
+                $mailboxes += @{ Name = $mbName; StoreID = $st.StoreID; SmtpAddress = $smtp; SubFolders = @() }
               } catch {}
             }
-            $res = @{ success = $true; folders = $mailboxes } | ConvertTo-Json -Depth 24 -Compress
+            $res = @{ success = $true; folders = $mailboxes } | ConvertTo-Json -Depth 12 -Compress
             Write-Output $res
             return
           }

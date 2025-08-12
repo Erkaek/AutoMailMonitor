@@ -1450,10 +1450,10 @@ class MailMonitor {
             mailboxSelect.value = this.escapeHtml(allMailboxes[0].StoreID || allMailboxes[0].Name);
           }
 
-      const renderTreeFor = (storeIdOrName) => {
+          const renderTreeFor = async (storeIdOrName) => {
             const selected = allMailboxes.find(mb => mb.StoreID === storeIdOrName || mb.Name === storeIdOrName);
             const mb = selected || allMailboxes[0];
-            if (mb && Array.isArray(mb.SubFolders)) {
+            if (mb && Array.isArray(mb.SubFolders) && mb.SubFolders.length > 0) {
               let treeHtml = '';
         // Stocker le StoreID sur le conteneur pour lazy-load
         folderTree.dataset.storeId = mb.StoreID || '';
@@ -1461,7 +1461,14 @@ class MailMonitor {
               folderTree.innerHTML = treeHtml || '<div class="text-warning"><i class="bi bi-info-circle me-2"></i>Aucun dossier trouvé</div>';
               this.initializeFolderTreeEvents();
             } else {
-              folderTree.innerHTML = '<div class="text-warning"><i class="bi bi-info-circle me-2"></i>Aucun dossier trouvé pour cette boîte</div>';
+              // Si l'arbo n'est pas fournie, charger celle de la boîte sélectionnée maintenant
+              folderTree.innerHTML = '<div class="text-muted"><i class="bi bi-hourglass-split me-2"></i>Chargement…</div>';
+              try {
+                await this.loadFoldersForMailbox(mb?.StoreID || storeIdOrName);
+              } catch (err) {
+                console.error('Erreur chargement arbo pour la boîte sélectionnée:', err);
+                folderTree.innerHTML = '<div class="text-danger"><i class="bi bi-exclamation-triangle me-2"></i>Erreur de chargement</div>';
+              }
             }
           };
 
@@ -1469,7 +1476,7 @@ class MailMonitor {
           renderTreeFor(mailboxSelect.value || (allMailboxes[0]?.StoreID || allMailboxes[0]?.Name));
 
           // Sur changement de boîte, re-rendre l'arbo
-          mailboxSelect.addEventListener('change', (e) => renderTreeFor(e.target.value));
+          mailboxSelect.addEventListener('change', (e) => { renderTreeFor(e.target.value); });
         } else {
           const errMsg = this.escapeHtml(result?.error || 'Erreur de chargement');
           folderTree.innerHTML = `<div class="text-danger"><i class="bi bi-exclamation-triangle me-2"></i>${errMsg}<br/><small>Conseils: assurez-vous qu\'Outlook est démarré, que l\'exécution PowerShell est autorisée (ExecutionPolicy: Bypass autorisé), et que Outlook n\'est pas 32-bit sans PowerShell 32-bit.</small></div>`;
