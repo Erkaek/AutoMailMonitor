@@ -42,6 +42,34 @@ class OutlookConnector extends EventEmitter {
     this.autoConnect();
   }
 
+  // Robust JSON extraction from potentially noisy PowerShell output
+  static parseJsonOutput(raw) {
+    try {
+      if (!raw) return null;
+      let s = String(raw);
+      // quick path
+      const t = s.trim();
+      if (t.startsWith('{') || t.startsWith('[')) {
+        return JSON.parse(t);
+      }
+      // find outermost JSON braces
+      const first = s.indexOf('{');
+      const last = s.lastIndexOf('}');
+      if (first >= 0 && last > first) {
+        const slice = s.slice(first, last + 1);
+        try { return JSON.parse(slice); } catch {}
+      }
+      // array variant
+      const afirst = s.indexOf('[');
+      const alast = s.lastIndexOf(']');
+      if (afirst >= 0 && alast > afirst) {
+        const slice = s.slice(afirst, alast + 1);
+        try { return JSON.parse(slice); } catch {}
+      }
+      return null;
+    } catch { return null; }
+  }
+
   /**
    * Auto-connexion optimisée
    */
@@ -490,8 +518,7 @@ class OutlookConnector extends EventEmitter {
       if (!result.success) {
         throw new Error(result.error || 'Échec récupération boîtes mail');
       }
-      let json;
-      try { json = JSON.parse(result.output || '{}'); } catch (_) { json = {}; }
+  let json = OutlookConnector.parseJsonOutput(result.output) || {};
       let mailboxes = Array.isArray(json.mailboxes) ? json.mailboxes : [];
 
       // Si vide, petit backoff puis seconde tentative (64-bit puis 32-bit)
@@ -503,10 +530,8 @@ class OutlookConnector extends EventEmitter {
           retry = await this.executePowerShellScript(script, 45000, { force32Bit: true });
         }
         if (retry.success) {
-          try {
-            const j2 = JSON.parse(retry.output || '{}');
-            mailboxes = Array.isArray(j2.mailboxes) ? j2.mailboxes : mailboxes;
-          } catch {}
+          const j2 = OutlookConnector.parseJsonOutput(retry.output) || {};
+          mailboxes = Array.isArray(j2.mailboxes) ? j2.mailboxes : mailboxes;
         }
       }
 
@@ -604,6 +629,16 @@ class OutlookConnector extends EventEmitter {
                 }
               }
             }
+            # Si la racine parait vide, essayer de retrouver un autre point racine via Namespace.Folders
+            $rootChilds = 0; try { $rootChilds = $root.Folders.Count } catch {}
+            if ($rootChilds -eq 0) {
+              try {
+                foreach ($tf in $ns.Folders) {
+                  try { if ($tf.Store.StoreID -eq $target.StoreID) { $root = $tf; break } } catch {}
+                }
+              } catch {}
+            }
+
             if ($inbox) {
               $children = @()
               foreach ($sf in $inbox.Folders) {
@@ -611,6 +646,14 @@ class OutlookConnector extends EventEmitter {
                 $children += @{ Name = $sf.Name; FolderPath = "$mailboxName\\$($inbox.Name)\\$($sf.Name)"; EntryID = $sf.EntryID; ChildCount = $childCount; SubFolders = @() }
               }
               $tree += @{ Name = $inbox.Name; FolderPath = "$mailboxName\\$($inbox.Name)"; EntryID = $inbox.EntryID; ChildCount = ($inbox.Folders.Count); SubFolders = $children }
+              # Si l'inbox ne semble pas avoir d'enfants (compte 0 et enumeration vide), ajouter aussi les dossiers racine
+              $inboxChilds = 0; try { $inboxChilds = $inbox.Folders.Count } catch {}
+              if ($inboxChilds -eq 0 -and $children.Count -eq 0) {
+                foreach ($sf in $root.Folders) {
+                  $childCount = 0; try { $childCount = $sf.Folders.Count } catch {}
+                  $tree += @{ Name = $sf.Name; FolderPath = "$mailboxName\\$($sf.Name)"; EntryID = $sf.EntryID; ChildCount = $childCount; SubFolders = @() }
+                }
+              }
             } else {
               # 3) Dernier fallback: exposer les dossiers de premier niveau de la racine
               $children = @()
@@ -641,16 +684,13 @@ class OutlookConnector extends EventEmitter {
       if (!result.success) {
         throw new Error(result.error || 'Échec récupération structure dossiers');
       }
-      let json;
-      try { json = JSON.parse(result.output || '{}'); } catch (_) { json = {}; }
+      let json = OutlookConnector.parseJsonOutput(result.output) || {};
       let folders = Array.isArray(json.folders) ? json.folders : [];
       if (folders.length === 0) {
         const res32 = await this.executePowerShellScript(script, 60000, { force32Bit: true });
         if (res32.success) {
-          try {
-            const j2 = JSON.parse(res32.output || '{}');
-            folders = Array.isArray(j2.folders) ? j2.folders : folders;
-          } catch {}
+          const j2 = OutlookConnector.parseJsonOutput(res32.output) || {};
+          folders = Array.isArray(j2.folders) ? j2.folders : folders;
         }
       }
       try {
@@ -744,7 +784,7 @@ class OutlookConnector extends EventEmitter {
       }
       if (!result.success) throw new Error(result.error || 'Échec récupération sous-dossiers');
 
-  let json; try { json = JSON.parse(result.output || '{}'); } catch { json = {}; }
+  let json = OutlookConnector.parseJsonOutput(result.output) || {};
   const children = Array.isArray(json.children) ? json.children : [];
   try { console.log(`[OUTLOOK] getSubFolders: parent=${String(parentPath||'').slice(-40)}… -> ${children.length} items`); } catch {}
 
