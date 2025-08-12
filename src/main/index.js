@@ -2499,6 +2499,27 @@ ipcMain.handle('api-outlook-subfolders', async (event, payload) => {
   }
 });
 
+// EWS: enumeration rapide des dossiers (top-level et enfants)
+ipcMain.handle('api-ews-top-level', async (_event, { mailbox }) => {
+  try {
+    if (!mailbox) return { success: false, error: 'mailbox requis', folders: [] };
+    const folders = await outlookConnector.getTopLevelFoldersFast(mailbox);
+    return { success: true, folders };
+  } catch (e) {
+    return { success: false, error: e?.message || String(e), folders: [] };
+  }
+});
+
+ipcMain.handle('api-ews-children', async (_event, { mailbox, parentId }) => {
+  try {
+    if (!mailbox || !parentId) return { success: false, error: 'mailbox et parentId requis', folders: [] };
+    const folders = await outlookConnector.getChildFoldersFast(mailbox, parentId);
+    return { success: true, folders };
+  } catch (e) {
+    return { success: false, error: e?.message || String(e), folders: [] };
+  }
+});
+
 // Handler pour sauvegarder les paramètres de l'application
 ipcMain.handle('api-app-settings-save', async (event, settings) => {
   console.log('🔹 Demande de sauvegarde des paramètres');

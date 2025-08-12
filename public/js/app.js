@@ -1453,22 +1453,31 @@ class MailMonitor {
           const renderTreeFor = async (storeIdOrName) => {
             const selected = allMailboxes.find(mb => mb.StoreID === storeIdOrName || mb.Name === storeIdOrName);
             const mb = selected || allMailboxes[0];
-            if (mb && Array.isArray(mb.SubFolders) && mb.SubFolders.length > 0) {
-              let treeHtml = '';
-        // Stocker le StoreID sur le conteneur pour lazy-load
-        folderTree.dataset.storeId = mb.StoreID || '';
-        for (const folder of mb.SubFolders) treeHtml += this.createFolderTree(folder, 0);
-              folderTree.innerHTML = treeHtml || '<div class="text-warning"><i class="bi bi-info-circle me-2"></i>Aucun dossier trouvé</div>';
-              this.initializeFolderTreeEvents();
-            } else {
-              // Si l'arbo n'est pas fournie, charger celle de la boîte sélectionnée maintenant
-              folderTree.innerHTML = '<div class="text-muted"><i class="bi bi-hourglass-split me-2"></i>Chargement…</div>';
-              try {
-                await this.loadFoldersForMailbox(mb?.StoreID || storeIdOrName);
-              } catch (err) {
-                console.error('Erreur chargement arbo pour la boîte sélectionnée:', err);
-                folderTree.innerHTML = '<div class="text-danger"><i class="bi bi-exclamation-triangle me-2"></i>Erreur de chargement</div>';
+            const mailboxLabel = mb?.SmtpAddress || mb?.Name || '';
+            folderTree.dataset.mailbox = mailboxLabel;
+            folderTree.innerHTML = '<div class="text-muted"><i class="bi bi-hourglass-split me-2"></i>Chargement…</div>';
+            try {
+              const top = await window.electronAPI.ewsTopLevel(mailboxLabel);
+              const nodes = Array.isArray(top) ? top : (top?.folders || []);
+              if (!nodes.length) {
+                folderTree.innerHTML = '<div class="text-warning"><i class="bi bi-info-circle me-2"></i>Aucun dossier trouvé</div>';
+                return;
               }
+              // Adapter data pour createFolderTree
+              const treeItems = nodes.map(n => ({
+                Name: n.Name,
+                FolderPath: `${mailboxLabel}\\${n.Name}`,
+                EntryID: n.Id,
+                ChildCount: n.ChildCount,
+                SubFolders: []
+              }));
+              let html = '';
+              for (const it of treeItems) html += this.createFolderTree(it, 0);
+              folderTree.innerHTML = html;
+              this.initializeFolderTreeEvents();
+            } catch (err) {
+              console.error('Erreur chargement EWS top-level:', err);
+              folderTree.innerHTML = '<div class="text-danger"><i class="bi bi-exclamation-triangle me-2"></i>Erreur de chargement</div>';
             }
           };
 
@@ -1660,75 +1669,31 @@ class MailMonitor {
       const folderTree = document.getElementById('folder-tree');
       folderTree.innerHTML = '<div class="text-muted"><i class="bi bi-hourglass-split me-2"></i>Chargement...</div>';
 
-      const result = await window.electronAPI.getFolderStructure(storeId);
-      console.log('🔍 DEBUG - Recherche de boîte mail pour StoreID:', storeId);
-      console.log('🔍 DEBUG - Structure reçue:', result);
-      
-      if (result.success && result.folders && Array.isArray(result.folders)) {
-        // Trouver le bon compte dans le tableau - nouvelle logique plus simple
-        let selectedMailbox = null;
-        
-        // D'abord, récupérer l'adresse email sélectionnée dans la dropdown
-        const mailboxSelect = document.getElementById('mailbox-select');
-        const selectedEmailAddress = mailboxSelect ? mailboxSelect.selectedOptions[0]?.text : '';
-        
-        console.log('🔍 DEBUG - Adresse email sélectionnée dans dropdown:', selectedEmailAddress);
-        console.log('🔍 DEBUG - StoreID demandé:', storeId);
-        
-        // Méthode 1: Correspondance par l'adresse email visible dans la dropdown
-        if (selectedEmailAddress) {
-          selectedMailbox = result.folders.find(mailbox => mailbox.Name === selectedEmailAddress);
-          if (selectedMailbox) {
-            console.log('✅ Correspondance trouvée (méthode dropdown):', selectedMailbox.Name);
-          }
-        }
-        
-        // Méthode 2 (fallback): Correspondance par StoreID si méthode 1 échoue
-        if (!selectedMailbox) {
-          for (const mailbox of result.folders) {
-            console.log('🔍 Test correspondance StoreID pour:', mailbox.Name);
-            
-            // Correspondance exacte du nom dans le StoreID
-            if (storeId.includes(mailbox.Name)) {
-              selectedMailbox = mailbox;
-              console.log('✅ Correspondance trouvée (méthode StoreID)');
-              break;
-            }
-            
-            // Correspondance par parties du nom
-            const mailboxUser = mailbox.Name.split('@')[0];
-            if (storeId.includes(mailboxUser)) {
-              selectedMailbox = mailbox;
-              console.log('✅ Correspondance trouvée (méthode partie nom)');
-              break;
-            }
-          }
-        }
-        
-        // Si toujours pas trouvé, prendre le premier (fallback final)
-        if (!selectedMailbox && result.folders.length > 0) {
-          selectedMailbox = result.folders[0];
-          console.log('⚠️ Aucune correspondance - utilisation du premier compte:', selectedMailbox.Name);
-        }
-        
-        console.log('🔍 DEBUG - Boîte mail sélectionnée:', selectedMailbox);
-        
-        if (selectedMailbox && selectedMailbox.SubFolders) {
-          // Créer l'arbre avec les sous-dossiers du compte sélectionné
-          let treeHtml = '';
-          // Stocker le StoreID sur le conteneur pour lazy-load
-          folderTree.dataset.storeId = selectedMailbox.StoreID || '';
-          for (const folder of selectedMailbox.SubFolders) {
-            treeHtml += this.createFolderTree(folder, 0);
-          }
-          folderTree.innerHTML = treeHtml;
-          this.initializeFolderTreeEvents();
-        } else {
+      // Utiliser EWS directement pour ce store (on affiche le libellé comme mailbox)
+      const mailboxSelect = document.getElementById('mailbox-select');
+      const mailboxLabel = mailboxSelect ? (mailboxSelect.selectedOptions[0]?.text || '') : '';
+      folderTree.dataset.mailbox = mailboxLabel;
+      try {
+        const nodes = await window.electronAPI.ewsTopLevel(mailboxLabel);
+        const list = Array.isArray(nodes) ? nodes : (nodes?.folders || []);
+        if (!list.length) {
           folderTree.innerHTML = '<div class="text-warning"><i class="bi bi-info-circle me-2"></i>Aucun dossier trouvé pour cette boîte mail</div>';
+          return;
         }
-      } else {
+        const treeItems = list.map(n => ({
+          Name: n.Name,
+          FolderPath: `${mailboxLabel}\\${n.Name}`,
+          EntryID: n.Id,
+          ChildCount: n.ChildCount,
+          SubFolders: []
+        }));
+        let html = '';
+        for (const it of treeItems) html += this.createFolderTree(it, 0);
+        folderTree.innerHTML = html;
+        this.initializeFolderTreeEvents();
+      } catch (err) {
+        console.error('❌ Erreur EWS top-level:', err);
         folderTree.innerHTML = '<div class="text-danger"><i class="bi bi-exclamation-triangle me-2"></i>Erreur de chargement</div>';
-        console.error('Erreur récupération dossiers:', result.error || 'Réponse invalide');
       }
     } catch (error) {
       console.error('❌ Erreur chargement dossiers:', error);
@@ -1806,23 +1771,26 @@ class MailMonitor {
         if (!isExpanded && targetDiv && targetDiv.children.length === 0) {
           const folderLine = toggle.closest('.folder-item')?.querySelector('.folder-line');
           if (folderLine && folderLine.getAttribute('data-has-children') === '1') {
-            const storeId = document.getElementById('folder-tree')?.dataset.storeId || '';
+            const mailbox = document.getElementById('folder-tree')?.dataset.mailbox || '';
             const parentEntryId = folderLine.getAttribute('data-entry-id') || '';
-            const parentPath = folderLine.getAttribute('data-path') || '';
-            if (storeId && parentEntryId) {
+            if (mailbox && parentEntryId) {
               targetDiv.innerHTML = '<div class="text-muted ms-4"><i class="bi bi-hourglass-split me-2"></i>Chargement…</div>';
               try {
-                const res = await window.electronAPI.getSubFolders({ storeId, parentEntryId, parentPath });
-                if (res && res.success && Array.isArray(res.children)) {
-                  const parentItem = toggle.closest('.folder-item');
-                  const level = parseInt(parentItem?.getAttribute('data-level') || '0', 10) + 1;
-                  targetDiv.innerHTML = res.children.map(ch => this.createFolderTree(ch, level)).join('');
-                  this.initializeFolderTreeEvents(); // rebind sur les nouveaux noeuds
-                } else {
-                  targetDiv.innerHTML = '<div class="text-danger ms-4"><i class="bi bi-exclamation-triangle me-2"></i>Erreur de chargement</div>';
-                }
+                const res = await window.electronAPI.ewsChildren(mailbox, parentEntryId);
+                const children = Array.isArray(res) ? res : (res?.folders || []);
+                const mapped = children.map(ch => ({
+                  Name: ch.Name,
+                  FolderPath: `${mailbox}\\${folderLine.getAttribute('data-name')}\\${ch.Name}`,
+                  EntryID: ch.Id,
+                  ChildCount: ch.ChildCount,
+                  SubFolders: []
+                }));
+                const parentItem = toggle.closest('.folder-item');
+                const level = parseInt(parentItem?.getAttribute('data-level') || '0', 10) + 1;
+                targetDiv.innerHTML = mapped.map(m => this.createFolderTree(m, level)).join('');
+                this.initializeFolderTreeEvents();
               } catch (err) {
-                console.error('Lazy-load sous-dossiers échoué:', err);
+                console.error('Lazy-load sous-dossiers EWS échoué:', err);
                 targetDiv.innerHTML = '<div class="text-danger ms-4"><i class="bi bi-exclamation-triangle me-2"></i>Erreur</div>';
               }
             }

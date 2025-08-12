@@ -12,6 +12,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getMailboxes: () => ipcRenderer.invoke('api-outlook-mailboxes'),
   getFolderStructure: (storeId) => ipcRenderer.invoke('api-outlook-folder-structure', storeId),
   getSubFolders: (payload) => ipcRenderer.invoke('api-outlook-subfolders', payload),
+  // EWS fast enumeration
+  ewsTopLevel: (mailbox) => ipcRenderer.invoke('api-ews-top-level', { mailbox }),
+  ewsChildren: (mailbox, parentId) => ipcRenderer.invoke('api-ews-children', { mailbox, parentId }),
   
   // API Stats
   getStatsSummary: () => ipcRenderer.invoke('api-stats-summary'),

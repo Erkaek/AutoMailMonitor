@@ -6,6 +6,7 @@
 
 const { EventEmitter } = require('events');
 const { exec } = require('child_process');
+const path = require('path');
 
 // Simplification: pas d'import de Graph API pour éviter les problèmes de dépendances
 let graphAvailable = false; // Désactivé temporairement
@@ -1441,8 +1442,76 @@ class OutlookConnector extends EventEmitter {
       console.log(`[OutlookConnector] ${message}`);
     }
   }
+
+  // --- EWS FAST ENUMERATION HELPERS ---
+  async ewsRun(scriptArgs, timeout = 20000) {
+    const { spawn } = require('child_process');
+    const winDir = process.env.WINDIR || 'C:\\Windows';
+    const pwsh = path.join(winDir, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+    return new Promise((resolve, reject) => {
+      const ps = spawn(pwsh, ['-NoProfile', '-ExecutionPolicy', 'Bypass', ...scriptArgs], { windowsHide: true });
+      let out = '', err = '';
+      const t = setTimeout(() => { try { ps.kill('SIGTERM'); } catch {} reject(new Error('EWS timeout')); }, timeout);
+      ps.stdout.on('data', d => out += d.toString());
+      ps.stderr.on('data', d => err += d.toString());
+      ps.on('exit', code => { clearTimeout(t); if (code === 0) resolve(out); else reject(new Error(err || `PowerShell exited ${code}`)); });
+      ps.on('error', e => { clearTimeout(t); reject(e); });
+    });
+  }
+
+  async getTopLevelFoldersFast(mailbox) {
+    let scriptPath = path.join(process.cwd(), 'scripts', 'ews-list-folders.ps1');
+    // If not present (asar/packaged), try resources path
+    try {
+      const fs = require('fs');
+      if (!fs.existsSync(scriptPath)) {
+        const candidate = path.join(process.cwd(), 'resources', 'scripts', 'ews-list-folders.ps1');
+        if (fs.existsSync(candidate)) scriptPath = candidate;
+      }
+    } catch {}
+    const args = ['-File', scriptPath, '-Mailbox', mailbox, '-Scope', 'Inbox'];
+    try {
+      const raw = await this.ewsRun(args, 30000);
+      const data = OutlookConnector.parseJsonOutput(raw);
+      const payload = Array.isArray(data) ? data[0] : data;
+      let folders = payload?.Folders || [];
+      if (!folders.length) {
+        const raw2 = await this.ewsRun(['-File', scriptPath, '-Mailbox', mailbox, '-Scope', 'Root'], 30000);
+        const data2 = OutlookConnector.parseJsonOutput(raw2);
+        const payload2 = Array.isArray(data2) ? data2[0] : data2;
+        folders = payload2?.Folders || [];
+      }
+      return folders;
+    } catch (e) {
+      console.error('❌ EWS top-level failed:', e.message);
+      throw e;
+    }
+  }
+
+  async getChildFoldersFast(mailbox, parentId) {
+    let scriptPath = path.join(process.cwd(), 'scripts', 'ews-list-folders.ps1');
+    try {
+      const fs = require('fs');
+      if (!fs.existsSync(scriptPath)) {
+        const candidate = path.join(process.cwd(), 'resources', 'scripts', 'ews-list-folders.ps1');
+        if (fs.existsSync(candidate)) scriptPath = candidate;
+      }
+    } catch {}
+    const args = ['-File', scriptPath, '-Mailbox', mailbox, '-ParentId', parentId];
+    try {
+      const raw = await this.ewsRun(args, 20000);
+      const data = OutlookConnector.parseJsonOutput(raw);
+      const payload = Array.isArray(data) ? data[0] : data;
+      return payload?.Folders || [];
+    } catch (e) {
+      console.error('❌ EWS children failed:', e.message);
+      throw e;
+    }
+  }
 }
 
 // Export singleton
 const outlookConnector = new OutlookConnector();
 module.exports = outlookConnector;
+module.exports.getTopLevelFoldersFast = (...a) => outlookConnector.getTopLevelFoldersFast(...a);
+module.exports.getChildFoldersFast = (...a) => outlookConnector.getChildFoldersFast(...a);

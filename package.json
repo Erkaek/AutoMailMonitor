@@ -1,13 +1,13 @@
 {
   "name": "mailmonitor",
-  "version": "0.9.9",
+  "version": "0.9.10",
   "description": "Application de monitoring des emails Outlook avec interface moderne",
   "main": "src/main/index.js",
   "scripts": { 
   "start": "npx electron .",
   "import-activity": "node src/cli/import-activity.js",
   "test:carry": "set ELECTRON_RUN_AS_NODE=1&& npx electron scripts/test-carry-over.js",
-  "postinstall": "electron-builder install-app-deps",
+  "postinstall": "electron-builder install-app-deps && node scripts/fetch-ews-dll.js",
   "version:bump": "node -e \"const p=require('./package.json');const v=p.version;console.log('Current',v);\"",
   "release": "npx electron-builder --win --x64 --publish always"
   },
@@ -32,7 +32,8 @@
   },
   "devDependencies": {
   "electron": "^37.2.5",
-  "electron-builder": "^25.1.8"
+  "electron-builder": "^25.1.8",
+  "adm-zip": "^0.5.12"
   },
   "build": {
     "appId": "com.tanguy.mailmonitor",
@@ -62,6 +63,18 @@
       {
         "from": "node_modules/better-sqlite3/build/Release/",
         "to": "app.asar.unpacked/node_modules/better-sqlite3/build/Release/",
+        "filter": ["**/*"]
+      }
+      ,
+      {
+        "from": "resources/ews/",
+        "to": "resources/ews/",
+        "filter": ["**/*"]
+      }
+      ,
+      {
+        "from": "scripts/",
+        "to": "resources/scripts/",
         "filter": ["**/*"]
       }
     ],
