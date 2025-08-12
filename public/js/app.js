@@ -1460,8 +1460,25 @@ class MailMonitor {
               const top = await window.electronAPI.ewsTopLevel(mailboxLabel);
               const nodes = Array.isArray(top) ? top : (top?.folders || []);
               if (!nodes.length) {
-                folderTree.innerHTML = '<div class="text-warning"><i class="bi bi-info-circle me-2"></i>Aucun dossier trouvé</div>';
-                return;
+                // Fallback vers COM si EWS ne renvoie rien (ex: SMTP introuvable)
+                try {
+                  const res2 = await window.electronAPI.getFolderStructure(mb?.StoreID || mb?.Name || '');
+                  const struct = (res2 && res2.success && Array.isArray(res2.folders)) ? res2.folders : [];
+                  if (!struct.length) {
+                    folderTree.innerHTML = '<div class="text-warning"><i class="bi bi-info-circle me-2"></i>Aucun dossier trouvé</div>';
+                    return;
+                  }
+                  let html2 = '';
+                  for (const it of struct) html2 += this.createFolderTree(it, 0);
+                  folderTree.innerHTML = html2;
+                  this.initializeFolderTreeEvents();
+                  this.showNotification('Info', 'EWS indisponible pour cette boîte. Mode compatibilité (COM) utilisé.', 'info');
+                  return;
+                } catch (fallbackErr) {
+                  console.error('Erreur fallback COM:', fallbackErr);
+                  folderTree.innerHTML = '<div class="text-danger"><i class="bi bi-exclamation-triangle me-2"></i>Erreur de chargement</div>';
+                  return;
+                }
               }
               // Adapter data pour createFolderTree
               const treeItems = nodes.map(n => ({
@@ -1477,7 +1494,23 @@ class MailMonitor {
               this.initializeFolderTreeEvents();
             } catch (err) {
               console.error('Erreur chargement EWS top-level:', err);
-              folderTree.innerHTML = '<div class="text-danger"><i class="bi bi-exclamation-triangle me-2"></i>Erreur de chargement</div>';
+              // Fallback vers COM en cas d'erreur EWS
+              try {
+                const res2 = await window.electronAPI.getFolderStructure(mb?.StoreID || mb?.Name || '');
+                const struct = (res2 && res2.success && Array.isArray(res2.folders)) ? res2.folders : [];
+                if (!struct.length) {
+                  folderTree.innerHTML = '<div class="text-warning"><i class="bi bi-info-circle me-2"></i>Aucun dossier trouvé</div>';
+                  return;
+                }
+                let html2 = '';
+                for (const it of struct) html2 += this.createFolderTree(it, 0);
+                folderTree.innerHTML = html2;
+                this.initializeFolderTreeEvents();
+                this.showNotification('Info', 'EWS indisponible pour cette boîte. Mode compatibilité (COM) utilisé.', 'info');
+              } catch (fallbackErr) {
+                console.error('Erreur fallback COM:', fallbackErr);
+                folderTree.innerHTML = '<div class="text-danger"><i class="bi bi-exclamation-triangle me-2"></i>Erreur de chargement</div>';
+              }
             }
           };
 
@@ -1677,7 +1710,18 @@ class MailMonitor {
         const nodes = await window.electronAPI.ewsTopLevel(mailboxLabel);
         const list = Array.isArray(nodes) ? nodes : (nodes?.folders || []);
         if (!list.length) {
-          folderTree.innerHTML = '<div class="text-warning"><i class="bi bi-info-circle me-2"></i>Aucun dossier trouvé pour cette boîte mail</div>';
+          // Fallback COM
+          const res2 = await window.electronAPI.getFolderStructure(storeId);
+          const struct = (res2 && res2.success && Array.isArray(res2.folders)) ? res2.folders : [];
+          if (!struct.length) {
+            folderTree.innerHTML = '<div class="text-warning"><i class="bi bi-info-circle me-2"></i>Aucun dossier trouvé pour cette boîte mail</div>';
+            return;
+          }
+          let html2 = '';
+          for (const it of struct) html2 += this.createFolderTree(it, 0);
+          folderTree.innerHTML = html2;
+          this.initializeFolderTreeEvents();
+          this.showNotification('Info', 'EWS indisponible pour cette boîte. Mode compatibilité (COM) utilisé.', 'info');
           return;
         }
         const treeItems = list.map(n => ({
@@ -1693,7 +1737,23 @@ class MailMonitor {
         this.initializeFolderTreeEvents();
       } catch (err) {
         console.error('❌ Erreur EWS top-level:', err);
-        folderTree.innerHTML = '<div class="text-danger"><i class="bi bi-exclamation-triangle me-2"></i>Erreur de chargement</div>';
+        // Fallback COM on error
+        try {
+          const res2 = await window.electronAPI.getFolderStructure(storeId);
+          const struct = (res2 && res2.success && Array.isArray(res2.folders)) ? res2.folders : [];
+          if (!struct.length) {
+            folderTree.innerHTML = '<div class="text-warning"><i class="bi bi-info-circle me-2"></i>Aucun dossier trouvé pour cette boîte mail</div>';
+            return;
+          }
+          let html2 = '';
+          for (const it of struct) html2 += this.createFolderTree(it, 0);
+          folderTree.innerHTML = html2;
+          this.initializeFolderTreeEvents();
+          this.showNotification('Info', 'EWS indisponible pour cette boîte. Mode compatibilité (COM) utilisé.', 'info');
+        } catch (fallbackErr) {
+          console.error('Erreur fallback COM:', fallbackErr);
+          folderTree.innerHTML = '<div class="text-danger"><i class="bi bi-exclamation-triangle me-2"></i>Erreur de chargement</div>';
+        }
       }
     } catch (error) {
       console.error('❌ Erreur chargement dossiers:', error);
