@@ -44,6 +44,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // Version applicative (source unique)
   getAppVersion: () => ipcRenderer.invoke('app-get-version'),
+  checkUpdatesNow: () => ipcRenderer.invoke('app-check-updates-now'),
 
   // Logs API
   getLogs: (opts) => ipcRenderer.invoke('api-logs-list', opts || {}),

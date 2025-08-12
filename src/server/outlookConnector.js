@@ -588,8 +588,22 @@ class OutlookConnector extends EventEmitter {
           $tree = @()
           try {
             $inbox = $null
+            # 1) Tenter via Store.GetDefaultFolder (Outlook 2010+)
             try { $inbox = $target.GetDefaultFolder([Microsoft.Office.Interop.Outlook.OlDefaultFolders]::olFolderInbox) } catch {}
-            if (-not $inbox) { foreach ($sf in $root.Folders) { if ($sf.Name -match 'Inbox|Boîte de réception|Posteingang|Posta in arrivo|Bandeja de entrada') { $inbox = $sf; break } } }
+            # 2) Fallback: chercher par nom localisé (liste élargie)
+            if (-not $inbox) {
+              $inboxPattern = 'Inbox|Boite de reception|Boîte de réception|Courrier entrant|Posteingang|Posta in arrivo|Bandeja de entrada|Caixa de Entrada|Postvak IN|Indbakke|Inkorgen|Saapuneet|Skrzynka odbiorcza|Doručená pošta|Beérkezett üzenetek|Mesaje primite|Gelen Kutusu|Εισερχόμενα|Входящие|受信トレイ|收件箱|Вхідні'
+              foreach ($sf in $root.Folders) { if ($sf.Name -match $inboxPattern) { $inbox = $sf; break } }
+              # 2bis) Si toujours rien, chercher un niveau plus bas (ex: "Top of Information Store")
+              if (-not $inbox) {
+                foreach ($rf in $root.Folders) {
+                  try {
+                    foreach ($sf in $rf.Folders) { if ($sf.Name -match $inboxPattern) { $inbox = $sf; break } }
+                  } catch {}
+                  if ($inbox) { break }
+                }
+              }
+            }
             if ($inbox) {
               $children = @()
               foreach ($sf in $inbox.Folders) {
@@ -597,6 +611,15 @@ class OutlookConnector extends EventEmitter {
                 $children += @{ Name = $sf.Name; FolderPath = "$mailboxName\\$($inbox.Name)\\$($sf.Name)"; EntryID = $sf.EntryID; ChildCount = $childCount; SubFolders = @() }
               }
               $tree += @{ Name = $inbox.Name; FolderPath = "$mailboxName\\$($inbox.Name)"; EntryID = $inbox.EntryID; ChildCount = ($inbox.Folders.Count); SubFolders = $children }
+            } else {
+              # 3) Dernier fallback: exposer les dossiers de premier niveau de la racine
+              $children = @()
+              foreach ($sf in $root.Folders) {
+                $childCount = 0; try { $childCount = $sf.Folders.Count } catch {}
+                $children += @{ Name = $sf.Name; FolderPath = "$mailboxName\\$($sf.Name)"; EntryID = $sf.EntryID; ChildCount = $childCount; SubFolders = @() }
+              }
+              # Dans ce mode, on n'ajoute pas un noeud 'Inbox' parent; on renvoie directement les enfants de la racine
+              foreach ($c in $children) { $tree += $c }
             }
           } catch {}
 
@@ -630,6 +653,11 @@ class OutlookConnector extends EventEmitter {
           } catch {}
         }
       }
+      try {
+        const mb = folders && folders[0];
+        const subCount = Array.isArray(mb?.SubFolders) ? mb.SubFolders.length : 0;
+        console.log(`[OUTLOOK] getFolderStructure: store=${String(storeId || '').slice(0,8)}… -> mailboxes=${folders.length}, first.SubFolders=${subCount}`);
+      } catch {}
       return folders;
     } catch (error) {
       console.error('❌ Erreur getFolderStructure:', error.message);
@@ -670,7 +698,24 @@ class OutlookConnector extends EventEmitter {
           if (-not $store) { throw "Store introuvable" }
           $root = $store.GetRootFolder()
           $mbName = $store.DisplayName
-          $parent = $ns.GetFolderFromID("${safeParentId}", "${safeStoreId}")
+          $parent = $null
+          try { $parent = $ns.GetFolderFromID("${safeParentId}", "${safeStoreId}") } catch {}
+          if (-not $parent -and "${safeParentPath}" -ne "") {
+            # Fallback: navigation par chemin (MB\Inbox\Child...)
+            $parts = "${safeParentPath}" -split "\\\\"
+            if ($parts.Length -gt 1) {
+              $cursor = $root
+              # Essayer d'ignorer la premiere partie (nom boite), parfois differente d'affichage
+              for ($i = 1; $i -lt $parts.Length; $i++) {
+                $name = $parts[$i]
+                $next = $null
+                foreach ($f in $cursor.Folders) { if ($f.Name -eq $name) { $next = $f; break } }
+                if ($next -eq $null) { break }
+                $cursor = $next
+              }
+              if ($cursor -ne $root) { $parent = $cursor }
+            }
+          }
           if (-not $parent) { throw "Dossier parent introuvable" }
           $children = @()
           foreach ($sf in $parent.Folders) {
@@ -699,8 +744,9 @@ class OutlookConnector extends EventEmitter {
       }
       if (!result.success) throw new Error(result.error || 'Échec récupération sous-dossiers');
 
-      let json; try { json = JSON.parse(result.output || '{}'); } catch { json = {}; }
-      const children = Array.isArray(json.children) ? json.children : [];
+  let json; try { json = JSON.parse(result.output || '{}'); } catch { json = {}; }
+  const children = Array.isArray(json.children) ? json.children : [];
+  try { console.log(`[OUTLOOK] getSubFolders: parent=${String(parentPath||'').slice(-40)}… -> ${children.length} items`); } catch {}
 
       this.subfolderCache.set(cacheKey, { at: Date.now(), data: children });
       return children;

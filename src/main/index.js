@@ -87,6 +87,8 @@ const APP_CONFIG = {
 // Auto-update configuration
 autoUpdater.autoDownload = true;
 autoUpdater.autoInstallOnAppQuit = true;
+// Autoriser les pre-releases (souvent utiles pendant les tests). Peut etre force via env.
+autoUpdater.allowPrerelease = String(process.env.ALLOW_PRERELEASE || 'true').toLowerCase() !== 'false';
 
 // If repo is private, allow providing a GitHub token bundled or via env to authorize release access
 try {
@@ -104,6 +106,9 @@ try {
 } catch {}
 
 function setupAutoUpdater() {
+  autoUpdater.on('checking-for-update', () => {
+    logClean('🔎 Recherche de mise a jour demarree');
+  });
   autoUpdater.on('error', (err) => {
     logClean('⚠️ Mise à jour: erreur: ' + (err?.message || String(err)));
   });
@@ -111,7 +116,12 @@ function setupAutoUpdater() {
     logClean('🔔 Mise à jour disponible: v' + info?.version);
   });
   autoUpdater.on('update-not-available', () => {
-    logClean('ℹ️ Aucune mise à jour disponible');
+    try {
+      const cur = app.getVersion();
+      logClean('ℹ️ Aucune mise à jour disponible (version locale v' + cur + ')');
+    } catch {
+      logClean('ℹ️ Aucune mise à jour disponible');
+    }
   });
   autoUpdater.on('download-progress', (p) => {
     logClean(`⬇️ Téléchargement mise à jour: ${Math.floor(p.percent)}%`);
@@ -309,6 +319,14 @@ function createLoadingWindow() {
 app.on('ready', () => {
   try { mainLogger.init(); } catch {}
   setupAutoUpdater();
+  try {
+    logClean(`🚀 Application v${app.getVersion()} (${process.platform} ${process.arch})`);
+  } catch {}
+  try {
+    // Traces utiles pour diagnostiquer l’URL d’update
+    const cfgPath = autoUpdater.updateConfigPath;
+    logClean('📄 update config path: ' + (cfgPath || 'inconnu'));
+  } catch {}
   // Vérification périodique (l'initiale est lancée par la fenêtre de chargement)
   setInterval(() => {
     logClean('🔎 Verification periodique des mises a jour...');
@@ -358,6 +376,22 @@ async function runInitialUpdateCheck() {
     }
   }
 }
+
+// IPC: Vérification manuelle des mises à jour
+ipcMain.handle('app-check-updates-now', async () => {
+  try {
+    logClean('🖐️ Vérification manuelle des mises à jour demandée');
+    const res = await autoUpdater.checkForUpdates();
+    const info = res?.updateInfo || null;
+    return {
+      success: true,
+      updateInfo: info,
+      downloading: !!res?.downloadPromise
+    };
+  } catch (e) {
+    return { success: false, error: e?.message || String(e) };
+  }
+});
 
 /**
  * Configuration du transfert des événements temps réel du service vers le frontend
