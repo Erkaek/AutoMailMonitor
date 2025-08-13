@@ -2876,7 +2876,7 @@ app.whenReady().then(async () => {
   try {
     const { resolveResource } = require('../server/scriptPathResolver');
     const scriptCheck = resolveResource(['scripts'], 'ews-list-folders.ps1');
-    const dllCheck = resolveResource(['resources','ews'], 'Microsoft.Exchange.WebServices.dll');
+  const dllCheck = resolveResource(['ews'], 'Microsoft.Exchange.WebServices.dll');
     if (!scriptCheck.path) {
       console.warn('⚠️ Script EWS introuvable au démarrage (fallback COM). Candidats:', scriptCheck.tried);
     } else {
@@ -2897,7 +2897,7 @@ ipcMain.handle('api-health-check', async () => {
   try {
     const { resolveResource } = require('../server/scriptPathResolver');
     const scriptCheck = resolveResource(['scripts'], 'ews-list-folders.ps1');
-    const dllCheck = resolveResource(['resources','ews'], 'Microsoft.Exchange.WebServices.dll');
+    const dllCheck = resolveResource(['ews'], 'Microsoft.Exchange.WebServices.dll');
     return {
       success: true,
       timestamp: new Date().toISOString(),
@@ -2906,7 +2906,8 @@ ipcMain.handle('api-health-check', async () => {
       ewsTriedScript: scriptCheck.tried,
       ewsTriedDll: dllCheck.tried,
       ewsDisabled: !!(require('../server/outlookConnector')._ewsDisabled),
-      ewsFailures: require('../server/outlookConnector')._ewsFailures || 0
+      ewsFailures: require('../server/outlookConnector')._ewsFailures || 0,
+      ewsInvalid: Array.from(require('../server/outlookConnector')._ewsInvalid || [])
     };
   } catch (e) {
     return { success: false, error: e.message };

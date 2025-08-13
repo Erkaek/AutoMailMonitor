@@ -1,6 +1,6 @@
 {
   "name": "mailmonitor",
-  "version": "0.9.14",
+  "version": "0.9.15",
   "description": "Application de monitoring des emails Outlook avec interface moderne",
   "main": "src/main/index.js",
   "scripts": { 
@@ -67,14 +67,14 @@
       }
       ,
       {
-        "from": "resources/ews/",
-        "to": "resources/ews/",
+  "from": "resources/ews/",
+  "to": "ews/",
         "filter": ["**/*"]
       }
       ,
       {
-        "from": "scripts/",
-        "to": "resources/scripts/",
+  "from": "scripts/",
+  "to": "scripts/",
   "filter": ["**/*"]
       }
     ],

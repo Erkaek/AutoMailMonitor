@@ -1622,15 +1622,38 @@ class OutlookConnector extends EventEmitter {
     });
   }
 
+  // Validation simple adresse email (pour éviter Autodiscover inutiles sur noms affichés)
+  isLikelyEmail(value) {
+    if (!value || typeof value !== 'string') return false;
+    // doit contenir un '@' non en première position et un '.' après '@'
+    const at = value.indexOf('@');
+    if (at <= 0) return false;
+    const dot = value.indexOf('.', at);
+    if (dot <= at + 1) return false;
+    // pas d'espaces
+    if (/\s/.test(value)) return false;
+    return true;
+  }
+
   async getTopLevelFoldersFast(mailbox) {
     // Circuit breaker
     this._ewsFailures = this._ewsFailures || 0;
+    this._ewsInvalid = this._ewsInvalid || new Set();
+    if (!this.isLikelyEmail(mailbox)) {
+      // Ne pas compter comme échec global, juste ignorer EWS pour ce mailbox
+      if (!this._ewsInvalid.has(mailbox)) {
+        console.warn(`⚠️ EWS ignoré: identifiant mailbox non valide pour Autodiscover (${mailbox}). Fallback COM.`);
+        this._ewsInvalid.add(mailbox);
+      }
+      return [];
+    }
+    if (this._ewsInvalid.has(mailbox)) return [];
     if (this._ewsFailures >= 3 || this._ewsDisabled) {
       return []; // allow COM fallback silently
     }
     const { resolveResource } = require('./scriptPathResolver');
     const scriptRes = resolveResource(['scripts'], 'ews-list-folders.ps1');
-    const dllRes = resolveResource(['resources','ews'], 'Microsoft.Exchange.WebServices.dll');
+  const dllRes = resolveResource(['ews'], 'Microsoft.Exchange.WebServices.dll');
     if (!scriptRes.path || !dllRes.path) {
       if (!scriptRes.path) console.warn('⚠️ EWS script absent (top-level), fallback COM. Tried:', scriptRes.tried);
       if (!dllRes.path) console.warn('⚠️ EWS DLL absente (top-level), fallback COM. Tried:', dllRes.tried);
@@ -1651,9 +1674,14 @@ class OutlookConnector extends EventEmitter {
       }
       return Array.isArray(folders) ? folders.map(f => ({ Id: f.Id, Name: f.Name, ChildCount: Number(f.ChildCount || 0) })) : [];
     } catch (e) {
-      this._ewsFailures++;
-      console.warn(`⚠️ EWS top-level failed (${this._ewsFailures}):`, e.message);
-      if (this._ewsFailures >= 3) this._ewsDisabled = true;
+      if (/formed incorrectly/i.test(e.message)) {
+        console.warn(`⚠️ EWS désactivé pour mailbox invalide (${mailbox}):`, e.message);
+        this._ewsInvalid.add(mailbox);
+      } else {
+        this._ewsFailures++;
+        console.warn(`⚠️ EWS top-level failed (${this._ewsFailures}) pour ${mailbox}:`, e.message);
+        if (this._ewsFailures >= 3) this._ewsDisabled = true;
+      }
       return [];
     }
   }
@@ -1663,7 +1691,7 @@ class OutlookConnector extends EventEmitter {
     if (this._ewsFailures >= 3 || this._ewsDisabled) return [];
     const { resolveResource } = require('./scriptPathResolver');
     const scriptRes = resolveResource(['scripts'], 'ews-list-folders.ps1');
-    const dllRes = resolveResource(['resources','ews'], 'Microsoft.Exchange.WebServices.dll');
+  const dllRes = resolveResource(['ews'], 'Microsoft.Exchange.WebServices.dll');
     if (!scriptRes.path || !dllRes.path) {
       if (!scriptRes.path) console.warn('⚠️ EWS script absent (children), fallback COM.');
       if (!dllRes.path) console.warn('⚠️ EWS DLL absente (children), fallback COM.');
