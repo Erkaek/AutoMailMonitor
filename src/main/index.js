@@ -1486,17 +1486,30 @@ ipcMain.handle('api-folders-add', async (event, { folderPath, category }) => {
             const segs = chainStart.split('\\').filter(Boolean);
             // Remove mailbox part
             const startSegs = segs.slice(1);
+            // If first segment is Inbox (localisé) we need to skip it because getTopLevelFoldersFast returns its children, not Inbox itself
+            const isInboxLike = (s) => {
+              const n = String(s||'').normalize('NFD').replace(/\p{Diacritic}/gu,'').toLowerCase().trim();
+              return n === 'inbox' || n.includes('boite') || n.includes('reception');
+            };
+            let effectiveSegs = startSegs.slice();
+            if (effectiveSegs.length && isInboxLike(effectiveSegs[0])) {
+              console.log('[ADD][DFS][EWS] First segment is Inbox-like, skipping for top-level match:', effectiveSegs[0]);
+              effectiveSegs = effectiveSegs.slice(1); // don't include Inbox when matching top-level list
+            }
             // Resolve starting folder id
             const top = await outlookConnector.getTopLevelFoldersFast?.(mailboxSmtp || mailboxDisplay);
             const folders = Array.isArray(top) ? top : [];
             let cur = null, namesChain = [];
-            if (startSegs.length === 0) return; // nothing to enumerate
+            if (effectiveSegs.length === 0) return; // nothing to enumerate beyond Inbox itself
             for (const f of folders) {
-              if (normalizeName(f?.Name || '') === normalizeName(startSegs[0])) { cur = f; break; }
+              if (normalizeName(f?.Name || '') === normalizeName(effectiveSegs[0])) { cur = f; break; }
             }
             if (!cur) return;
             namesChain = [cur.Name];
-            for (let i = 1; i < startSegs.length; i++) {
+            // We iterate remaining original startSegs (excluding mailbox) but skipping the first if it was Inbox-like and already skipped.
+            let iterateFrom = 1;
+            if (startSegs.length && isInboxLike(startSegs[0])) iterateFrom = 1; // already handled by skipping
+            for (let i = iterateFrom; i < startSegs.length; i++) {
               const kids = await outlookConnector.getChildFoldersFast?.(mailboxSmtp || mailboxDisplay, cur.Id);
               const nxt = (kids || []).find(k => normalizeName(k?.Name || '') === normalizeName(startSegs[i]));
               if (!nxt) return;
