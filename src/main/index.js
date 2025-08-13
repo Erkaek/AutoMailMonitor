@@ -1124,11 +1124,21 @@ ipcMain.handle('api-database-folder-stats', async () => {
 
 // Ajouter un dossier au monitoring
 ipcMain.handle('api-folders-add', async (event, { folderPath, category }) => {
-    if (!folderPath || !category) {
-      throw new Error('Chemin du dossier et catégorie requis');
+  const startedAt = Date.now();
+  let debugPhases = [];
+  let toInsertDebugSample = [];
+  try {
+    if (!folderPath) {
+      throw new Error('Chemin du dossier requis');
+    }
+    if (!category) {
+      // Fallback par défaut si la catégorie n'est pas fournie par l'UI
+      category = 'GENERIC';
     }
 
+    debugPhases.push('init-db');
     await databaseService.initialize();
+    debugPhases.push('db-initialized');
 
   // Nouvelle logique: résoudre la boîte par nom, puis parcourir récursivement
   // tous les descendants via lazy-load COM en se basant sur le chemin (robuste aux langues)
@@ -1643,8 +1653,10 @@ ipcMain.handle('api-folders-add', async (event, { folderPath, category }) => {
   }
 
     // Insérer tous les dossiers (OR REPLACE évite les doublons)
+    debugPhases.push('insert-start');
     let inserted = 0;
     for (const item of toInsert) {
+      if (toInsertDebugSample.length < 10) toInsertDebugSample.push(item.path);
       try {
         await databaseService.addFolderConfiguration(item.path, category, item.name);
         inserted++;
@@ -1652,11 +1664,13 @@ ipcMain.handle('api-folders-add', async (event, { folderPath, category }) => {
         console.error('❌ Erreur insertion dossier enfant:', item.path, e.message || e);
       }
     }
-    
+    debugPhases.push('insert-done');
+
     // OPTIMIZED: Invalidation intelligente du cache
-    cacheService.invalidateFoldersConfig();
-    
-    console.log(`✅ ${inserted} dossier(s) ajouté(s) au monitoring (incl. sous-dossiers)`);
+    try { cacheService.invalidateFoldersConfig(); } catch (e) { console.warn('Cache invalidation failed:', e?.message || e); }
+    debugPhases.push('cache-invalidated');
+
+    console.log(`✅ [ADD] ${inserted} dossier(s) ajouté(s) au monitoring (incl. sous-dossiers)`);
 
     // Redémarrer le monitoring en arrière-plan pour prendre en compte le nouveau dossier
     if (global.unifiedMonitoringService) {
@@ -1675,11 +1689,25 @@ ipcMain.handle('api-folders-add', async (event, { folderPath, category }) => {
 
     return {
       success: true,
-      message: `Dossier ajouté (avec sous-dossiers): ${inserted} élément(s)`,
+      message: `Dossier ajouté (avec sous-dossiers): ${inserted} élément(s)` ,
       folderPath: folderPath,
       category: category,
-      count: inserted
+      count: inserted,
+      durationMs: Date.now() - startedAt,
+      debug: { phases: debugPhases, sample: toInsertDebugSample }
     };
+
+  } catch (error) {
+    console.error('❌ [ADD] Erreur ajout dossier:', error?.message || error, { folderPath, category, phases: debugPhases });
+    return {
+      success: false,
+      message: error?.message || String(error),
+      folderPath,
+      category,
+      durationMs: Date.now() - startedAt,
+      debug: { phases: debugPhases, sample: toInsertDebugSample }
+    };
+  }
 
   // Outer errors already handled internally; surface generic failure if essential data missing
   if (!folderPath || !category) {
