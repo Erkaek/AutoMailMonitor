@@ -1635,17 +1635,62 @@ class OutlookConnector extends EventEmitter {
     return true;
   }
 
+  collectDomain(email) {
+    try {
+      if (this.isLikelyEmail(email)) {
+        this._ewsDomains = this._ewsDomains || new Set();
+        this._ewsDomains.add(email.split('@')[1].toLowerCase());
+      }
+    } catch {}
+  }
+
+  guessMailboxEmail(displayName) {
+    if (!displayName || this.isLikelyEmail(displayName)) return null;
+    // env override direct mapping (JSON: {"conciergerie":"conciergerie@besse.fr"})
+    if (!this._ewsAliasMap) this._ewsAliasMap = {};
+    try {
+      const aliasOverrides = process.env.EWS_ALIAS_MAP ? JSON.parse(process.env.EWS_ALIAS_MAP) : {};
+      const key = displayName.toLowerCase();
+      if (aliasOverrides[key]) return aliasOverrides[key];
+    } catch {}
+    // domains list: env then learned
+    const domains = [];
+    if (process.env.EWS_GUESS_DOMAINS) {
+      domains.push(...process.env.EWS_GUESS_DOMAINS.split(',').map(d => d.trim().toLowerCase()).filter(Boolean));
+    }
+    if (this._ewsDomains) domains.push(...Array.from(this._ewsDomains));
+    const uniqDomains = [...new Set(domains)];
+    if (!uniqDomains.length) return null; // rien à tenter
+    // normaliser nom -> local part
+    const local = displayName.normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-zA-Z0-9]/g,'').toLowerCase();
+    if (!local || local.length < 3) return null;
+    for (const d of uniqDomains) {
+      const candidate = `${local}@${d}`;
+      if (this.isLikelyEmail(candidate)) return candidate;
+    }
+    return null;
+  }
+
   async getTopLevelFoldersFast(mailbox) {
     // Circuit breaker
     this._ewsFailures = this._ewsFailures || 0;
     this._ewsInvalid = this._ewsInvalid || new Set();
+    this._ewsAliasMap = this._ewsAliasMap || {};
     if (!this.isLikelyEmail(mailbox)) {
-      // Ne pas compter comme échec global, juste ignorer EWS pour ce mailbox
-      if (!this._ewsInvalid.has(mailbox)) {
-        console.warn(`⚠️ EWS ignoré: identifiant mailbox non valide pour Autodiscover (${mailbox}). Fallback COM.`);
-        this._ewsInvalid.add(mailbox);
+      // Essayer de deviner une adresse valide
+      const guessed = this.guessMailboxEmail(mailbox);
+      if (guessed) {
+        console.warn(`ℹ️ Tentative EWS avec adresse devinée ${guessed} pour alias ${mailbox}`);
+        // Continuer le flux mais utiliser guessed
+        this.collectDomain(guessed);
+        mailbox = this._ewsAliasMap[mailbox] = guessed;
+      } else {
+        if (!this._ewsInvalid.has(mailbox)) {
+          console.warn(`⚠️ EWS ignoré: identifiant mailbox non valide pour Autodiscover (${mailbox}). Fallback COM.`);
+          this._ewsInvalid.add(mailbox);
+        }
+        return [];
       }
-      return [];
     }
     if (this._ewsInvalid.has(mailbox)) return [];
     if (this._ewsFailures >= 3 || this._ewsDisabled) {
@@ -1672,6 +1717,7 @@ class OutlookConnector extends EventEmitter {
         const list = payload?.Folders || [];
         if (Array.isArray(list) && list.length) { folders = list; break; }
       }
+  if (folders.length) this.collectDomain(mailbox);
       return Array.isArray(folders) ? folders.map(f => ({ Id: f.Id, Name: f.Name, ChildCount: Number(f.ChildCount || 0) })) : [];
     } catch (e) {
       if (/formed incorrectly/i.test(e.message)) {

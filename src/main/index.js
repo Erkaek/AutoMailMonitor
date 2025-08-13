@@ -2907,7 +2907,8 @@ ipcMain.handle('api-health-check', async () => {
       ewsTriedDll: dllCheck.tried,
       ewsDisabled: !!(require('../server/outlookConnector')._ewsDisabled),
       ewsFailures: require('../server/outlookConnector')._ewsFailures || 0,
-      ewsInvalid: Array.from(require('../server/outlookConnector')._ewsInvalid || [])
+  ewsInvalid: Array.from(require('../server/outlookConnector')._ewsInvalid || []),
+  ewsAliasMap: require('../server/outlookConnector')._ewsAliasMap || {}
     };
   } catch (e) {
     return { success: false, error: e.message };
