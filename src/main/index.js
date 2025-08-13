@@ -1491,42 +1491,76 @@ ipcMain.handle('api-folders-add', async (event, { folderPath, category }) => {
               const n = String(s||'').normalize('NFD').replace(/\p{Diacritic}/gu,'').toLowerCase().trim();
               return n === 'inbox' || n.includes('boite') || n.includes('reception');
             };
-            let effectiveSegs = startSegs.slice();
-            if (effectiveSegs.length && isInboxLike(effectiveSegs[0])) {
-              console.log('[ADD][DFS][EWS] First segment is Inbox-like, skipping for top-level match:', effectiveSegs[0]);
-              effectiveSegs = effectiveSegs.slice(1); // don't include Inbox when matching top-level list
-            }
-            // Resolve starting folder id
+            const hadInbox = startSegs.length && isInboxLike(startSegs[0]);
+            const effectiveSegs = hadInbox ? startSegs.slice(1) : startSegs.slice();
             const top = await outlookConnector.getTopLevelFoldersFast?.(mailboxSmtp || mailboxDisplay);
             const folders = Array.isArray(top) ? top : [];
-            let cur = null, namesChain = [];
-            if (effectiveSegs.length === 0) return; // nothing to enumerate beyond Inbox itself
+            let cur = null; let namesChain = [];
+            if (!folders.length) { console.log('[ADD][DFS][EWS] No top-level EWS folders, abort'); return; }
+
+            if (!effectiveSegs.length) {
+              // User selected Inbox itself -> enumerate all top-level folders directly
+              console.log('[ADD][DFS][EWS] Enumerating all children of Inbox (selected Inbox)');
+              for (const f of folders) {
+                const baseChain = [f.Name];
+                const basePath = hadInbox ? `${mailboxDisplay}\\${segs[1]}\\${f.Name}` : `${mailboxDisplay}\\${f.Name}`; // segs[1] = original Inbox label
+                const normalized = normalizePath(basePath);
+                if (!seen.has(normalized)) {
+                  seen.add(normalized);
+                  toInsert.push({ path: normalized, name: f.Name });
+                }
+                // Prepare stack for deep traversal
+                const stack = [{ id: f.Id, chain: baseChain.slice() }];
+                while (stack.length) {
+                  const node = stack.pop();
+                  const kids = await outlookConnector.getChildFoldersFast?.(mailboxSmtp || mailboxDisplay, node.id);
+                  for (const k of (kids || [])) {
+                    const childChain = node.chain.concat(k.Name);
+                    const disp = hadInbox ? `${mailboxDisplay}\\${segs[1]}\\${childChain.join('\\')}` : `${mailboxDisplay}\\${childChain.join('\\')}`;
+                    const norm = normalizePath(disp);
+                    if (!seen.has(norm)) {
+                      seen.add(norm);
+                      toInsert.push({ path: norm, name: k.Name });
+                    }
+                    stack.push({ id: k.Id, chain: childChain });
+                  }
+                }
+              }
+              return;
+            }
+
+            // Resolve starting folder (first effective segment)
             for (const f of folders) {
               if (normalizeName(f?.Name || '') === normalizeName(effectiveSegs[0])) { cur = f; break; }
             }
-            if (!cur) return;
+            if (!cur) { console.log('[ADD][DFS][EWS] Starting segment not found in EWS top-level:', effectiveSegs[0]); return; }
             namesChain = [cur.Name];
-            // We iterate remaining original startSegs (excluding mailbox) but skipping the first if it was Inbox-like and already skipped.
-            let iterateFrom = 1;
-            if (startSegs.length && isInboxLike(startSegs[0])) iterateFrom = 1; // already handled by skipping
-            for (let i = iterateFrom; i < startSegs.length; i++) {
+            // Traverse remaining effectiveSegs
+            for (let i = 1; i < effectiveSegs.length; i++) {
               const kids = await outlookConnector.getChildFoldersFast?.(mailboxSmtp || mailboxDisplay, cur.Id);
-              const nxt = (kids || []).find(k => normalizeName(k?.Name || '') === normalizeName(startSegs[i]));
-              if (!nxt) return;
-              cur = nxt;
-              namesChain.push(cur.Name);
+              const nxt = (kids || []).find(k => normalizeName(k?.Name || '') === normalizeName(effectiveSegs[i]));
+              if (!nxt) { console.log('[ADD][DFS][EWS] Segment introuvable plus loin:', effectiveSegs[i]); return; }
+              cur = nxt; namesChain.push(cur.Name);
             }
-            // Now DFS from cur.Id
+            // Determine display prefix (include Inbox label if original path had it)
+            const inboxLabel = hadInbox ? segs[1] : '';
+            const buildDisp = (chainArr) => hadInbox ? `${mailboxDisplay}\\${inboxLabel}\\${chainArr.join('\\')}` : `${mailboxDisplay}\\${chainArr.join('\\')}`;
+            // Insert the base folder itself
+            const baseDisp = buildDisp(namesChain);
+            const baseNorm = normalizePath(baseDisp);
+            if (!seen.has(baseNorm)) { seen.add(baseNorm); toInsert.push({ path: baseNorm, name: namesChain[namesChain.length-1] }); }
+            // DFS deeper
             const stack = [{ id: cur.Id, chain: namesChain.slice() }];
             while (stack.length) {
               const node = stack.pop();
               const kids = await outlookConnector.getChildFoldersFast?.(mailboxSmtp || mailboxDisplay, node.id);
               for (const k of (kids || [])) {
                 const childChain = node.chain.concat(k.Name);
-                const normalized = normalizePath(`${mailboxDisplay}\\${childChain.join('\\')}`);
-                if (!seen.has(normalized)) {
-                  seen.add(normalized);
-                  toInsert.push({ path: normalized, name: k.Name });
+                const disp = buildDisp(childChain);
+                const norm = normalizePath(disp);
+                if (!seen.has(norm)) {
+                  seen.add(norm);
+                  toInsert.push({ path: norm, name: k.Name });
                 }
                 stack.push({ id: k.Id, chain: childChain });
               }
