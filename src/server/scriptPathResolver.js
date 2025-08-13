@@ -21,6 +21,8 @@ function buildCandidates(subDirs, fileName) {
     // asar unpack layout (electron-builder may place extracted assets under app.asar.unpacked)
     list.push(joinAll(process.resourcesPath, 'app.asar.unpacked'));
     list.push(joinAll(process.resourcesPath, 'app.asar.unpacked', 'resources'));
+  // Fallback pour configuration actuelle (doublon 'resources/resources/...')
+  list.push(joinAll(process.resourcesPath, 'resources'));
   }
   // execPath related
   try {
@@ -28,6 +30,7 @@ function buildCandidates(subDirs, fileName) {
     list.push(joinAll(execDir, 'resources'));
     list.push(joinAll(execDir, 'app.asar.unpacked'));
     list.push(joinAll(execDir, 'app.asar.unpacked', 'resources'));
+  list.push(joinAll(execDir, 'resources', 'resources'));
   } catch {}
   // app path (dev)
   try {
