@@ -1137,7 +1137,10 @@ ipcMain.handle('api-folders-add', async (event, { folderPath, category }) => {
     }
 
     debugPhases.push('init-db');
-    await databaseService.initialize();
+    const dbRef = global.databaseService || databaseService;
+    if (!dbRef.isInitialized) {
+      await dbRef.initialize();
+    }
     debugPhases.push('db-initialized');
 
   // Nouvelle logique: résoudre la boîte par nom, puis parcourir récursivement
@@ -1658,7 +1661,7 @@ ipcMain.handle('api-folders-add', async (event, { folderPath, category }) => {
     for (const item of toInsert) {
       if (toInsertDebugSample.length < 10) toInsertDebugSample.push(item.path);
       try {
-        await databaseService.addFolderConfiguration(item.path, category, item.name);
+  await dbRef.addFolderConfiguration(item.path, category, item.name);
         inserted++;
       } catch (e) {
         console.error('❌ Erreur insertion dossier enfant:', item.path, e.message || e);
@@ -1667,7 +1670,7 @@ ipcMain.handle('api-folders-add', async (event, { folderPath, category }) => {
     debugPhases.push('insert-done');
 
     // OPTIMIZED: Invalidation intelligente du cache
-    try { cacheService.invalidateFoldersConfig(); } catch (e) { console.warn('Cache invalidation failed:', e?.message || e); }
+  try { cacheService.invalidateFoldersConfig(); } catch (e) { console.warn('Cache invalidation failed:', e?.message || e); }
     debugPhases.push('cache-invalidated');
 
     console.log(`✅ [ADD] ${inserted} dossier(s) ajouté(s) au monitoring (incl. sous-dossiers)`);
