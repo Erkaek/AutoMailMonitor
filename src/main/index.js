@@ -1124,7 +1124,6 @@ ipcMain.handle('api-database-folder-stats', async () => {
 
 // Ajouter un dossier au monitoring
 ipcMain.handle('api-folders-add', async (event, { folderPath, category }) => {
-  try {
     if (!folderPath || !category) {
       throw new Error('Chemin du dossier et catégorie requis');
     }
@@ -1135,7 +1134,7 @@ ipcMain.handle('api-folders-add', async (event, { folderPath, category }) => {
   // tous les descendants via lazy-load COM en se basant sur le chemin (robuste aux langues)
   const toInsert = [];
   const seen = new Set(); // éviter doublons
-    try {
+    {
       const parts = String(folderPath).split('\\');
       const mailboxName = parts[0];
 
@@ -1545,89 +1544,78 @@ ipcMain.handle('api-folders-add', async (event, { folderPath, category }) => {
 
         // Prefer COM DFS. If COM didn't add any children, fall back to EWS DFS
         const beforeCount = toInsert.length;
-        try {
+        await (async () => {
           console.log(`[ADD][DFS] COM by display path start: ${displayBasePath}`);
           await runDfsCom(displayBasePath);
-        } catch (e) { console.warn('[ADD][DFS] COM by display path failed:', e?.message || String(e)); }
+        })().catch(e => console.warn('[ADD][DFS] COM by display path failed:', e?.message || String(e)));
         const afterCount = toInsert.length;
         console.log(`[ADD][DFS] COM by display path inserted: ${afterCount - beforeCount}`);
         if (afterCount === beforeCount) {
           // COM yielded nothing; try EWS DFS
-          try {
+          await (async () => {
             console.log('[ADD][DFS] Falling back to EWS DFS...');
             await runDfsEws(displayBasePath);
-          } catch (e) { console.warn('[ADD][DFS] EWS DFS failed:', e?.message || String(e)); }
+          })().catch(e => console.warn('[ADD][DFS] EWS DFS failed:', e?.message || String(e)));
           // If still nothing and we started under Inbox, try explicit inbox traversal via COM
           if (toInsert.length === afterCount) {
             const nn = (s) => String(s||'').normalize('NFD').replace(/\p{Diacritic}/gu,'').toLowerCase().trim();
             const segs = displayBasePath.split('\\');
             if (segs.length >= 2 && (nn(segs[1]) === 'inbox' || nn(segs[1]).includes('boite') || nn(segs[1]).includes('reception'))) {
-              try {
+              await (async () => {
                 console.log('[ADD][DFS] COM DFS from Inbox...');
                 await runDfsFromInboxCom();
-              } catch (e) { console.warn('[ADD][DFS] COM DFS from Inbox failed:', e?.message || String(e)); }
+              })().catch(e => console.warn('[ADD][DFS] COM DFS from Inbox failed:', e?.message || String(e)));
             }
             // Last-resort: fast COM traversal by EntryID using outlookFastFolders
-      if (toInsert.length === afterCount) {
-              try {
+            if (toInsert.length === afterCount) {
+              await (async () => {
                 console.log('[ADD][DFS] Last-resort: fast COM traversal by EntryID...');
                 const nn2 = (s) => String(s||'').normalize('NFD').replace(/\p{Diacritic}/gu,'').toLowerCase().trim();
-        // Local require to avoid ordering issues
-        const fastOL = require('../server/outlookFastFolders');
-                // Resolve EntryID of the starting folder by walking with shallow COM listing
+                const fastOL = require('../server/outlookFastFolders');
                 const segs2 = displayBasePath.split('\\').filter(Boolean);
-                // Remove mailbox segment
                 const chainSegs = segs2.slice(1);
-                if (chainSegs.length > 0) {
-                  // Step 1: list children of Inbox (ParentEntryId empty indicates Inbox in our script)
-                  const rootList = await fastOL.listFoldersShallow(storeId, '');
-                  const parentName = (rootList && rootList.parentName) ? String(rootList.parentName) : (inboxLocalizedName || 'Inbox');
-                  let curParentId = '';
-                  let curChain = [parentName];
-                  // If the chain starts with the localized Inbox name, skip it (we already are under Inbox)
-                  let startIdx = 0;
-                  if (chainSegs.length && nn2(chainSegs[0]) === nn2(parentName)) startIdx = 1;
-                  // Walk down segments to resolve the selected folder EntryID
-                  let ok = true;
-                  for (let i = startIdx; i < chainSegs.length; i++) {
-                    const segment = chainSegs[i];
-                    const listing = await fastOL.listFoldersShallow(storeId, curParentId);
-                    const arr = (listing && Array.isArray(listing.folders)) ? listing.folders : [];
-                    const match = arr.find(f => nn2(f.Name) === nn2(segment));
-                    if (!match) { ok = false; break; }
-                    curParentId = match.EntryId || match.EntryID || '';
-                    curChain.push(match.Name);
-                  }
-                  if (ok) {
-                    // DFS by EntryID
-                    const stack = [{ id: curParentId, chain: curChain.slice() }];
-        while (stack.length) {
-                      const node = stack.pop();
-                      const listing = await fastOL.listFoldersShallow(storeId, node.id);
-                      const kids = (listing && Array.isArray(listing.folders)) ? listing.folders : [];
-                      for (const k of kids) {
-                        const childChain = node.chain.concat(k.Name);
-                        // Build display path from mailboxDisplay + chain
-                        const disp = `${mailboxDisplay}\\${childChain.join('\\')}`;
-                        const norm = normalizePath(disp);
-                        if (!seen.has(norm)) {
-                          seen.add(norm);
-                          toInsert.push({ path: norm, name: k.Name });
-                        }
-                        // Continue DFS
-                        const kidId = k.EntryId || k.EntryID || '';
-                        if (kidId) stack.push({ id: kidId, chain: childChain });
-                      }
+                if (!chainSegs.length) return;
+                const rootList = await fastOL.listFoldersShallow(storeId, '');
+                const parentName = (rootList && rootList.parentName) ? String(rootList.parentName) : (inboxLocalizedName || 'Inbox');
+                let curParentId = '';
+                let curChain = [parentName];
+                let startIdx = 0;
+                if (chainSegs.length && nn2(chainSegs[0]) === nn2(parentName)) startIdx = 1;
+                let ok = true;
+                for (let i = startIdx; i < chainSegs.length; i++) {
+                  const segment = chainSegs[i];
+                  const listing = await fastOL.listFoldersShallow(storeId, curParentId);
+                  const arr = (listing && Array.isArray(listing.folders)) ? listing.folders : [];
+                  const match = arr.find(f => nn2(f.Name) === nn2(segment));
+                  if (!match) { ok = false; break; }
+                  curParentId = match.EntryId || match.EntryID || '';
+                  curChain.push(match.Name);
+                }
+                if (!ok) return;
+                const stack = [{ id: curParentId, chain: curChain.slice() }];
+                while (stack.length) {
+                  const node = stack.pop();
+                  const listing = await fastOL.listFoldersShallow(storeId, node.id);
+                  const kids = (listing && Array.isArray(listing.folders)) ? listing.folders : [];
+                  for (const k of kids) {
+                    const childChain = node.chain.concat(k.Name);
+                    const disp = `${mailboxDisplay}\\${childChain.join('\\')}`;
+                    const norm = normalizePath(disp);
+                    if (!seen.has(norm)) {
+                      seen.add(norm);
+                      toInsert.push({ path: norm, name: k.Name });
                     }
+                    const kidId = k.EntryId || k.EntryID || '';
+                    if (kidId) stack.push({ id: kidId, chain: childChain });
                   }
                 }
-      } catch (e) { console.warn('[ADD][DFS] Last-resort fast COM traversal failed:', e?.message || String(e)); }
+              })().catch(e => console.warn('[ADD][DFS] Last-resort fast COM traversal failed:', e?.message || String(e)));
             }
           }
         }
-      }
-    } catch (e) {
-      console.warn('⚠️ Ajout récursif partiel, fallback à insertion simple:', e?.message || e);
+  } // End of recursive enumeration block
+  // Ajout récursif partiel: fallback à insertion simple (erreur silencieuse précédemment capturée)
+  // If nothing was added due to an internal failure, fallback logic below will add base folder.
       if (toInsert.length === 0) {
         // Appliquer aussi la normalisation SMTP au fallback
         try {
@@ -1652,7 +1640,7 @@ ipcMain.handle('api-folders-add', async (event, { folderPath, category }) => {
           toInsert.push({ path: folderPath, name: extractFolderName(folderPath) });
         }
       }
-    }
+  }
 
     // Insérer tous les dossiers (OR REPLACE évite les doublons)
     let inserted = 0;
@@ -1693,9 +1681,9 @@ ipcMain.handle('api-folders-add', async (event, { folderPath, category }) => {
       count: inserted
     };
 
-  } catch (error) {
-    console.error('❌ Erreur ajout dossier:', error);
-    throw error;
+  // Outer errors already handled internally; surface generic failure if essential data missing
+  if (!folderPath || !category) {
+    return { success: false, message: 'Paramètres invalides' };
   }
 });
 
@@ -1782,6 +1770,9 @@ ipcMain.handle('api-folders-remove', async (event, { folderPath }) => {
     // CORRECTION: Redémarrer le service de monitoring avec la nouvelle configuration
     if (global.unifiedMonitoringService) {
       console.log('🔄 Redémarrage du service de monitoring après suppression du dossier...');
+      
+           
+
       
       try {
         // Arrêter le monitoring actuel
@@ -2089,41 +2080,19 @@ ipcMain.handle('api-stats-by-category', async () => {
 
 ipcMain.handle('api-app-settings-load', async () => {
   try {
-    // Ancien require supprimé, utiliser global.databaseService
     await global.databaseService.initialize();
-    
-    // Charger les paramètres depuis la base de données
     const settings = await global.databaseService.loadAppSettings();
     console.log('📄 Paramètres chargés depuis BDD:', settings);
-    
-    return {
-      success: true,
-      settings: settings
-    };
+    try {
+      const flatVal = settings.count_read_as_treated;
+      if (!settings.monitoring) settings.monitoring = {};
+      settings.monitoring.treatReadEmailsAsProcessed = !!flatVal;
+    } catch {}
+    return { success: true, settings };
   } catch (error) {
     console.error('❌ Erreur chargement paramètres app:', error);
-    // Retourner des paramètres par défaut
-    const defaultSettings = {
-      monitoring: {
-        treatReadEmailsAsProcessed: false,
-        scanInterval: 30000,
-        autoStart: true
-      },
-      ui: {
-        theme: 'default',
-        language: 'fr',
-        emailsLimit: 20
-      },
-      notifications: {
-        enabled: true,
-        showStartupNotification: true
-      }
-    };
-    
-    return {
-      success: true,
-      settings: defaultSettings
-    };
+    const defaultSettings = { monitoring: { treatReadEmailsAsProcessed: false, scanInterval: 30000, autoStart: true }, ui: { theme: 'default', language: 'fr', emailsLimit: 20 }, notifications: { enabled: true, showStartupNotification: true } };
+    return { success: true, settings: defaultSettings };
   }
 });
 
@@ -2903,6 +2872,45 @@ ipcMain.handle('api-monitoring-force-sync', async () => {
 app.whenReady().then(async () => {
   console.log('🚀 Initialisation de Mail Monitor...');
   createLoadingWindow();
+  // Vérification ressources critiques (scripts EWS & DLL)
+  try {
+    const { resolveResource } = require('../server/scriptPathResolver');
+    const scriptCheck = resolveResource(['scripts'], 'ews-list-folders.ps1');
+    const dllCheck = resolveResource(['resources','ews'], 'Microsoft.Exchange.WebServices.dll');
+    if (!scriptCheck.path) {
+      console.warn('⚠️ Script EWS introuvable au démarrage (fallback COM). Candidats:', scriptCheck.tried);
+    } else {
+      console.log('✅ Script EWS trouvé:', scriptCheck.path);
+    }
+    if (!dllCheck.path) {
+      console.warn('⚠️ DLL EWS introuvable au démarrage (fallback COM). Candidats:', dllCheck.tried);
+    } else {
+      console.log('✅ DLL EWS trouvée:', dllCheck.path);
+    }
+  } catch (e) {
+    console.warn('⚠️ Vérification ressources EWS a échoué:', e.message);
+  }
+});
+
+// IPC health check pour diagnostics prod
+ipcMain.handle('api-health-check', async () => {
+  try {
+    const { resolveResource } = require('../server/scriptPathResolver');
+    const scriptCheck = resolveResource(['scripts'], 'ews-list-folders.ps1');
+    const dllCheck = resolveResource(['resources','ews'], 'Microsoft.Exchange.WebServices.dll');
+    return {
+      success: true,
+      timestamp: new Date().toISOString(),
+      ewsScript: scriptCheck.path || null,
+      ewsDll: dllCheck.path || null,
+      ewsTriedScript: scriptCheck.tried,
+      ewsTriedDll: dllCheck.tried,
+      ewsDisabled: !!(require('../server/outlookConnector')._ewsDisabled),
+      ewsFailures: require('../server/outlookConnector')._ewsFailures || 0
+    };
+  } catch (e) {
+    return { success: false, error: e.message };
+  }
 });
 
 // Handler pour la fermeture de fenêtre

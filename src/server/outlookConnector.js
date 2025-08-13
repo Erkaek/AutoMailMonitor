@@ -1623,71 +1623,67 @@ class OutlookConnector extends EventEmitter {
   }
 
   async getTopLevelFoldersFast(mailbox) {
-    let scriptPath = path.join(process.cwd(), 'scripts', 'ews-list-folders.ps1');
-    // If not present (asar/packaged), try resources path
+    // Circuit breaker
+    this._ewsFailures = this._ewsFailures || 0;
+    if (this._ewsFailures >= 3 || this._ewsDisabled) {
+      return []; // allow COM fallback silently
+    }
+    const { resolveResource } = require('./scriptPathResolver');
+    const scriptRes = resolveResource(['scripts'], 'ews-list-folders.ps1');
+    const dllRes = resolveResource(['resources','ews'], 'Microsoft.Exchange.WebServices.dll');
+    if (!scriptRes.path || !dllRes.path) {
+      if (!scriptRes.path) console.warn('⚠️ EWS script absent (top-level), fallback COM. Tried:', scriptRes.tried);
+      if (!dllRes.path) console.warn('⚠️ EWS DLL absente (top-level), fallback COM. Tried:', dllRes.tried);
+      this._ewsDisabled = true;
+      return [];
+    }
+    const scriptPath = scriptRes.path;
+    const ewsDll = dllRes.path;
+    const argsBase = ['-File', scriptPath, '-Mailbox', mailbox, '-DllPath', ewsDll];
     try {
-      const fs = require('fs');
-      if (!fs.existsSync(scriptPath)) {
-        const candidate = path.join(process.cwd(), 'resources', 'scripts', 'ews-list-folders.ps1');
-        if (fs.existsSync(candidate)) scriptPath = candidate;
+      let folders = [];
+      for (const scope of ['Inbox','Root']) {
+        const raw = await this.ewsRun([...argsBase, '-Scope', scope], scope === 'Inbox' ? 20000 : 25000);
+        const data = OutlookConnector.parseJsonOutput(raw);
+        const payload = Array.isArray(data) ? data[0] : data;
+        const list = payload?.Folders || [];
+        if (Array.isArray(list) && list.length) { folders = list; break; }
       }
-    } catch {}
-    // Resolve EWS DLL path explicitly to avoid path issues
-    let ewsDll = path.join(process.cwd(), 'resources', 'ews', 'Microsoft.Exchange.WebServices.dll');
-    try {
-      const fs = require('fs');
-      if (!fs.existsSync(ewsDll)) {
-        const devCandidate = path.join(process.cwd(), 'resources', 'ews', 'Microsoft.Exchange.WebServices.dll');
-        if (fs.existsSync(devCandidate)) { ewsDll = devCandidate; }
-      }
-    } catch {}
-    const args = ['-File', scriptPath, '-Mailbox', mailbox, '-Scope', 'Inbox', '-DllPath', ewsDll];
-    try {
-  const raw = await this.ewsRun(args, 30000);
-  const data = OutlookConnector.parseJsonOutput(raw);
-  const payload = Array.isArray(data) ? data[0] : data;
-  let folders = payload?.Folders || [];
-      if (!folders.length) {
-  const raw2 = await this.ewsRun(['-File', scriptPath, '-Mailbox', mailbox, '-Scope', 'Root', '-DllPath', ewsDll], 30000);
-        const data2 = OutlookConnector.parseJsonOutput(raw2);
-        const payload2 = Array.isArray(data2) ? data2[0] : data2;
-        folders = payload2?.Folders || [];
-      }
-  // Coerce to plain array of POJOs
-  return Array.isArray(folders) ? folders.map(f => ({ Id: f.Id, Name: f.Name, ChildCount: Number(f.ChildCount || 0) })) : [];
+      return Array.isArray(folders) ? folders.map(f => ({ Id: f.Id, Name: f.Name, ChildCount: Number(f.ChildCount || 0) })) : [];
     } catch (e) {
-      console.error('❌ EWS top-level failed:', e.message);
-      throw e;
+      this._ewsFailures++;
+      console.warn(`⚠️ EWS top-level failed (${this._ewsFailures}):`, e.message);
+      if (this._ewsFailures >= 3) this._ewsDisabled = true;
+      return [];
     }
   }
 
   async getChildFoldersFast(mailbox, parentId) {
-    let scriptPath = path.join(process.cwd(), 'scripts', 'ews-list-folders.ps1');
-    try {
-      const fs = require('fs');
-      if (!fs.existsSync(scriptPath)) {
-        const candidate = path.join(process.cwd(), 'resources', 'scripts', 'ews-list-folders.ps1');
-        if (fs.existsSync(candidate)) scriptPath = candidate;
-      }
-    } catch {}
-    let ewsDll = path.join(process.cwd(), 'resources', 'ews', 'Microsoft.Exchange.WebServices.dll');
-    try {
-      const fs = require('fs');
-      if (!fs.existsSync(ewsDll)) {
-        const devCandidate = path.join(process.cwd(), 'resources', 'ews', 'Microsoft.Exchange.WebServices.dll');
-        if (fs.existsSync(devCandidate)) { ewsDll = devCandidate; }
-      }
-    } catch {}
+    this._ewsFailures = this._ewsFailures || 0;
+    if (this._ewsFailures >= 3 || this._ewsDisabled) return [];
+    const { resolveResource } = require('./scriptPathResolver');
+    const scriptRes = resolveResource(['scripts'], 'ews-list-folders.ps1');
+    const dllRes = resolveResource(['resources','ews'], 'Microsoft.Exchange.WebServices.dll');
+    if (!scriptRes.path || !dllRes.path) {
+      if (!scriptRes.path) console.warn('⚠️ EWS script absent (children), fallback COM.');
+      if (!dllRes.path) console.warn('⚠️ EWS DLL absente (children), fallback COM.');
+      this._ewsDisabled = true;
+      return [];
+    }
+    const scriptPath = scriptRes.path;
+    const ewsDll = dllRes.path;
     const args = ['-File', scriptPath, '-Mailbox', mailbox, '-ParentId', parentId, '-DllPath', ewsDll];
     try {
-  const raw = await this.ewsRun(args, 20000);
-  const data = OutlookConnector.parseJsonOutput(raw);
-  const payload = Array.isArray(data) ? data[0] : data;
-  const folders = payload?.Folders || [];
-  return Array.isArray(folders) ? folders.map(f => ({ Id: f.Id, Name: f.Name, ChildCount: Number(f.ChildCount || 0) })) : [];
+      const raw = await this.ewsRun(args, 15000);
+      const data = OutlookConnector.parseJsonOutput(raw);
+      const payload = Array.isArray(data) ? data[0] : data;
+      const folders = payload?.Folders || [];
+      return Array.isArray(folders) ? folders.map(f => ({ Id: f.Id, Name: f.Name, ChildCount: Number(f.ChildCount || 0) })) : [];
     } catch (e) {
-      console.error('❌ EWS children failed:', e.message);
-      throw e;
+      this._ewsFailures++;
+      console.warn(`⚠️ EWS children failed (${this._ewsFailures}):`, e.message);
+      if (this._ewsFailures >= 3) this._ewsDisabled = true;
+      return [];
     }
   }
 }
