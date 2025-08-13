@@ -409,6 +409,18 @@ function setupRealtimeEventForwarding() {
   }
   global.unifiedMonitoringService.__ipcForwardingSet = true;
 
+  try {
+    // Augmenter la limite d'écouteurs pour éviter les warnings lors des redémarrages
+    if (typeof global.unifiedMonitoringService.setMaxListeners === 'function') {
+      global.unifiedMonitoringService.setMaxListeners(50);
+    }
+    // Nettoyer d'éventuels anciens écouteurs (sécurité)
+    const events = ['emailUpdated','newEmail','syncCompleted','monitoringCycleComplete','monitoring-status','com-listening-started','com-listening-failed','realtime-email-update','realtime-new-email'];
+    for (const evt of events) {
+      try { global.unifiedMonitoringService.removeAllListeners(evt); } catch {}
+    }
+  } catch {}
+
   console.log('🔔 Configuration du transfert d\'événements temps réel...');
 
   // Transférer les événements de mise à jour d'emails
@@ -1059,8 +1071,10 @@ ipcMain.handle('api-folders-tree', async (_event, payload) => {
     const monitoredFolders = [];
 
     foldersConfig.forEach(config => {
-      const fullPath = config.folder_path || config.folder_name || '';
-      const displayName = config.folder_name || extractFolderName(fullPath);
+      const fullPathRaw = config.folder_path || config.folder_name || '';
+      const displayName = config.folder_name || extractFolderName(fullPathRaw);
+      // Normaliser si possible: si le préfixe n'est pas un email, conserver tel quel
+      const fullPath = fullPathRaw;
 
       // Chercher le dossier dans la structure Outlook pour obtenir le nombre d'emails
       const outlookFolder = allFolders.find(f => f.path === fullPath || f.name === displayName);
@@ -1117,52 +1131,527 @@ ipcMain.handle('api-folders-add', async (event, { folderPath, category }) => {
 
     await databaseService.initialize();
 
-    // Tenter de récupérer l'arborescence complète et d'ajouter tous les enfants
-    const toInsert = [];
+  // Nouvelle logique: résoudre la boîte par nom, puis parcourir récursivement
+  // tous les descendants via lazy-load COM en se basant sur le chemin (robuste aux langues)
+  const toInsert = [];
+  const seen = new Set(); // éviter doublons
     try {
-      // Récupérer toute la structure pour tous les stores afin de localiser le chemin
-      const mailboxes = await outlookConnector.getFolderStructure?.('');
+      const parts = String(folderPath).split('\\');
+      const mailboxName = parts[0];
 
-      // Recherche récursive d'un nœud par FolderPath
-      const findNode = (folders, targetPath) => {
-        if (!Array.isArray(folders)) return null;
-        for (const f of folders) {
-          if (f.FolderPath === targetPath) return f;
-          const sub = findNode(f.SubFolders, targetPath);
-          if (sub) return sub;
+      // 1) Trouver le StoreID de la boîte aux lettres
+      let storeId = '';
+      try {
+        const mbs = await outlookConnector.getMailboxes?.();
+        if (Array.isArray(mbs)) {
+          const exact = mbs.find(m => m?.Name === mailboxName);
+          const like = exact || mbs.find(m => String(m?.Name || '').toLowerCase().includes(String(mailboxName).toLowerCase()));
+          storeId = like?.StoreID || '';
         }
-        return null;
-      };
-      // Aplatir un nœud et tous ses enfants en { path, name }
-      const flatten = (node, acc = []) => {
-        if (!node) return acc;
-        acc.push({ path: node.FolderPath, name: node.Name });
-        if (Array.isArray(node.SubFolders)) {
-          for (const sf of node.SubFolders) flatten(sf, acc);
-        }
-        return acc;
+      } catch (_) {}
+
+      // Si Store introuvable, tentative via fast COM stores
+      if (!storeId) {
+        try {
+          const fastOL = require('../server/outlookFastFolders');
+          const stores = await fastOL.listStores();
+          const exact = stores.find(s => s?.DisplayName === mailboxName);
+          const like = exact || stores.find(s => String(s?.DisplayName || '').toLowerCase().includes(String(mailboxName).toLowerCase()));
+          storeId = like?.StoreId || '';
+        } catch (_) {}
+      }
+
+      if (!storeId) throw new Error('Boîte aux lettres introuvable pour: ' + mailboxName);
+
+  // 2) Obtenir la mailbox (affichage + SMTP) pour normaliser les chemins
+  const mailboxes = await outlookConnector.getFolderStructure?.(storeId);
+  const mb = Array.isArray(mailboxes) ? mailboxes[0] : null;
+  if (!mb) throw new Error('Structure de dossier non disponible');
+  const mailboxDisplay = mb?.Name || mailboxName;
+  const mailboxSmtp = mb?.SmtpAddress || '';
+  // Tenter de récupérer le nom localisé de l'Inbox depuis la structure
+  let inboxLocalizedName = '';
+  try {
+    const subs = Array.isArray(mb?.SubFolders) ? mb.SubFolders : [];
+    const norm = (s) => String(s||'').normalize('NFD').replace(/\p{Diacritic}/gu,'').toLowerCase().trim();
+    const inboxNode = subs.find(f => {
+      const n = norm(f?.Name||'');
+      return n === 'inbox' || n.includes('boite') || n.includes('reception');
+    });
+    if (inboxNode && inboxNode.Name) inboxLocalizedName = String(inboxNode.Name);
+  } catch {}
+
+      // Normalise un chemin en forçant le préfixe de boîte sur le SMTP si disponible
+      const normalizePath = (p) => {
+        try {
+          const s = String(p || '');
+          const idx = s.indexOf('\\');
+          if (idx > 0) {
+            const rest = s.slice(idx + 1);
+            if (mailboxSmtp) return `${mailboxSmtp}\\${rest}`;
+            return `${mailboxDisplay}\\${rest}`;
+          }
+          return mailboxSmtp ? mailboxSmtp : (mailboxDisplay || s);
+        } catch { return p; }
       };
 
-      let node = null;
-      if (Array.isArray(mailboxes)) {
-        for (const mb of mailboxes) {
-          if (mb && Array.isArray(mb.SubFolders)) {
-            const found = findNode(mb.SubFolders, folderPath);
-            if (found) { node = found; break; }
+          // Helpers de normalisation JS (même logique que PowerShell)
+          const normalizeName = (s) => {
+            try {
+              const tr = String(s || '').trim().replace(/[.]+$/, '');
+              return tr.normalize('NFD').replace(/\p{Diacritic}/gu, '').toLowerCase().trim();
+            } catch { return String(s || '').toLowerCase().trim(); }
+          };
+
+          // 2.b) Résoudre le chemin d'affichage exact (incl. Inbox localisée si manquante)
+          const original = String(folderPath);
+          const idx = original.indexOf('\\');
+          const rest = idx > 0 ? original.slice(idx + 1) : '';
+          let resolvedDisplayPath = '';
+          if (!rest) {
+            resolvedDisplayPath = mailboxDisplay; // racine boîte
+          } else {
+            // Si la chaîne contient déjà un segment Inbox localisé, on garde
+            const partsRest = rest.split('\\');
+            const hasInboxHint = partsRest.some(p => {
+              const n = normalizeName(p);
+              return n === 'inbox' || n.includes('boite') || n.includes('reception');
+            });
+
+            // Helper: detect if a resolved display path already includes Inbox as first child segment
+            const pathHasInbox = (p) => {
+              try {
+                const segs = String(p || '').split('\\');
+                if (segs.length < 2) return false;
+                const second = segs[1] || '';
+                const n = normalizeName(second);
+                return n === 'inbox' || n.includes('boite') || n.includes('reception');
+              } catch { return false; }
+            };
+
+            // Fonction utilitaire pour récupérer les enfants d'un parent d'affichage
+            const listKids = async (parentDisplayPath) => {
+              try {
+                const res = await outlookConnector.getSubFolders?.(storeId, '', parentDisplayPath);
+                return Array.isArray(res) ? res : (res && Array.isArray(res.children) ? res.children : []);
+              } catch { return []; }
+            };
+
+            // BFS pour trouver le chemin exact correspondant
+            const tryResolveByChain = async () => {
+              const chain = partsRest.slice();
+              // Démarrer depuis la racine d'affichage
+              let cursorPath = mailboxDisplay;
+              for (let i = 0; i < chain.length; i++) {
+                const want = chain[i];
+                const kids = await listKids(cursorPath);
+                const next = kids.find(k => normalizeName(k?.Name || '') === normalizeName(want));
+                if (!next) return '';
+                cursorPath = next.FolderPath || `${cursorPath}\\${next.Name}`;
+              }
+              return cursorPath;
+            };
+
+            const tryResolveUnderInbox = async () => {
+              // Chercher le dossier 'Inbox' localisé sous la racine, puis descendre
+              const top = await listKids(mailboxDisplay);
+              const inbox = top.find(k => {
+                const n = normalizeName(k?.Name || '');
+                return n === 'inbox' || n.includes('boite') || n.includes('reception');
+              });
+              if (!inbox) return '';
+              let cursorPath = inbox.FolderPath || `${mailboxDisplay}\\${inbox.Name}`;
+              for (const seg of partsRest) {
+                const kids = await listKids(cursorPath);
+                const next = kids.find(k => normalizeName(k?.Name || '') === normalizeName(seg));
+                if (!next) return '';
+                cursorPath = next.FolderPath || `${cursorPath}\\${next.Name}`;
+              }
+              return cursorPath;
+            };
+
+            // EWS fallback: résoudre via EWS (rapide) si COM ne renvoie rien sous la racine
+            const tryResolveByEws = async () => {
+              try {
+                const top = await outlookConnector.getTopLevelFoldersFast?.(mailboxSmtp || mailboxDisplay);
+                const folders = Array.isArray(top) ? top : [];
+                const chain = partsRest.slice();
+                // Priorité: Inbox scope (getTopLevelFoldersFast already tries Inbox then Root)
+                // Trouver premier segment
+                let cur = null;
+                for (const f of folders) {
+                  if (normalizeName(f?.Name || '') === normalizeName(chain[0])) { cur = f; break; }
+                }
+                if (!cur) return '';
+                // Descendre segments restants
+                for (let i = 1; i < chain.length; i++) {
+                  const kids = await outlookConnector.getChildFoldersFast?.(mailboxSmtp || mailboxDisplay, cur.Id);
+                  const nxt = (kids || []).find(k => normalizeName(k?.Name || '') === normalizeName(chain[i]));
+                  if (!nxt) return '';
+                  cur = nxt;
+                }
+                // Reconstruire chemin d'affichage minimal (sans Inbox localisée) à partir des noms
+                return `${mailboxDisplay}\\${chain.join('\\')}`;
+              } catch { return ''; }
+            };
+
+            const tryResolveByLeafDeep = async () => {
+              const leaf = partsRest[partsRest.length - 1];
+              // DFS limité: explorer max 200 dossiers pour éviter boucle infinie
+              const stack = [mailboxDisplay];
+              const visited = new Set();
+              const targetNorm = normalizeName(leaf);
+              let found = '';
+              while (stack.length && visited.size < 200) {
+                const parent = stack.pop();
+                if (visited.has(parent)) continue;
+                visited.add(parent);
+                const kids = await listKids(parent);
+                for (const k of kids) {
+                  if (normalizeName(k?.Name || '') === targetNorm) {
+                    found = k.FolderPath || `${parent}\\${k.Name}`;
+                    return found;
+                  }
+                  stack.push(k.FolderPath || `${parent}\\${k.Name}`);
+                }
+              }
+              return found;
+            };
+
+            // 1) essayer chaîne exacte telle que fournie (depuis racine)
+            const chainResolved = await tryResolveByChain();
+            // 2) en parallèle logique: si pas d'indice Inbox dans la saisie, tenter aussi sous Inbox localisée
+            let inboxResolved = '';
+            if (!hasInboxHint) {
+              inboxResolved = await tryResolveUnderInbox();
+            }
+            // Choisir le meilleur chemin: préférer Inbox si elle existe et que la résolution par chaîne ne pointe pas déjà sous Inbox
+            if (inboxResolved) {
+              if (!chainResolved) {
+                resolvedDisplayPath = inboxResolved;
+              } else {
+                resolvedDisplayPath = pathHasInbox(chainResolved) ? chainResolved : inboxResolved;
+              }
+            } else {
+              resolvedDisplayPath = chainResolved;
+            }
+            // 3) éviter EWS si possible; si Inbox localisée connue, forcer le préfixe Inbox
+            if (!resolvedDisplayPath && inboxLocalizedName && !hasInboxHint) {
+              resolvedDisplayPath = `${mailboxDisplay}\\${inboxLocalizedName}\\${rest}`;
+            }
+            // 4) sinon, tenter résolution via EWS (dernier recours)
+            if (!resolvedDisplayPath) {
+              resolvedDisplayPath = await tryResolveByEws();
+            }
+            // 5) sinon, recherche profonde par nom de feuille
+            if (!resolvedDisplayPath) {
+              resolvedDisplayPath = await tryResolveByLeafDeep();
+            }
+
+            // Correction: si le chemin ne contient pas Inbox mais qu'on connait son libellé, l'inclure directement
+            if (resolvedDisplayPath && !pathHasInbox(resolvedDisplayPath) && inboxLocalizedName && !hasInboxHint) {
+              resolvedDisplayPath = `${mailboxDisplay}\\${inboxLocalizedName}\\${rest}`;
+            } else if (resolvedDisplayPath && !pathHasInbox(resolvedDisplayPath)) {
+              // Sinon: si le premier segment existe sous Inbox, préférer l'inclure.
+              try {
+                const top = await listKids(mailboxDisplay);
+                const inbox = top.find(k => {
+                  const n = normalizeName(k?.Name || '');
+                  return n === 'inbox' || n.includes('boite') || n.includes('reception');
+                });
+                if (inbox && partsRest.length) {
+                  const kids = await listKids(inbox.FolderPath || `${mailboxDisplay}\\${inbox.Name}`);
+                  const first = kids.find(k => normalizeName(k?.Name || '') === normalizeName(partsRest[0]));
+                  if (first) {
+                    resolvedDisplayPath = `${mailboxDisplay}\\${inbox.Name}\\${rest}`;
+                  }
+                }
+              } catch {}
+            }
+
+            // Si tout échoue, garder le chemin d'origine mais, si possible, y inclure Inbox localisée
+            if (!resolvedDisplayPath) {
+              // Si le premier segment est un enfant direct d'une Inbox localisée, le préfixer d'Inbox
+              try {
+                if (inboxLocalizedName && partsRest.length) {
+                  resolvedDisplayPath = `${mailboxDisplay}\\${inboxLocalizedName}\\${rest}`;
+                } else {
+                  const top = await listKids(mailboxDisplay);
+                  const inbox = top.find(k => {
+                    const n = normalizeName(k?.Name || '');
+                    return n === 'inbox' || n.includes('boite') || n.includes('reception');
+                  });
+                  if (inbox && partsRest.length) {
+                    // Vérifier si le premier segment existe sous Inbox
+                    const kids = await listKids(inbox.FolderPath || `${mailboxDisplay}\\${inbox.Name}`);
+                    const first = kids.find(k => normalizeName(k?.Name || '') === normalizeName(partsRest[0]));
+                    if (first) {
+                      resolvedDisplayPath = `${mailboxDisplay}\\${inbox.Name}\\${rest}`;
+                    }
+                  }
+                }
+              } catch {}
+              if (!resolvedDisplayPath) resolvedDisplayPath = `${mailboxDisplay}\\${rest}`;
+            }
+          }
+      if (!rest) {
+        // Dossier racine de la boîte: insérer seulement ce dossier (pas d'enfants énumérables)
+        const normalized = normalizePath(original);
+        if (!seen.has(normalized)) {
+          seen.add(normalized);
+          toInsert.push({ path: normalized, name: extractFolderName(original) });
+        }
+  } else {
+    // Chemin "affichage" pour naviguer côté COM et chemin normalisé (SMTP) pour la BDD
+  const displayBasePath = resolvedDisplayPath;
+  const normalizedBasePath = normalizePath(resolvedDisplayPath);
+    try { console.log(`[ADD] Resolved display path: ${displayBasePath}`); } catch {}
+    try { console.log(`[ADD] Normalized DB path: ${normalizedBasePath}`); } catch {}
+        if (!seen.has(normalizedBasePath)) {
+          seen.add(normalizedBasePath);
+          toInsert.push({ path: normalizedBasePath, name: extractFolderName(original) });
+        }
+        // DFS: essayer COM, sinon retomber sur EWS pour la descente complète
+        const runDfsCom = async (rootDisplayPath) => {
+          const stack = [rootDisplayPath];
+          while (stack.length) {
+            const parentDisplayPath = stack.pop();
+            let kids = [];
+            try {
+              const res = await outlookConnector.getSubFolders?.(storeId, '', parentDisplayPath);
+              if (Array.isArray(res)) {
+                kids = res;
+              } else if (res && typeof res === 'object' && Array.isArray(res.children)) {
+                kids = res.children;
+              } else {
+                kids = [];
+              }
+            } catch (_) { kids = []; }
+
+            // Fallback: if no kids by display path, try to resolve this folder's EntryID via its parent, then re-query by EntryID
+            if (!Array.isArray(kids) || kids.length === 0) {
+              try {
+                const segs = String(parentDisplayPath || '').split('\\');
+                if (segs.length >= 2) {
+                  const leafName = segs[segs.length - 1];
+                  const parentOfParent = segs.slice(0, -1).join('\\');
+                  const siblingsRes = await outlookConnector.getSubFolders?.(storeId, '', parentOfParent);
+                  const siblings = Array.isArray(siblingsRes)
+                    ? siblingsRes
+                    : (siblingsRes && Array.isArray(siblingsRes.children) ? siblingsRes.children : []);
+                  const normalizeName = (s) => String(s||'').normalize('NFD').replace(/\p{Diacritic}/gu,'').toLowerCase().trim();
+                  const sibling = siblings.find(ch => normalizeName(ch?.Name||'') === normalizeName(leafName));
+                  const entryId = sibling?.EntryID || sibling?.EntryId || '';
+                  if (entryId) {
+                    const byId = await outlookConnector.getSubFolders?.(storeId, entryId, '');
+                    if (Array.isArray(byId)) {
+                      kids = byId;
+                    } else if (byId && Array.isArray(byId.children)) {
+                      kids = byId.children;
+                    }
+                  }
+                }
+              } catch {}
+            }
+
+            if (!Array.isArray(kids) || kids.length === 0) continue;
+            for (const k of kids) {
+              const childDisplayPath = k?.FolderPath || '';
+              if (!childDisplayPath) continue;
+              const childName = k?.Name || extractFolderName(childDisplayPath);
+              const normalized = normalizePath(childDisplayPath);
+              if (!seen.has(normalized)) {
+                seen.add(normalized);
+                toInsert.push({ path: normalized, name: childName });
+                stack.push(childDisplayPath);
+              }
+            }
+          }
+        };
+
+  const runDfsEws = async (chainStart) => {
+          try {
+            const segs = chainStart.split('\\').filter(Boolean);
+            // Remove mailbox part
+            const startSegs = segs.slice(1);
+            // Resolve starting folder id
+            const top = await outlookConnector.getTopLevelFoldersFast?.(mailboxSmtp || mailboxDisplay);
+            const folders = Array.isArray(top) ? top : [];
+            let cur = null, namesChain = [];
+            if (startSegs.length === 0) return; // nothing to enumerate
+            for (const f of folders) {
+              if (normalizeName(f?.Name || '') === normalizeName(startSegs[0])) { cur = f; break; }
+            }
+            if (!cur) return;
+            namesChain = [cur.Name];
+            for (let i = 1; i < startSegs.length; i++) {
+              const kids = await outlookConnector.getChildFoldersFast?.(mailboxSmtp || mailboxDisplay, cur.Id);
+              const nxt = (kids || []).find(k => normalizeName(k?.Name || '') === normalizeName(startSegs[i]));
+              if (!nxt) return;
+              cur = nxt;
+              namesChain.push(cur.Name);
+            }
+            // Now DFS from cur.Id
+            const stack = [{ id: cur.Id, chain: namesChain.slice() }];
+            while (stack.length) {
+              const node = stack.pop();
+              const kids = await outlookConnector.getChildFoldersFast?.(mailboxSmtp || mailboxDisplay, node.id);
+              for (const k of (kids || [])) {
+                const childChain = node.chain.concat(k.Name);
+                const normalized = normalizePath(`${mailboxDisplay}\\${childChain.join('\\')}`);
+                if (!seen.has(normalized)) {
+                  seen.add(normalized);
+                  toInsert.push({ path: normalized, name: k.Name });
+                }
+                stack.push({ id: k.Id, chain: childChain });
+              }
+            }
+          } catch {}
+        };
+
+        // Fallback COM: explicit DFS starting from Inbox when path start includes Inbox label
+        const runDfsFromInboxCom = async () => {
+          try {
+            const norm = (s) => String(s||'').normalize('NFD').replace(/\p{Diacritic}/gu,'').toLowerCase().trim();
+            const top = await outlookConnector.getSubFolders?.(storeId, '', mailboxDisplay);
+            const topKids = Array.isArray(top) ? top : (top && Array.isArray(top.children) ? top.children : []);
+            const inbox = topKids.find(k => {
+              const n = norm(k?.Name||'');
+              return n === 'inbox' || n.includes('boite') || n.includes('reception');
+            });
+            if (!inbox) return;
+            const stack = [inbox.FolderPath || `${mailboxDisplay}\\${inbox.Name}`];
+            while (stack.length) {
+              const p = stack.pop();
+              let kids = [];
+              try {
+                const res = await outlookConnector.getSubFolders?.(storeId, '', p);
+                kids = Array.isArray(res) ? res : (res && Array.isArray(res.children) ? res.children : []);
+              } catch {}
+              for (const k of (kids || [])) {
+                const childDisplayPath = k?.FolderPath || '';
+                if (!childDisplayPath) continue;
+                const childName = k?.Name || extractFolderName(childDisplayPath);
+                const normalized = normalizePath(childDisplayPath);
+                if (!seen.has(normalized)) {
+                  seen.add(normalized);
+                  toInsert.push({ path: normalized, name: childName });
+                }
+                stack.push(childDisplayPath);
+              }
+            }
+          } catch {}
+        };
+
+        // Prefer COM DFS. If COM didn't add any children, fall back to EWS DFS
+        const beforeCount = toInsert.length;
+        try {
+          console.log(`[ADD][DFS] COM by display path start: ${displayBasePath}`);
+          await runDfsCom(displayBasePath);
+        } catch (e) { console.warn('[ADD][DFS] COM by display path failed:', e?.message || String(e)); }
+        const afterCount = toInsert.length;
+        console.log(`[ADD][DFS] COM by display path inserted: ${afterCount - beforeCount}`);
+        if (afterCount === beforeCount) {
+          // COM yielded nothing; try EWS DFS
+          try {
+            console.log('[ADD][DFS] Falling back to EWS DFS...');
+            await runDfsEws(displayBasePath);
+          } catch (e) { console.warn('[ADD][DFS] EWS DFS failed:', e?.message || String(e)); }
+          // If still nothing and we started under Inbox, try explicit inbox traversal via COM
+          if (toInsert.length === afterCount) {
+            const nn = (s) => String(s||'').normalize('NFD').replace(/\p{Diacritic}/gu,'').toLowerCase().trim();
+            const segs = displayBasePath.split('\\');
+            if (segs.length >= 2 && (nn(segs[1]) === 'inbox' || nn(segs[1]).includes('boite') || nn(segs[1]).includes('reception'))) {
+              try {
+                console.log('[ADD][DFS] COM DFS from Inbox...');
+                await runDfsFromInboxCom();
+              } catch (e) { console.warn('[ADD][DFS] COM DFS from Inbox failed:', e?.message || String(e)); }
+            }
+            // Last-resort: fast COM traversal by EntryID using outlookFastFolders
+      if (toInsert.length === afterCount) {
+              try {
+                console.log('[ADD][DFS] Last-resort: fast COM traversal by EntryID...');
+                const nn2 = (s) => String(s||'').normalize('NFD').replace(/\p{Diacritic}/gu,'').toLowerCase().trim();
+        // Local require to avoid ordering issues
+        const fastOL = require('../server/outlookFastFolders');
+                // Resolve EntryID of the starting folder by walking with shallow COM listing
+                const segs2 = displayBasePath.split('\\').filter(Boolean);
+                // Remove mailbox segment
+                const chainSegs = segs2.slice(1);
+                if (chainSegs.length > 0) {
+                  // Step 1: list children of Inbox (ParentEntryId empty indicates Inbox in our script)
+                  const rootList = await fastOL.listFoldersShallow(storeId, '');
+                  const parentName = (rootList && rootList.parentName) ? String(rootList.parentName) : (inboxLocalizedName || 'Inbox');
+                  let curParentId = '';
+                  let curChain = [parentName];
+                  // If the chain starts with the localized Inbox name, skip it (we already are under Inbox)
+                  let startIdx = 0;
+                  if (chainSegs.length && nn2(chainSegs[0]) === nn2(parentName)) startIdx = 1;
+                  // Walk down segments to resolve the selected folder EntryID
+                  let ok = true;
+                  for (let i = startIdx; i < chainSegs.length; i++) {
+                    const segment = chainSegs[i];
+                    const listing = await fastOL.listFoldersShallow(storeId, curParentId);
+                    const arr = (listing && Array.isArray(listing.folders)) ? listing.folders : [];
+                    const match = arr.find(f => nn2(f.Name) === nn2(segment));
+                    if (!match) { ok = false; break; }
+                    curParentId = match.EntryId || match.EntryID || '';
+                    curChain.push(match.Name);
+                  }
+                  if (ok) {
+                    // DFS by EntryID
+                    const stack = [{ id: curParentId, chain: curChain.slice() }];
+        while (stack.length) {
+                      const node = stack.pop();
+                      const listing = await fastOL.listFoldersShallow(storeId, node.id);
+                      const kids = (listing && Array.isArray(listing.folders)) ? listing.folders : [];
+                      for (const k of kids) {
+                        const childChain = node.chain.concat(k.Name);
+                        // Build display path from mailboxDisplay + chain
+                        const disp = `${mailboxDisplay}\\${childChain.join('\\')}`;
+                        const norm = normalizePath(disp);
+                        if (!seen.has(norm)) {
+                          seen.add(norm);
+                          toInsert.push({ path: norm, name: k.Name });
+                        }
+                        // Continue DFS
+                        const kidId = k.EntryId || k.EntryID || '';
+                        if (kidId) stack.push({ id: kidId, chain: childChain });
+                      }
+                    }
+                  }
+                }
+      } catch (e) { console.warn('[ADD][DFS] Last-resort fast COM traversal failed:', e?.message || String(e)); }
+            }
           }
         }
       }
-
-      if (node) {
-        const all = flatten(node, []);
-        toInsert.push(...all);
-      } else {
-        // Fallback: insérer seulement le dossier demandé
-        toInsert.push({ path: folderPath, name: extractFolderName(folderPath) });
-      }
     } catch (e) {
-      console.warn('⚠️ Impossible de récupérer la structure complète, insertion simple:', e?.message || e);
-      toInsert.push({ path: folderPath, name: extractFolderName(folderPath) });
+      console.warn('⚠️ Ajout récursif partiel, fallback à insertion simple:', e?.message || e);
+      if (toInsert.length === 0) {
+        // Appliquer aussi la normalisation SMTP au fallback
+        try {
+          const parts = String(folderPath).split('\\');
+          const raw = parts.join('\\');
+          const normalized = (function(){
+            const idx = raw.indexOf('\\');
+            if (idx > 0) {
+              const rest = raw.slice(idx + 1);
+              // Sans mb connu ici, tenter d'utiliser la partie 0 si elle ressemble à un email, sinon conserver
+              const first = parts[0] || '';
+              const isEmail = /.+@.+\..+/.test(first);
+              return isEmail ? raw : raw; // pas d'info SMTP fiable; garder tel quel
+            }
+            return raw;
+          })();
+          if (!seen.has(normalized)) {
+            seen.add(normalized);
+            toInsert.push({ path: normalized, name: extractFolderName(folderPath) });
+          }
+        } catch {
+          toInsert.push({ path: folderPath, name: extractFolderName(folderPath) });
+        }
+      }
     }
 
     // Insérer tous les dossiers (OR REPLACE évite les doublons)
@@ -2488,10 +2977,11 @@ ipcMain.handle('api-outlook-folder-structure', async (event, storeId) => {
 ipcMain.handle('api-outlook-subfolders', async (event, payload) => {
   try {
     const { storeId, parentEntryId, parentPath } = payload || {};
-    if (!storeId || !parentEntryId) {
-      return { success: false, error: 'storeId et parentEntryId requis', children: [] };
+    if (!storeId) {
+      return { success: false, error: 'storeId requis', children: [] };
     }
-    const children = await outlookConnector.getSubFolders?.(storeId, parentEntryId, parentPath || '');
+    // Support both modes: by EntryID when available, or by display parentPath when EntryID is missing
+    const children = await outlookConnector.getSubFolders?.(storeId, parentEntryId || '', parentPath || '');
     return { success: true, children: children || [] };
   } catch (error) {
     console.error('❌ Erreur récupération sous-dossiers:', error.message);
@@ -2504,7 +2994,13 @@ ipcMain.handle('api-ews-top-level', async (_event, { mailbox }) => {
   try {
     if (!mailbox) return { success: false, error: 'mailbox requis', folders: [] };
     const folders = await outlookConnector.getTopLevelFoldersFast(mailbox);
-    return { success: true, folders };
+    // Sanitize to plain serializable array
+    const safe = Array.isArray(folders) ? folders.map(f => ({
+      Id: f.Id,
+      Name: f.Name,
+      ChildCount: Number(f.ChildCount || 0)
+    })) : [];
+    return { success: true, folders: safe };
   } catch (e) {
     return { success: false, error: e?.message || String(e), folders: [] };
   }
@@ -2514,9 +3010,35 @@ ipcMain.handle('api-ews-children', async (_event, { mailbox, parentId }) => {
   try {
     if (!mailbox || !parentId) return { success: false, error: 'mailbox et parentId requis', folders: [] };
     const folders = await outlookConnector.getChildFoldersFast(mailbox, parentId);
-    return { success: true, folders };
+    const safe = Array.isArray(folders) ? folders.map(f => ({
+      Id: f.Id,
+      Name: f.Name,
+      ChildCount: Number(f.ChildCount || 0)
+    })) : [];
+    return { success: true, folders: safe };
   } catch (e) {
     return { success: false, error: e?.message || String(e), folders: [] };
+  }
+});
+
+// COM rapide: stores + folders shallow
+const fastOL = require('../server/outlookFastFolders');
+ipcMain.handle('api-ol-stores', async () => {
+  try {
+    const data = await fastOL.listStores();
+    return { ok: true, data };
+  } catch (e) {
+    return { ok: false, error: e?.message || String(e) };
+  }
+});
+
+ipcMain.handle('api-ol-folders-shallow', async (_event, { storeId, parentEntryId }) => {
+  try {
+    if (!storeId) return { ok: false, error: 'storeId requis' };
+    const payload = await fastOL.listFoldersShallow(storeId, parentEntryId || '');
+    return { ok: true, data: payload };
+  } catch (e) {
+    return { ok: false, error: e?.message || String(e) };
   }
 });
 

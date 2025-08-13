@@ -716,11 +716,17 @@ class OutlookConnector extends EventEmitter {
       if (!ok) return [];
 
       // Cache simple en mémoire avec TTL 5 min
-      if (!this.subfolderCache) this.subfolderCache = new Map();
-      const cacheKey = `${storeId}|${parentEntryId}`;
+  if (!this.subfolderCache) this.subfolderCache = new Map();
+  // Include parentPath in the cache key when parentEntryId is not provided to avoid collisions
+  const cacheKey = `${storeId}|${parentEntryId || 'noid'}|${parentPath || ''}`;
       const cached = this.subfolderCache.get(cacheKey);
       if (cached && (Date.now() - cached.at) < 300_000) {
-        return cached.data;
+        // If previous result was empty, try a fresh probe once to avoid sticky 0 due to resolution quirks
+        if (Array.isArray(cached.data) && cached.data.length === 0) {
+          // continue to compute a fresh result
+        } else {
+          return cached.data;
+        }
       }
 
       const safeStoreId = String(storeId || '').replace(/`/g, '``').replace(/"/g, '\"');
@@ -740,28 +746,135 @@ class OutlookConnector extends EventEmitter {
           $root = $store.GetRootFolder()
           $mbName = $store.DisplayName
           $parent = $null
+          
+          # Certaines configurations renvoient une racine "vide"; corriger via Namespace.Folders
+          try {
+            $rootChilds = 0; try { $rootChilds = $root.Folders.Count } catch {}
+            if ($rootChilds -eq 0) {
+              foreach ($tf in $ns.Folders) {
+                try { if ($tf.Store.StoreID -eq $store.StoreID) { $root = $tf; break } } catch {}
+              }
+            }
+          } catch {}
+          
+          # Helper: normalize names (remove diacritics, lower-case, trim incl. trailing dots)
+          function Normalize-Name([string]$s) {
+            if ([string]::IsNullOrEmpty($s)) { return "" }
+            $s2 = $s.Trim().TrimEnd('.')
+            $n = $s2.Normalize([Text.NormalizationForm]::FormD)
+            $sb = New-Object System.Text.StringBuilder
+            foreach ($c in $n.ToCharArray()) {
+              if ([Globalization.CharUnicodeInfo]::GetUnicodeCategory($c) -ne [Globalization.UnicodeCategory]::NonSpacingMark) {
+                [void]$sb.Append($c)
+              }
+            }
+            return $sb.ToString().Normalize([Text.NormalizationForm]::FormC).ToLowerInvariant().Trim()
+          }
+          
+          function Find-ChildByName($parentFolder, [string]$targetName) {
+            $normTarget = Normalize-Name $targetName
+            foreach ($f in $parentFolder.Folders) { if ((Normalize-Name $f.Name) -eq $normTarget) { return $f } }
+            return $null
+          }
+
+          function Find-FolderByNameDeep($startFolder, [string]$targetName) {
+            $norm = Normalize-Name $targetName
+            foreach ($f in $startFolder.Folders) {
+              if ((Normalize-Name $f.Name) -eq $norm) { return $f }
+            }
+            foreach ($f in $startFolder.Folders) {
+              $found = Find-FolderByNameDeep -startFolder $f -targetName $targetName
+              if ($found -ne $null) { return $found }
+            }
+            return $null
+          }
+          
           try { $parent = $ns.GetFolderFromID("${safeParentId}", "${safeStoreId}") } catch {}
           if (-not $parent -and "${safeParentPath}" -ne "") {
-            # Fallback: navigation par chemin (MB\Inbox\Child...)
-            $parts = "${safeParentPath}" -split "\\\\"
-            if ($parts.Length -gt 1) {
+            # Fallback 1: navigation depuis la racine d'affichage (MB\...)
+            $parts = "${safeParentPath}" -split "\\"
+            if ($parts.Length -eq 1 -and (Normalize-Name $parts[0]) -eq (Normalize-Name $mbName)) {
+              # Demande des enfants de la racine de la boîte: utiliser root directement
+              $parent = $root
+            } elseif ($parts.Length -gt 1) {
               $cursor = $root
-              # Essayer d'ignorer la premiere partie (nom boite), parfois differente d'affichage
+              # Ignorer la premiere partie (nom de la boite), les suivantes sont les dossiers
               for ($i = 1; $i -lt $parts.Length; $i++) {
                 $name = $parts[$i]
-                $next = $null
-                foreach ($f in $cursor.Folders) { if ($f.Name -eq $name) { $next = $f; break } }
+                $next = Find-ChildByName -parentFolder $cursor -targetName $name
                 if ($next -eq $null) { break }
                 $cursor = $next
               }
               if ($cursor -ne $root) { $parent = $cursor }
             }
+            
+            # Fallback 2: si non trouvé, tenter résolution depuis la Boîte de réception (localisée)
+            if (-not $parent) {
+              try {
+                $inbox = $store.GetDefaultFolder(6) # olFolderInbox
+                if ($inbox -ne $null) {
+                  $cursor = $inbox
+                  # Si le chemin fourni inclut déjà le segment Inbox en deuxième position, le sauter
+                  $startIndex = 1
+                  try {
+                    if ($parts.Length -gt 1) {
+                      $p1 = $parts[1]
+                      if ((Normalize-Name $p1) -eq (Normalize-Name $inbox.Name)) { $startIndex = 2 }
+                    }
+                  } catch {}
+                  for ($i = $startIndex; $i -lt $parts.Length; $i++) {
+                    $name = $parts[$i]
+                    $next = Find-ChildByName -parentFolder $cursor -targetName $name
+                    if ($next -eq $null) { break }
+                    $cursor = $next
+                  }
+                  if ($cursor -ne $inbox) {
+                    $parent = $cursor
+                  } elseif ($parts.Length -eq 2 -and ((Normalize-Name $parts[1]) -eq (Normalize-Name $inbox.Name))) {
+                    # Cas particulier: on demandait directement les enfants de l'Inbox
+                    $parent = $inbox
+                  }
+                }
+              } catch {}
+            }
+
+            # Fallback 3: recherche profonde par nom du dernier segment si encore introuvable (préférer Inbox)
+            if (-not $parent) {
+              try {
+                if ($parts.Length -gt 1) {
+                  $leaf = $parts[$parts.Length - 1]
+                  $candidate = $null
+                  try {
+                    $inbox2 = $store.GetDefaultFolder(6)
+                    if ($inbox2 -ne $null) { $candidate = Find-FolderByNameDeep -startFolder $inbox2 -targetName $leaf }
+                  } catch {}
+                  if ($candidate -eq $null) { $candidate = Find-FolderByNameDeep -startFolder $root -targetName $leaf }
+                  if ($candidate -ne $null) { $parent = $candidate }
+                }
+              } catch {}
+            }
           }
           if (-not $parent) { throw "Dossier parent introuvable" }
+          # Build a stable display path by walking up to the root
+          function Get-FolderDisplayPath($folder, [string]$mailboxName, $rootFolder) {
+            $segments = New-Object System.Collections.Generic.List[string]
+            $cur = $folder
+            try {
+              while ($cur -ne $null -and $cur.EntryID -ne $rootFolder.EntryID) {
+                $segments.Add($cur.Name)
+                $cur = $cur.Parent
+                # Safety break to avoid infinite loops
+                if ($segments.Count -gt 50) { break }
+              }
+            } catch {}
+            $segments.Reverse()
+            if ($segments.Count -gt 0) { return ("$mailboxName\" + ([string]::Join("\\", $segments))) } else { return $mailboxName }
+          }
+
           $children = @()
           foreach ($sf in $parent.Folders) {
             $childCount = 0; try { $childCount = $sf.Folders.Count } catch {}
-            $path = if ("${safeParentPath}" -ne "") { "${safeParentPath}\\$($sf.Name)" } else { "$mbName\\$($sf.Name)" }
+            $path = Get-FolderDisplayPath -folder $sf -mailboxName $mbName -rootFolder $root
             $children += @{
               Name = $sf.Name
               FolderPath = $path
@@ -1103,11 +1216,33 @@ class OutlookConnector extends EventEmitter {
           $outlook = New-Object -ComObject Outlook.Application
           $namespace = $outlook.GetNamespace("MAPI")
           $emails = @()
+          $max = ${Number.isFinite(limit) ? Math.max(1, Number(limit)) : 50}
+          
+          # Helpers available in script scope (used by all fallbacks)
+          function Normalize-Name([string]$s) {
+            if ([string]::IsNullOrEmpty($s)) { return "" }
+            # Trim whitespace and trailing dots to tolerate minor path differences
+            $s2 = $s.Trim().TrimEnd('.')
+            $n = $s2.Normalize([Text.NormalizationForm]::FormD)
+            $sb = New-Object System.Text.StringBuilder
+            foreach ($c in $n.ToCharArray()) {
+              if ([Globalization.CharUnicodeInfo]::GetUnicodeCategory($c) -ne [Globalization.UnicodeCategory]::NonSpacingMark) {
+                [void]$sb.Append($c)
+              }
+            }
+            return $sb.ToString().Normalize([Text.NormalizationForm]::FormC).ToLowerInvariant().Trim()
+          }
+
+          function Find-ChildByName($parentFolder, [string]$targetName) {
+            $normTarget = Normalize-Name $targetName
+            foreach ($f in $parentFolder.Folders) { if ((Normalize-Name $f.Name) -eq $normTarget) { return $f } }
+            return $null
+          }
           
           # Fonction pour naviguer vers un dossier specifique
           function Find-OutlookFolder {
             param([string]$FolderPath, [object]$Namespace)
-            
+
             # Extraire compte et chemin
             if ($FolderPath -match '^([^\\\\]+)\\\\(.+)$') {
               $accountName = $matches[1]
@@ -1116,7 +1251,7 @@ class OutlookConnector extends EventEmitter {
               # Chercher le store/compte
               $targetStore = $null
               foreach ($store in $Namespace.Stores) {
-                if ($store.DisplayName -like "*$accountName*" -or $store.DisplayName -eq $accountName) {
+                if ((Normalize-Name $store.DisplayName) -eq (Normalize-Name $accountName)) {
                   $targetStore = $store
                   break
                 }
@@ -1132,34 +1267,9 @@ class OutlookConnector extends EventEmitter {
               
               foreach ($part in $pathParts) {
                 if ($part -and $part.Trim() -ne "") {
-                  $found = $false
-                  $folders = $currentFolder.Folders
-                  
-                  # Recherche exacte par nom
-                  for ($i = 1; $i -le $folders.Count; $i++) {
-                    $subfolder = $folders.Item($i)
-                    if ($subfolder.Name -eq $part) {
-                      $currentFolder = $subfolder
-                      $found = $true
-                      break
-                    }
-                  }
-                  
-                  # Si pas trouve, recherche par pattern pour "Boîte de réception"
-                  if (-not $found -and ($part -match "réception" -or $part -match "Boîte")) {
-                    for ($i = 1; $i -le $folders.Count; $i++) {
-                      $subfolder = $folders.Item($i)
-                      if ($subfolder.Name -match "réception") {
-                        $currentFolder = $subfolder
-                        $found = $true
-                        break
-                      }
-                    }
-                  }
-                  
-                  if (-not $found) {
-                    return $null
-                  }
+                  $next = Find-ChildByName -parentFolder $currentFolder -targetName $part
+                  if ($next -eq $null) { return $null }
+                  $currentFolder = $next
                 }
               }
               
@@ -1172,14 +1282,67 @@ class OutlookConnector extends EventEmitter {
           # Trouver le dossier cible
           $targetFolder = Find-OutlookFolder -FolderPath "${folderPath}" -Namespace $namespace
           
+          # Fallback: si non trouvé, tenter depuis la Boîte de réception (olFolderInbox)
+          if (-not $targetFolder) {
+            try {
+              $parts = "${folderPath}" -split "\\"
+              if ($parts.Length -gt 1) {
+                $accountName = $parts[0]
+                $targetStore = $null
+                foreach ($store in $namespace.Stores) { if ((Normalize-Name $store.DisplayName) -eq (Normalize-Name $accountName)) { $targetStore = $store; break } }
+                if ($targetStore -eq $null) { $targetStore = $namespace.DefaultStore }
+                $inbox = $targetStore.GetDefaultFolder(6)
+                if ($inbox -ne $null) {
+                  $cursor = $inbox
+                  for ($i = 1; $i -lt $parts.Length; $i++) {
+                    $name = $parts[$i]
+                    $next = Find-ChildByName -parentFolder $cursor -targetName $name
+                    if ($next -eq $null) { $cursor = $null; break }
+                    $cursor = $next
+                  }
+                  if ($cursor -ne $null) { $targetFolder = $cursor }
+                }
+              }
+            } catch {}
+          }
+
+      # Fallback 2: recherche profonde depuis Inbox ou racine par nom du dernier segment
+          if (-not $targetFolder) {
+            try {
+              $parts2 = "${folderPath}" -split "\\"
+              if ($parts2.Length -gt 1) {
+                $account2 = $parts2[0]
+                $store2 = $null
+                foreach ($st in $namespace.Stores) { if ((Normalize-Name $st.DisplayName) -eq (Normalize-Name $account2)) { $store2 = $st; break } }
+                if ($store2 -eq $null) { $store2 = $namespace.DefaultStore }
+                $root2 = $store2.GetRootFolder()
+                $leaf = $parts2[$parts2.Length - 1]
+                function Find-FolderByNameDeep([object]$start, [string]$tname) {
+                  $norm = Normalize-Name $tname
+                  foreach ($f in $start.Folders) { if ((Normalize-Name $f.Name) -eq $norm) { return $f } }
+                  foreach ($f in $start.Folders) {
+                    $found = Find-FolderByNameDeep -start $f -tname $tname
+                    if ($found -ne $null) { return $found }
+                  }
+                  return $null
+                }
+        $cand = $null
+        try { $inbox3 = $store2.GetDefaultFolder(6); if ($inbox3 -ne $null) { $cand = Find-FolderByNameDeep -start $inbox3 -tname $leaf } } catch {}
+        if ($cand -eq $null) { $cand = Find-FolderByNameDeep -start $root2 -tname $leaf }
+                if ($cand -ne $null) { $targetFolder = $cand }
+              }
+            } catch {}
+          }
+          
           if ($targetFolder) {
             # Récupérer TOUS les emails du dossier
             $items = $targetFolder.Items
             if ($items.Count -gt 0) {
               $items.Sort("[ReceivedTime]", $true)
               
-              # Traiter TOUS les emails
-              for ($i = 1; $i -le $items.Count; $i++) {
+              # Traiter les emails (jusqu'à $max)
+              $upper = [Math]::Min($items.Count, [int]$max)
+              for ($i = 1; $i -le $upper; $i++) {
                 try {
                   $mail = $items.Item($i)
                   if ($mail.Class -eq 43) {
@@ -1231,7 +1394,7 @@ class OutlookConnector extends EventEmitter {
               emails = $emails
               count = $count
               totalInFolder = $totalCount
-              message = "Dossier specifique: TOUS les emails recuperes ($count/$totalCount)"
+              message = "Dossier specifique: emails recuperes ($count/$totalCount)"
               timestamp = $timestamp
               folderName = $folderName
             }
@@ -1469,19 +1632,29 @@ class OutlookConnector extends EventEmitter {
         if (fs.existsSync(candidate)) scriptPath = candidate;
       }
     } catch {}
-    const args = ['-File', scriptPath, '-Mailbox', mailbox, '-Scope', 'Inbox'];
+    // Resolve EWS DLL path explicitly to avoid path issues
+    let ewsDll = path.join(process.cwd(), 'resources', 'ews', 'Microsoft.Exchange.WebServices.dll');
     try {
-      const raw = await this.ewsRun(args, 30000);
-      const data = OutlookConnector.parseJsonOutput(raw);
-      const payload = Array.isArray(data) ? data[0] : data;
-      let folders = payload?.Folders || [];
+      const fs = require('fs');
+      if (!fs.existsSync(ewsDll)) {
+        const devCandidate = path.join(process.cwd(), 'resources', 'ews', 'Microsoft.Exchange.WebServices.dll');
+        if (fs.existsSync(devCandidate)) { ewsDll = devCandidate; }
+      }
+    } catch {}
+    const args = ['-File', scriptPath, '-Mailbox', mailbox, '-Scope', 'Inbox', '-DllPath', ewsDll];
+    try {
+  const raw = await this.ewsRun(args, 30000);
+  const data = OutlookConnector.parseJsonOutput(raw);
+  const payload = Array.isArray(data) ? data[0] : data;
+  let folders = payload?.Folders || [];
       if (!folders.length) {
-        const raw2 = await this.ewsRun(['-File', scriptPath, '-Mailbox', mailbox, '-Scope', 'Root'], 30000);
+  const raw2 = await this.ewsRun(['-File', scriptPath, '-Mailbox', mailbox, '-Scope', 'Root', '-DllPath', ewsDll], 30000);
         const data2 = OutlookConnector.parseJsonOutput(raw2);
         const payload2 = Array.isArray(data2) ? data2[0] : data2;
         folders = payload2?.Folders || [];
       }
-      return folders;
+  // Coerce to plain array of POJOs
+  return Array.isArray(folders) ? folders.map(f => ({ Id: f.Id, Name: f.Name, ChildCount: Number(f.ChildCount || 0) })) : [];
     } catch (e) {
       console.error('❌ EWS top-level failed:', e.message);
       throw e;
@@ -1497,12 +1670,21 @@ class OutlookConnector extends EventEmitter {
         if (fs.existsSync(candidate)) scriptPath = candidate;
       }
     } catch {}
-    const args = ['-File', scriptPath, '-Mailbox', mailbox, '-ParentId', parentId];
+    let ewsDll = path.join(process.cwd(), 'resources', 'ews', 'Microsoft.Exchange.WebServices.dll');
     try {
-      const raw = await this.ewsRun(args, 20000);
-      const data = OutlookConnector.parseJsonOutput(raw);
-      const payload = Array.isArray(data) ? data[0] : data;
-      return payload?.Folders || [];
+      const fs = require('fs');
+      if (!fs.existsSync(ewsDll)) {
+        const devCandidate = path.join(process.cwd(), 'resources', 'ews', 'Microsoft.Exchange.WebServices.dll');
+        if (fs.existsSync(devCandidate)) { ewsDll = devCandidate; }
+      }
+    } catch {}
+    const args = ['-File', scriptPath, '-Mailbox', mailbox, '-ParentId', parentId, '-DllPath', ewsDll];
+    try {
+  const raw = await this.ewsRun(args, 20000);
+  const data = OutlookConnector.parseJsonOutput(raw);
+  const payload = Array.isArray(data) ? data[0] : data;
+  const folders = payload?.Folders || [];
+  return Array.isArray(folders) ? folders.map(f => ({ Id: f.Id, Name: f.Name, ChildCount: Number(f.ChildCount || 0) })) : [];
     } catch (e) {
       console.error('❌ EWS children failed:', e.message);
       throw e;
@@ -1513,5 +1695,3 @@ class OutlookConnector extends EventEmitter {
 // Export singleton
 const outlookConnector = new OutlookConnector();
 module.exports = outlookConnector;
-module.exports.getTopLevelFoldersFast = (...a) => outlookConnector.getTopLevelFoldersFast(...a);
-module.exports.getChildFoldersFast = (...a) => outlookConnector.getChildFoldersFast(...a);

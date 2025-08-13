@@ -47,11 +47,7 @@ class FoldersTreeManager {
 
     // Bouton ajouter
     const addBtn = document.getElementById('add-folder');
-    if (addBtn) {
-      addBtn.addEventListener('click', () => {
-        this.showAddFolderModal();
-      });
-    }
+  // Ne pas binder ici pour éviter les doubles ouvertures; l'app principale gère le clic
 
     // Toggle de vue (Tableau / Arborescence / Liste)
     const viewBoardBtn = document.getElementById('view-board');
@@ -183,11 +179,11 @@ class FoldersTreeManager {
     
     if (this.folders.size === 0) {
       console.log('🎨 Aucun dossier à afficher - message vide');
-    this.container.innerHTML = `
+  this.container.innerHTML = `
         <div class="text-center text-muted py-4">
           <i class="bi bi-folder-x display-6 mb-3"></i>
           <p>Aucun dossier configuré</p>
-      <button class="btn btn-outline-primary btn-sm" onclick="window.foldersTree && window.foldersTree.showAddFolderModal()">
+  <button class="btn btn-outline-primary btn-sm" onclick="(window.app && window.app.showAddFolderModal) ? window.app.showAddFolderModal() : (window.foldersTree && window.foldersTree.showAddFolderModal && window.foldersTree.showAddFolderModal())">
             <i class="bi bi-plus me-1"></i>Ajouter un dossier
           </button>
         </div>
@@ -821,21 +817,62 @@ class FoldersTreeManager {
   }
 
   showAddFolderModal() {
-    // Pour l'instant, utiliser prompt - peut être amélioré avec un modal Bootstrap
-    const folderPath = prompt('Chemin du dossier Outlook à ajouter:');
-    if (!folderPath) return;
+    // Déléguer au sélecteur moderne de l'application (COM rapide + EWS fallback)
+    if (window.app && typeof window.app.showAddFolderModal === 'function') {
+      try {
+        window.app.showAddFolderModal();
+        return;
+      } catch (_) { /* fallback below */ }
+    }
 
-    const category = prompt('Catégorie:\n1. Déclarations\n2. Règlements\n3. Mails simples', '1');
-    const categories = {
-      '1': 'Déclarations',
-      '2': 'Règlements',
-      '3': 'Mails simples'
-    };
-
-    const selectedCategory = categories[category];
-    if (!selectedCategory) return;
-
-    this.addFolderToMonitoring(folderPath, selectedCategory);
+    // Fallback: modal manuel basique si le flux principal n'est pas dispo
+    const id = 'legacyManualAddFolderModal';
+    const existing = document.getElementById(id);
+    if (existing) existing.remove();
+    const html = `
+      <div class="modal fade" id="${id}" tabindex="-1">
+        <div class="modal-dialog">
+          <div class="modal-content">
+            <div class="modal-header">
+              <h6 class="modal-title">Ajouter un dossier (manuel)</h6>
+              <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+              <div class="mb-2">
+                <label class="form-label">Chemin complet</label>
+                <input type="text" class="form-control" id="legacy-folder-path" placeholder="Ex: Boîte de réception\\Déclarations" required />
+              </div>
+              <div class="mb-2">
+                <label class="form-label">Catégorie</label>
+                <select class="form-select" id="legacy-folder-cat" required>
+                  <option value="">-- Sélectionner une catégorie --</option>
+                  <option value="Déclarations">Déclarations</option>
+                  <option value="Règlements">Règlements</option>
+                  <option value="Mails simples">Mails simples</option>
+                </select>
+              </div>
+            </div>
+            <div class="modal-footer">
+              <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Annuler</button>
+              <button type="button" class="btn btn-primary" id="legacy-folder-save">Ajouter</button>
+            </div>
+          </div>
+        </div>
+      </div>`;
+    document.body.insertAdjacentHTML('beforeend', html);
+    const modalEl = document.getElementById(id);
+    const modal = new bootstrap.Modal(modalEl);
+    modal.show();
+    modalEl.querySelector('#legacy-folder-save').addEventListener('click', async () => {
+      const path = document.getElementById('legacy-folder-path').value.trim();
+      const category = document.getElementById('legacy-folder-cat').value.trim();
+      if (!path || !category) return;
+      try {
+        await this.addFolderToMonitoring(path, category);
+        try { modal.hide(); } catch(_) {}
+        setTimeout(() => modalEl.remove(), 200);
+      } catch (_) { /* errors handled in addFolderToMonitoring */ }
+    });
   }
 
   async addFolderToMonitoring(folderPath, category) {

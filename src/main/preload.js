@@ -15,6 +15,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // EWS fast enumeration
   ewsTopLevel: (mailbox) => ipcRenderer.invoke('api-ews-top-level', { mailbox }),
   ewsChildren: (mailbox, parentId) => ipcRenderer.invoke('api-ews-children', { mailbox, parentId }),
+  // COM fast enumeration
+  olStores: () => ipcRenderer.invoke('api-ol-stores'),
+  olFoldersShallow: (storeId, parentEntryId) => ipcRenderer.invoke('api-ol-folders-shallow', { storeId, parentEntryId }),
   
   // API Stats
   getStatsSummary: () => ipcRenderer.invoke('api-stats-summary'),

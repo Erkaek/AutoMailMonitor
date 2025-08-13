@@ -2,7 +2,8 @@ param(
   [Parameter(Mandatory=$true)][string]$Mailbox,
   [ValidateSet('Inbox','Root')] [string]$Scope = 'Inbox',
   [string]$ParentId,
-  [int]$PageSize = 500
+  [int]$PageSize = 500,
+  [string]$DllPath
 )
 
 $ErrorActionPreference = 'Stop'
@@ -33,7 +34,12 @@ function Write-Json {
 }
 
 try {
-  $ewsPath = Get-EwsDll
+  $ewsPath = $null
+  if ($DllPath -and (Test-Path $DllPath)) {
+    $ewsPath = $DllPath
+  } else {
+    $ewsPath = Get-EwsDll
+  }
   if (-not $ewsPath) { throw "EWS Managed API introuvable. DLL manquante (Microsoft.Exchange.WebServices.dll)" }
   Add-Type -Path $ewsPath
 

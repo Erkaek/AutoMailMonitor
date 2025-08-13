@@ -24,8 +24,10 @@ class UnifiedMonitoringService extends EventEmitter {
         this.dbService = optimizedDatabaseService;
         this.cacheService = cacheService;
         
-        this.isInitialized = false;
-        this.isMonitoring = false;
+    this.isInitialized = false;
+    this.isMonitoring = false;
+    this._isStarting = false;
+    this._isStopping = false;
         this.monitoredFolders = [];
         this.outlookEventHandlers = new Map(); // Stockage des handlers d'événements
         this.pollingInterval = null; // Intervalle de polling complémentaire
@@ -70,9 +72,10 @@ class UnifiedMonitoringService extends EventEmitter {
         };
         
         // Cache pour les performances
-        this.emailCache = new Map(); // Cache des emails récents
-        this.folderStatsCache = new Map(); // Cache des stats par dossier
-        this.cacheExpiry = 30000; // 30 secondes
+    this.emailCache = new Map(); // Cache des emails récents
+    this.folderStatsCache = new Map(); // Cache des stats par dossier
+    this.cacheExpiry = 30000; // 30 secondes
+    this.cacheCleanupInterval = null;
         
         // Optimisations
         this.batchProcessor = {
@@ -105,8 +108,7 @@ class UnifiedMonitoringService extends EventEmitter {
             // Charger les dossiers configurés
             await this.loadMonitoredFolders();
             
-            // Démarrer la surveillance des changements de configuration
-            this.startConfigurationWatcher();
+            // La surveillance de la configuration est gérée par startConfigWatcher()
             
             // Démarrer le nettoyage automatique du cache
             this.startCacheCleanup();
@@ -282,52 +284,12 @@ class UnifiedMonitoringService extends EventEmitter {
     /**
      * Vérifier périodiquement si la configuration des dossiers a changé
      */
-    startConfigurationWatcher() {
-        // Nettoyer l'ancien watcher s'il existe
-        if (this.configCheckInterval) {
-            clearInterval(this.configCheckInterval);
-        }
-        
-        // Vérifier toutes les 3 secondes
-        this.configCheckInterval = setInterval(async () => {
-            try {
-                await this.checkConfigurationChanges();
-            } catch (error) {
-                this.log(`⚠️ Erreur vérification configuration: ${error.message}`, 'WARNING');
-            }
-        }, 3000);
-        
-        this.log('👁️ Surveillance des changements de configuration activée', 'CONFIG');
-    }
+    // startConfigurationWatcher supprimé (doublon)
 
     /**
      * Vérifier si la configuration a changé
      */
-    async checkConfigurationChanges() {
-        const now = Date.now();
-        
-        // Éviter les vérifications trop fréquentes
-        if (this.lastConfigCheck && now - this.lastConfigCheck < 10000) {
-            return;
-        }
-        
-        this.lastConfigCheck = now;
-        
-        try {
-            const configChanged = await this.loadMonitoredFolders();
-            
-            if (configChanged) {
-                this.log('🔔 Configuration des dossiers modifiée détectée', 'CONFIG');
-                this.emit('configuration-changed', {
-                    foldersCount: this.monitoredFolders.length,
-                    folders: this.monitoredFolders.map(f => f.path)
-                });
-            }
-            
-        } catch (error) {
-            this.log(`❌ Erreur vérification configuration: ${error.message}`, 'ERROR');
-        }
-    }
+    // checkConfigurationChanges version 1 supprimée (doublon)
 
     /**
      * Recharger manuellement la configuration des dossiers
@@ -397,16 +359,19 @@ class UnifiedMonitoringService extends EventEmitter {
      * Vérifier les changements de configuration
      */
     async checkConfigurationChanges() {
+        const now = Date.now();
+        // Throttle à 10s
+        if (this.lastConfigCheck && now - this.lastConfigCheck < 10000) return;
+        this.lastConfigCheck = now;
         try {
-            const foldersConfig = await this.dbService.getFoldersConfiguration();
-            const newConfigHash = this.calculateConfigHash(foldersConfig);
-            
-            if (this.foldersConfigHash && this.foldersConfigHash !== newConfigHash) {
-                this.log('📋 Changement de configuration détecté, rechargement...', 'CONFIG');
-                await this.loadMonitoredFolders();
+            const configChanged = await this.loadMonitoredFolders();
+            if (configChanged) {
+                this.log('🔔 Configuration des dossiers modifiée détectée', 'CONFIG');
+                this.emit('configuration-changed', {
+                    foldersCount: this.monitoredFolders.length,
+                    folders: this.monitoredFolders.map(f => f.path)
+                });
             }
-            
-            this.lastConfigCheck = new Date();
         } catch (error) {
             this.log(`❌ Erreur vérification configuration: ${error.message}`, 'ERROR');
         }
@@ -436,6 +401,11 @@ class UnifiedMonitoringService extends EventEmitter {
      */
     async startMonitoring() {
         try {
+            if (this._isStarting || this.isMonitoring) {
+                this.log('ℹ️ startMonitoring ignoré (déjà en cours/actif)', 'INFO');
+                return;
+            }
+            this._isStarting = true;
             if (!this.isInitialized) {
                 throw new Error('Service non initialisé');
             }
@@ -487,6 +457,8 @@ class UnifiedMonitoringService extends EventEmitter {
             this.log(`❌ Erreur démarrage monitoring: ${error.message}`, 'ERROR');
             this.emit('error', error);
             throw error;
+        } finally {
+            this._isStarting = false;
         }
     }
 
@@ -958,14 +930,10 @@ class UnifiedMonitoringService extends EventEmitter {
             // Sauvegarder en base
             const emailRecord = {
                 outlook_id: processedEmail.EntryID || processedEmail.id,
-                outlook_id: processedEmail.EntryID || processedEmail.id,
                 subject: processedEmail.subject,
-                sender_email: processedEmail.senderName,
-                sender_email: emailData.senderName || emailData.SenderName || processedEmail.senderName || '',
-                
-                sender_email: emailData.senderEmail || emailData.SenderEmailAddress || processedEmail.senderEmail || '',
-                received_time: processedEmail.receivedTime,
-                is_read: processedEmail.isRead,
+                sender_email: processedEmail.senderEmail || processedEmail.SenderEmailAddress || processedEmail.senderName || processedEmail.SenderName || '',
+                received_time: processedEmail.receivedTime || processedEmail.ReceivedTime || new Date().toISOString(),
+                is_read: processedEmail.UnRead !== undefined ? !processedEmail.UnRead : (processedEmail.isRead || false),
                 size: processedEmail.size || 0,
                 folder_name: folderConfig.path,
                 folder_type: folderConfig.category || folderConfig.type,
@@ -1059,6 +1027,15 @@ class UnifiedMonitoringService extends EventEmitter {
      */
     async stopMonitoring() {
         try {
+            if (this._isStopping || !this.isMonitoring) {
+                // Ensure timers are cleaned even if already stopped
+                if (this.configCheckInterval) { clearInterval(this.configCheckInterval); this.configCheckInterval = null; }
+                if (this.pollingInterval) { clearInterval(this.pollingInterval); this.pollingInterval = null; }
+                if (this.cacheCleanupInterval) { clearInterval(this.cacheCleanupInterval); this.cacheCleanupInterval = null; }
+                this.log('ℹ️ stopMonitoring ignoré (déjà en arrêt ou non actif)', 'INFO');
+                return;
+            }
+            this._isStopping = true;
             this.log('🛑 Arrêt du monitoring...', 'STOP');
 
             // Arrêter le polling
@@ -1123,6 +1100,8 @@ class UnifiedMonitoringService extends EventEmitter {
         } catch (error) {
             this.log(`❌ Erreur arrêt monitoring: ${error.message}`, 'ERROR');
             throw error;
+        } finally {
+            this._isStopping = false;
         }
     }
 
@@ -1692,13 +1671,21 @@ class UnifiedMonitoringService extends EventEmitter {
                 this.emailCache.delete(key);
             }
         }
+        for (const [key, entry] of this.folderStatsCache.entries()) {
+            if (now - entry.timestamp > this.cacheExpiry) {
+                this.folderStatsCache.delete(key);
+            }
+        }
     }
 
     /**
      * Démarrage du nettoyage automatique du cache
      */
     startCacheCleanup() {
-        setInterval(() => {
+        if (this.cacheCleanupInterval) {
+            clearInterval(this.cacheCleanupInterval);
+        }
+        this.cacheCleanupInterval = setInterval(() => {
             this.cleanupCache();
         }, 60000); // Nettoyage toutes les minutes
     }
@@ -1830,45 +1817,7 @@ class UnifiedMonitoringService extends EventEmitter {
         }
     }
 
-    /**
-     * Nettoyage automatique du cache
-     */
-    startCacheCleanup() {
-        setInterval(() => {
-            const now = Date.now();
-            // Nettoyer le cache des emails
-            for (const [key, entry] of this.emailCache.entries()) {
-                if (now - entry.timestamp > this.cacheExpiry) {
-                    this.emailCache.delete(key);
-                }
-            }
-            // Nettoyer le cache des stats
-            for (const [key, entry] of this.folderStatsCache.entries()) {
-                if (now - entry.timestamp > this.cacheExpiry) {
-                    this.folderStatsCache.delete(key);
-                }
-            }
-        }, 60000); // Nettoyage toutes les minutes
-    }
-
-    /**
-     * Arrêt du monitoring
-     */
-    async stopMonitoring() {
-        this.log('🛑 Arrêt du monitoring...', 'STOP');
-        this.isMonitoring = false;
-        
-        // Nettoyer les handlers d'événements
-        this.outlookEventHandlers.clear();
-        
-        // Arrêter le polling si actif
-        if (this.pollingInterval) {
-            clearInterval(this.pollingInterval);
-            this.pollingInterval = null;
-        }
-        
-        this.log('✅ Monitoring arrêté', 'SUCCESS');
-    }
+    // startCacheCleanup et stopMonitoring en double supprimés
 
     /**
      * Synchronisation forcée
@@ -1910,12 +1859,7 @@ class UnifiedMonitoringService extends EventEmitter {
         }
     }
 
-    /**
-     * Obtenir les emails récents (API compatibility)
-     */
-    async getRecentEmails(limit = 20) {
-        return await this.dbService.getRecentEmails(limit);
-    }
+    // getRecentEmails (compat) supprimé: utiliser la version avec cache plus haut
 
     /**
      * Obtenir les statistiques par catégorie
@@ -2122,6 +2066,10 @@ class UnifiedMonitoringService extends EventEmitter {
         this.fallbackPollingActive = true;
 
         // Polling moins fréquent (toutes les 2 minutes) car c'est un fallback
+        if (this.pollingInterval) {
+            clearInterval(this.pollingInterval);
+            this.pollingInterval = null;
+        }
         this.pollingInterval = setInterval(() => {
             this.performLightMonitoringCheck();
         }, 120000); // 2 minutes
@@ -2134,6 +2082,10 @@ class UnifiedMonitoringService extends EventEmitter {
      */
     setupFallbackPollingStandby() {
         // Polling très léger toutes les 5 minutes pour vérifier que l'écoute COM fonctionne
+        if (this.pollingInterval) {
+            clearInterval(this.pollingInterval);
+            this.pollingInterval = null;
+        }
         this.pollingInterval = setInterval(() => {
             this.checkCOMHealthAndFallback();
         }, 300000); // 5 minutes
@@ -2181,6 +2133,13 @@ class UnifiedMonitoringService extends EventEmitter {
             }
 
             // ===== CONFIGURER TOUS LES GESTIONNAIRES D'ÉVÉNEMENTS =====
+            // Éviter les doublons
+            this.outlookConnector.removeAllListeners('newEmailDetected');
+            this.outlookConnector.removeAllListeners('emailStatusChanged');
+            this.outlookConnector.removeAllListeners('emailSubjectChanged');
+            this.outlookConnector.removeAllListeners('emailModified');
+            this.outlookConnector.removeAllListeners('emailDeleted');
+            this.outlookConnector.removeAllListeners('folderCountChanged');
             
             // 1. Nouveaux emails détectés
             this.outlookConnector.on('newEmailDetected', (emailData) => {

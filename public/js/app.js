@@ -47,6 +47,12 @@ class MailMonitor {
     this.updateInterval = null;
   // Timers for animated counters to prevent overlaps
   this.counterTimers = new Map();
+  // Prevent duplicate auto-refresh wiring
+  this._autoRefreshSetup = false;
+  // Weekly throttling/single-flight state
+  this._weeklyRefreshTimer = null;
+  this._weeklyInFlight = { stats: null, history: null };
+  this._weeklyLastCall = { stats: 0, history: 0 };
     this.charts = {};
     this.init();
   }
@@ -58,7 +64,7 @@ class MailMonitor {
     try {
       // Injecter la version app dans le footer (source: app.getVersion)
       try {
-        const ver = (window.electronAPI && await window.electronAPI.getAppVersion()) || null;
+              const ver = (window.electronAPI && await window.electronAPI.getAppVersion()) || 'unknown';
         const el = document.getElementById('app-version');
         if (el && ver) el.textContent = `v${ver}`;
       } catch {}
@@ -107,7 +113,7 @@ class MailMonitor {
   this.initLogsTab();
       
       this.startPeriodicUpdates();
-      this.setupAutoRefresh();
+  // setupAutoRefresh is already invoked in setupEventListeners(); avoid double wiring
       
       // Terminer le chargement
       this.finishLoading();
@@ -285,8 +291,11 @@ class MailMonitor {
    * Configuration de l'actualisation automatique
    */
   setupAutoRefresh() {
-    // Log d'initialisation - conservé pour débogage important
-    console.log('🔄 Configuration de l\'actualisation automatique...');
+  // Guard against double wiring
+  if (this._autoRefreshSetup) return;
+  this._autoRefreshSetup = true;
+  // Log d'initialisation - conservé pour débogage important
+  console.log('🔄 Configuration de l\'actualisation automatique...');
     
     // Actualisation des statistiques principales toutes les 1 seconde
     this.statsRefreshInterval = setInterval(() => {
@@ -310,6 +319,17 @@ class MailMonitor {
     
     // Log de confirmation configuration - conservé pour débogage
     console.log('✅ Auto-refresh configuré (1s stats, 1s emails, 2s dossiers, 5s complet)');
+  }
+
+  // Debounced weekly refresh to coalesce multiple triggers
+  scheduleWeeklyRefresh(delayMs = 300) {
+    if (this._weeklyRefreshTimer) clearTimeout(this._weeklyRefreshTimer);
+    this._weeklyRefreshTimer = setTimeout(async () => {
+      try {
+        await this.loadCurrentWeekStats();
+        await this.loadWeeklyHistory();
+      } catch (_) {}
+    }, Math.max(0, delayMs));
   }
 
   /**
@@ -398,8 +418,8 @@ class MailMonitor {
       window.electronAPI.onWeeklyStatsUpdated(async (payload) => {
         console.log('📅 Événement weekly-stats-updated reçu:', payload);
         try {
-          await this.loadCurrentWeekStats();
-          await this.loadWeeklyHistory();
+          // Coalesce refreshes to avoid duplicate calls
+          this.scheduleWeeklyRefresh(200);
           // Mettre à jour aussi l'onglet Performances personnelles si utilisé
           await this.loadPersonalPerformance();
           this.updateLastRefreshTime();
@@ -579,8 +599,8 @@ class MailMonitor {
     // Rafraîchir aussi le suivi hebdomadaire à chaque cycle (traitements/reçus évoluent)
     // On ne spamme pas: appels idempotents et peu coûteux côté IPC
     try {
-      this.loadCurrentWeekStats();
-      this.loadWeeklyHistory();
+  // Coalesce weekly refresh to avoid double/triple logs
+  this.scheduleWeeklyRefresh(400);
       this.loadPersonalPerformance?.();
     } catch(_) {}
   }
@@ -740,8 +760,8 @@ class MailMonitor {
       }
     });
     
-    // Auto-refresh configuration (removed manual refresh buttons)
-    this.setupAutoRefresh();
+  // Auto-refresh configuration (removed manual refresh buttons)
+  this.setupAutoRefresh();
     
     // Système d'écoute temps réel des événements de monitoring
     this.setupRealtimeEventListeners();
@@ -1331,7 +1351,8 @@ class MailMonitor {
       }
       this.state.isMonitoring = isActive;
       this.state.foldersMonitoredCount = foldersCount;
-      this.updateMonitoringStatus(isActive);
+  // Mettre à jour l'indicateur de statut en mode réussi
+  this.updateMonitoringStatus(isActive);
     } catch (error) {
       console.error('❌ Erreur vérification statut monitoring:', error);
       const fallbackCount = Object.keys(this.state.folderCategories || {}).length;
@@ -1387,6 +1408,7 @@ class MailMonitor {
                 <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
               </div>
               <div class="modal-body">
+                <div id="folder-modal-alert" class="alert alert-danger d-none" role="alert"></div>
                 <form id="add-folder-form">
                   <div class="mb-3">
                     <label class="form-label">Boîte mail</label>
@@ -1429,15 +1451,34 @@ class MailMonitor {
       document.body.insertAdjacentHTML('beforeend', modalHtml);
       const modal = new bootstrap.Modal(document.getElementById('folderModal'));
       modal.show();
+      // Préselectionner une catégorie par défaut pour éviter l'état vide
+      try {
+        const catEl = document.getElementById('category-input');
+        if (catEl && !catEl.value) catEl.value = 'Mails simples';
+        catEl?.classList.remove('is-invalid');
+      } catch(_) {}
 
-      // Charger toutes les boîtes (storeId vide => toutes les stores côté backend)
+      // Charger toutes les boîtes (COM rapide d'abord, fallback COM existant)
       const folderTree = document.getElementById('folder-tree');
       const mailboxSelect = document.getElementById('mailbox-select');
       let allMailboxes = [];
   try {
-        const result = await window.electronAPI.getFolderStructure('');
-        if (result?.success && Array.isArray(result.folders) && result.folders.length > 0) {
-          allMailboxes = result.folders;
+        let storesRes = null;
+        try { storesRes = await window.electronAPI.olStores(); } catch {}
+        if (storesRes && storesRes.ok && Array.isArray(storesRes.data) && storesRes.data.length > 0) {
+          // Mapper pour compatibilité avec code existant
+          allMailboxes = storesRes.data.map(s => ({
+            Name: s.DisplayName,
+            StoreID: s.StoreId,
+            SmtpAddress: s.SmtpAddress
+          }));
+        } else {
+          const result = await window.electronAPI.getFolderStructure('');
+          if (result?.success && Array.isArray(result.folders) && result.folders.length > 0) {
+            allMailboxes = result.folders;
+          }
+        }
+        if (Array.isArray(allMailboxes) && allMailboxes.length > 0) {
           // Alimenter la liste des boîtes
           mailboxSelect.innerHTML = '<option value="">Sélectionnez une boîte mail</option>' +
             allMailboxes.map(mb => {
@@ -1453,37 +1494,45 @@ class MailMonitor {
           const renderTreeFor = async (storeIdOrName) => {
             const selected = allMailboxes.find(mb => mb.StoreID === storeIdOrName || mb.Name === storeIdOrName);
             const mb = selected || allMailboxes[0];
-            const mailboxLabel = mb?.SmtpAddress || mb?.Name || '';
-            folderTree.dataset.mailbox = mailboxLabel;
+            const mailboxDisplay = mb?.Name || '';
+            const smtpAddr = mb?.SmtpAddress || '';
+            // Store both display and smtp separately
+            folderTree.dataset.mailboxDisplay = mailboxDisplay;
+            folderTree.dataset.mailbox = mailboxDisplay; // backward compat
+            folderTree.dataset.smtp = smtpAddr;
+            folderTree.dataset.storeId = mb?.StoreID || '';
             folderTree.innerHTML = '<div class="text-muted"><i class="bi bi-hourglass-split me-2"></i>Chargement…</div>';
             try {
-              const top = await window.electronAPI.ewsTopLevel(mailboxLabel);
-              const nodes = Array.isArray(top) ? top : (top?.folders || []);
-              if (!nodes.length) {
-                // Fallback vers COM si EWS ne renvoie rien (ex: SMTP introuvable)
-                try {
-                  const res2 = await window.electronAPI.getFolderStructure(mb?.StoreID || mb?.Name || '');
-                  const struct = (res2 && res2.success && Array.isArray(res2.folders)) ? res2.folders : [];
-                  if (!struct.length) {
-                    folderTree.innerHTML = '<div class="text-warning"><i class="bi bi-info-circle me-2"></i>Aucun dossier trouvé</div>';
-                    return;
+              // COM rapide (Inbox shallow)
+              let nodes = [];
+              try {
+                const res = await window.electronAPI.olFoldersShallow(mb?.StoreID || '', '');
+                if (res && res.ok) {
+                  const arr = Array.isArray(res.data) ? res.data : (res.data?.folders || []);
+                  if (Array.isArray(arr)) {
+                    nodes = arr.map(n => ({ Name: n.Name, Id: n.EntryId, ChildCount: n.ChildCount }));
                   }
-                  let html2 = '';
-                  for (const it of struct) html2 += this.createFolderTree(it, 0);
-                  folderTree.innerHTML = html2;
-                  this.initializeFolderTreeEvents();
-                  this.showNotification('Info', 'EWS indisponible pour cette boîte. Mode compatibilité (COM) utilisé.', 'info');
-                  return;
-                } catch (fallbackErr) {
-                  console.error('Erreur fallback COM:', fallbackErr);
-                  folderTree.innerHTML = '<div class="text-danger"><i class="bi bi-exclamation-triangle me-2"></i>Erreur de chargement</div>';
-                  return;
                 }
+              } catch {}
+              if (!nodes.length) {
+                // Fallback EWS
+                try {
+                  const ewsMailbox = smtpAddr && smtpAddr.includes('@') ? smtpAddr : mailboxDisplay;
+                  const top = await window.electronAPI.ewsTopLevel(ewsMailbox);
+                  nodes = Array.isArray(top) ? top : (top?.folders || []);
+                } catch (errEws) {
+                  console.error('EWS top-level aussi indisponible:', errEws);
+                }
+              }
+              if (!nodes.length) {
+                folderTree.innerHTML = '<div class="text-warning"><i class="bi bi-info-circle me-2"></i>Aucun dossier trouvé</div>';
+                return;
               }
               // Adapter data pour createFolderTree
               const treeItems = nodes.map(n => ({
                 Name: n.Name,
-                FolderPath: `${mailboxLabel}\\${n.Name}`,
+                // IMPORTANT: Utiliser le libellé d'affichage pour le chemin de sélection (préserve Inbox localisée)
+                FolderPath: `${mailboxDisplay}\\${n.Name}`,
                 EntryID: n.Id,
                 ChildCount: n.ChildCount,
                 SubFolders: []
@@ -1493,24 +1542,8 @@ class MailMonitor {
               folderTree.innerHTML = html;
               this.initializeFolderTreeEvents();
             } catch (err) {
-              console.error('Erreur chargement EWS top-level:', err);
-              // Fallback vers COM en cas d'erreur EWS
-              try {
-                const res2 = await window.electronAPI.getFolderStructure(mb?.StoreID || mb?.Name || '');
-                const struct = (res2 && res2.success && Array.isArray(res2.folders)) ? res2.folders : [];
-                if (!struct.length) {
-                  folderTree.innerHTML = '<div class="text-warning"><i class="bi bi-info-circle me-2"></i>Aucun dossier trouvé</div>';
-                  return;
-                }
-                let html2 = '';
-                for (const it of struct) html2 += this.createFolderTree(it, 0);
-                folderTree.innerHTML = html2;
-                this.initializeFolderTreeEvents();
-                this.showNotification('Info', 'EWS indisponible pour cette boîte. Mode compatibilité (COM) utilisé.', 'info');
-              } catch (fallbackErr) {
-                console.error('Erreur fallback COM:', fallbackErr);
-                folderTree.innerHTML = '<div class="text-danger"><i class="bi bi-exclamation-triangle me-2"></i>Erreur de chargement</div>';
-              }
+              console.error('Erreur chargement top-level:', err);
+              folderTree.innerHTML = '<div class="text-danger"><i class="bi bi-exclamation-triangle me-2"></i>Erreur de chargement</div>';
             }
           };
 
@@ -1579,7 +1612,10 @@ class MailMonitor {
             </div>
             <div class="modal-footer">
               <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Annuler</button>
-              <button type="button" class="btn btn-primary" id="manual-folder-save">Ajouter</button>
+              <button type="button" class="btn btn-primary" id="manual-folder-save">
+                <span class="save-text">Ajouter</span>
+                <span class="spinner-border spinner-border-sm d-none ms-2" role="status" aria-hidden="true"></span>
+              </button>
             </div>
           </div>
         </div>
@@ -1589,7 +1625,17 @@ class MailMonitor {
     const modal = new bootstrap.Modal(document.getElementById('manualFolderModal'));
     modal.show();
 
-    document.getElementById('manual-folder-save').addEventListener('click', async () => {
+    // Préselectionner une catégorie par défaut pour éviter l'état vide
+    try {
+      const catEl = document.getElementById('manual-folder-category');
+      if (catEl && !catEl.value) catEl.value = 'Mails simples';
+      catEl?.classList.remove('is-invalid');
+    } catch(_) {}
+
+    document.getElementById('manual-folder-save').addEventListener('click', async (ev) => {
+      const btn = ev.currentTarget;
+      const spinner = btn.querySelector('.spinner-border');
+      const text = btn.querySelector('.save-text');
       const name = document.getElementById('manual-folder-name').value.trim();
       const path = document.getElementById('manual-folder-path').value.trim();
       const category = document.getElementById('manual-folder-category').value.trim();
@@ -1597,6 +1643,7 @@ class MailMonitor {
         this.showNotification('Champs requis', 'Merci de renseigner le nom, le chemin, et la catégorie', 'warning');
         return;
       }
+      try { spinner?.classList.remove('d-none'); text && (text.textContent = 'Ajout...'); btn.disabled = true; } catch(_) {}
       try {
         const res = await window.electronAPI.addFolderToMonitoring({ folderPath: path, category });
         if (res && res.success) {
@@ -1614,7 +1661,7 @@ class MailMonitor {
       } catch (e) {
         console.error('❌ Erreur ajout manuel:', e);
         this.showNotification('Erreur', e.message, 'danger');
-      }
+      } finally { try { spinner?.classList.add('d-none'); text && (text.textContent = 'Ajouter'); btn.disabled = false; } catch(_) {} }
     });
   }
 
@@ -1641,7 +1688,7 @@ class MailMonitor {
                     <option value="">Sélectionnez une boîte mail</option>
                     ${mailboxes.map(mb => {
                       const label = mb.SmtpAddress ? `${mb.Name} (${mb.SmtpAddress})` : mb.Name;
-                      return `<option value="${this.escapeHtml(mb.StoreID)}">${this.escapeHtml(label)}</option>`;
+                      return `<option value="${this.escapeHtml(mb.StoreID)}" data-smtp="${this.escapeHtml(mb.SmtpAddress || '')}" data-name="${this.escapeHtml(mb.Name || '')}">${this.escapeHtml(label)}</option>`;
                     }).join('')}
                   </select>
                 </div>
@@ -1671,7 +1718,10 @@ class MailMonitor {
             </div>
             <div class="modal-footer">
               <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Annuler</button>
-              <button type="button" class="btn btn-primary" id="save-folder-config">Ajouter</button>
+              <button type="button" class="btn btn-primary" id="save-folder-config">
+                <span class="save-text">Ajouter</span>
+                <span class="spinner-border spinner-border-sm d-none ms-2" role="status" aria-hidden="true"></span>
+              </button>
             </div>
           </div>
         </div>
@@ -1682,19 +1732,32 @@ class MailMonitor {
     
     const modal = new bootstrap.Modal(document.getElementById('folderModal'));
     modal.show();
+    // Préselectionner une catégorie par défaut pour éviter l'état vide
+    try {
+      const catEl = document.getElementById('category-input');
+      if (catEl && !catEl.value) catEl.value = 'Mails simples';
+      catEl?.classList.remove('is-invalid');
+    } catch(_) {}
 
     // Gérer le changement de boîte mail
-    document.getElementById('mailbox-select').addEventListener('change', async (e) => {
-      const storeId = e.target.value;
-      if (storeId) {
-        await this.loadFoldersForMailbox(storeId);
-      }
+    const mailboxSelectEl = document.getElementById('mailbox-select');
+    mailboxSelectEl.addEventListener('change', async (e) => {
+      const storeId = e.target.value || '';
+      await this.loadFoldersForMailbox(storeId);
     });
 
     // Gérer la sauvegarde
-    document.getElementById('save-folder-config').addEventListener('click', () => {
+      document.getElementById('save-folder-config').addEventListener('click', () => {
       this.saveFolderConfiguration(modal);
     });
+
+    // Pré-sélectionner la première boîte et charger ses dossiers pour éviter l'état vide
+    try {
+      if (mailboxSelectEl && mailboxSelectEl.options.length > 1) {
+        mailboxSelectEl.selectedIndex = 1;
+        (async () => { try { await this.loadFoldersForMailbox(mailboxSelectEl.value || ''); } catch(_) {} })();
+      }
+    } catch (_) {}
   }
 
   async loadFoldersForMailbox(storeId) {
@@ -1703,30 +1766,62 @@ class MailMonitor {
       folderTree.innerHTML = '<div class="text-muted"><i class="bi bi-hourglass-split me-2"></i>Chargement...</div>';
 
       // Utiliser EWS directement pour ce store (on affiche le libellé comme mailbox)
-      const mailboxSelect = document.getElementById('mailbox-select');
-      const mailboxLabel = mailboxSelect ? (mailboxSelect.selectedOptions[0]?.text || '') : '';
-      folderTree.dataset.mailbox = mailboxLabel;
-      try {
-        const nodes = await window.electronAPI.ewsTopLevel(mailboxLabel);
-        const list = Array.isArray(nodes) ? nodes : (nodes?.folders || []);
-        if (!list.length) {
-          // Fallback COM
-          const res2 = await window.electronAPI.getFolderStructure(storeId);
-          const struct = (res2 && res2.success && Array.isArray(res2.folders)) ? res2.folders : [];
-          if (!struct.length) {
-            folderTree.innerHTML = '<div class="text-warning"><i class="bi bi-info-circle me-2"></i>Aucun dossier trouvé pour cette boîte mail</div>';
-            return;
+  const mailboxSelect = document.getElementById('mailbox-select');
+  const selectedOpt = mailboxSelect ? mailboxSelect.selectedOptions[0] : null;
+  const mailboxDisplay = selectedOpt ? (selectedOpt.getAttribute('data-name') || selectedOpt.text || '') : '';
+  const smtp = selectedOpt ? (selectedOpt.getAttribute('data-smtp') || '') : '';
+  folderTree.dataset.mailboxDisplay = mailboxDisplay;
+  folderTree.dataset.mailbox = mailboxDisplay; // backward compat
+  folderTree.dataset.smtp = smtp || '';
+      // Si storeId vide, essayer de le résoudre via COM stores d'après le label (DisplayName / SMTP)
+      if (!storeId) {
+        try {
+          const storesRes = await window.electronAPI.olStores();
+          if (storesRes && storesRes.ok && Array.isArray(storesRes.data)) {
+            const label = (mailboxDisplay || '').trim();
+            const match = storesRes.data.find(s => {
+              const disp = (s.DisplayName || '').trim();
+              const smtp = (s.SmtpAddress || '').trim();
+              const combined = smtp ? `${disp} (${smtp})` : disp;
+              return combined === label || disp === label || smtp === label;
+            });
+      if (match && match.StoreId) storeId = match.StoreId;
           }
-          let html2 = '';
-          for (const it of struct) html2 += this.createFolderTree(it, 0);
-          folderTree.innerHTML = html2;
-          this.initializeFolderTreeEvents();
-          this.showNotification('Info', 'EWS indisponible pour cette boîte. Mode compatibilité (COM) utilisé.', 'info');
+        } catch (_) {}
+      }
+      try {
+        // COM rapide d'abord
+        let list = [];
+  const diag = { mailbox: mailboxDisplay, storeId: storeId || '(inconnu)', errors: [] };
+    // Conserver le storeId pour le lazy-load ultérieur
+    folderTree.dataset.storeId = storeId || '';
+        try {
+          const res = await window.electronAPI.olFoldersShallow(storeId, '');
+          if (res && res.ok) {
+            const arr = Array.isArray(res.data) ? res.data : (res.data?.folders || []);
+            if (Array.isArray(arr)) list = arr.map(n => ({ Name: n.Name, Id: n.EntryId, ChildCount: n.ChildCount }));
+          }
+          else if (res && res.ok === false) diag.errors.push(`COM: ${res.error || 'erreur inconnue'}`);
+        } catch (e) { diag.errors.push(`COM: ${e?.message || String(e)}`); }
+        if (!list.length) {
+          // Fallback EWS
+          try {
+            const ewsMailbox = (smtp && smtp.includes('@')) ? smtp : mailboxDisplay;
+            const ewsRes = await window.electronAPI.ewsTopLevel(ewsMailbox);
+            list = Array.isArray(ewsRes) ? ewsRes : (ewsRes?.folders || []);
+            if (ewsRes && ewsRes.success === false && ewsRes.error) diag.errors.push(`EWS: ${ewsRes.error}`);
+          } catch (e2) { diag.errors.push(`EWS: ${e2?.message || String(e2)}`); }
+        }
+        if (!list.length) {
+          const ctx = this.escapeHtml(`Boîte: ${diag.mailbox} | StoreId: ${diag.storeId}`);
+          const errs = diag.errors.length ? `<br/><small class="text-muted">${this.escapeHtml(diag.errors.join(' | '))}</small>` : '';
+          folderTree.innerHTML = `<div class="text-warning"><i class="bi bi-info-circle me-2"></i>Aucun dossier trouvé pour cette boîte mail<br/><small>${ctx}</small>${errs}</div>`;
           return;
         }
         const treeItems = list.map(n => ({
           Name: n.Name,
-          FolderPath: `${mailboxLabel}\\${n.Name}`,
+          // Use mailbox DISPLAY label (without SMTP) so localized Inbox stays in the path
+          FolderPath: `${mailboxDisplay}\\${n.Name}`,
           EntryID: n.Id,
           ChildCount: n.ChildCount,
           SubFolders: []
@@ -1736,24 +1831,8 @@ class MailMonitor {
         folderTree.innerHTML = html;
         this.initializeFolderTreeEvents();
       } catch (err) {
-        console.error('❌ Erreur EWS top-level:', err);
-        // Fallback COM on error
-        try {
-          const res2 = await window.electronAPI.getFolderStructure(storeId);
-          const struct = (res2 && res2.success && Array.isArray(res2.folders)) ? res2.folders : [];
-          if (!struct.length) {
-            folderTree.innerHTML = '<div class="text-warning"><i class="bi bi-info-circle me-2"></i>Aucun dossier trouvé pour cette boîte mail</div>';
-            return;
-          }
-          let html2 = '';
-          for (const it of struct) html2 += this.createFolderTree(it, 0);
-          folderTree.innerHTML = html2;
-          this.initializeFolderTreeEvents();
-          this.showNotification('Info', 'EWS indisponible pour cette boîte. Mode compatibilité (COM) utilisé.', 'info');
-        } catch (fallbackErr) {
-          console.error('Erreur fallback COM:', fallbackErr);
-          folderTree.innerHTML = '<div class="text-danger"><i class="bi bi-exclamation-triangle me-2"></i>Erreur de chargement</div>';
-        }
+        console.error('❌ Erreur top-level:', err);
+        folderTree.innerHTML = '<div class="text-danger"><i class="bi bi-exclamation-triangle me-2"></i>Erreur de chargement</div>';
       }
     } catch (error) {
       console.error('❌ Erreur chargement dossiers:', error);
@@ -1791,7 +1870,7 @@ class MailMonitor {
       const folderId = `folder_${Math.random().toString(36).substr(2, 9)}`;
       
       html += `
-        <div class="folder-item" style="margin-left: ${level * 20}px;">
+        <div class="folder-item" data-level="${level}" style="margin-left: ${level * 20}px;">
           <div class="folder-line d-flex align-items-center py-1 folder-selectable" 
                data-path="${folderPath}" 
                data-name="${folderName}"
@@ -1831,16 +1910,33 @@ class MailMonitor {
         if (!isExpanded && targetDiv && targetDiv.children.length === 0) {
           const folderLine = toggle.closest('.folder-item')?.querySelector('.folder-line');
           if (folderLine && folderLine.getAttribute('data-has-children') === '1') {
-            const mailbox = document.getElementById('folder-tree')?.dataset.mailbox || '';
+                const mailbox = document.getElementById('folder-tree')?.dataset.mailbox || '';
+            const smtp = document.getElementById('folder-tree')?.dataset.smtp || '';
             const parentEntryId = folderLine.getAttribute('data-entry-id') || '';
+            const storeId = document.getElementById('folder-tree')?.dataset.storeId || '';
             if (mailbox && parentEntryId) {
               targetDiv.innerHTML = '<div class="text-muted ms-4"><i class="bi bi-hourglass-split me-2"></i>Chargement…</div>';
               try {
-                const res = await window.electronAPI.ewsChildren(mailbox, parentEntryId);
-                const children = Array.isArray(res) ? res : (res?.folders || []);
+                let children = [];
+                try {
+                  if (storeId) {
+                    const r = await window.electronAPI.olFoldersShallow(storeId, parentEntryId);
+                    if (r && r.ok) {
+                      const arr = Array.isArray(r.data) ? r.data : (r.data?.folders || []);
+                      if (Array.isArray(arr)) children = arr.map(n => ({ Name: n.Name, Id: n.EntryId, ChildCount: n.ChildCount }));
+                    }
+                  }
+                } catch {}
+                if (!children.length) {
+                  const ewsMailbox = (smtp && smtp.includes('@')) ? smtp : (document.getElementById('folder-tree')?.dataset.mailboxDisplay || mailbox);
+                  const res = await window.electronAPI.ewsChildren(ewsMailbox, parentEntryId);
+                  children = Array.isArray(res) ? res : (res?.folders || []);
+                }
+                // Build children paths based strictly on the FULL parent DISPLAY path to preserve segments like "Boîte de réception"
+                const parentPath = folderLine.getAttribute('data-path') || `${(document.getElementById('folder-tree')?.dataset.mailboxDisplay || mailbox)}\\${folderLine.getAttribute('data-name') || ''}`;
                 const mapped = children.map(ch => ({
                   Name: ch.Name,
-                  FolderPath: `${mailbox}\\${folderLine.getAttribute('data-name')}\\${ch.Name}`,
+                  FolderPath: `${parentPath}\\${ch.Name}`,
                   EntryID: ch.Id,
                   ChildCount: ch.ChildCount,
                   SubFolders: []
@@ -1934,10 +2030,29 @@ class MailMonitor {
       const selectedFolder = document.querySelector('.folder-selectable.bg-primary');
       const folderName = selectedFolder ? selectedFolder.getAttribute('data-name') : 'Dossier';
 
+      // Validation inline visible (les notifications sont no-op)
+  const catEl = document.getElementById('category-input');
+  const treeEl = document.getElementById('folder-tree');
+  const treeWrapper = treeEl ? treeEl.parentElement : null;
+  catEl?.classList.remove('is-invalid');
+  treeWrapper?.classList.remove('border-danger');
+      if (!category) {
+        catEl?.classList.add('is-invalid');
+      }
+      if (!folderPath) {
+        treeWrapper?.classList.add('border-danger');
+      }
       if (!folderPath || !category) {
-        this.showNotification('Champs requis', 'Veuillez sélectionner un dossier et saisir une catégorie', 'warning');
         return;
       }
+
+      // UI loading state for save button and inline alert area
+      const btn = document.getElementById('save-folder-config');
+      const spinner = btn?.querySelector('.spinner-border');
+      const text = btn?.querySelector('.save-text');
+      const alertBox = document.getElementById('folder-modal-alert');
+      if (alertBox) { alertBox.classList.add('d-none'); alertBox.textContent = ''; }
+      try { spinner?.classList.remove('d-none'); if (text) text.textContent = 'Ajout...'; if (btn) btn.disabled = true; } catch(_) {}
 
       // Demander au processus principal d'ajouter le dossier et tous ses sous-dossiers
       const result = await window.electronAPI.addFolderToMonitoring({ folderPath, category });
@@ -1945,8 +2060,12 @@ class MailMonitor {
       if (result.success) {
         await this.loadFoldersConfiguration();
         this.updateFolderConfigDisplay();
+        // Forcer l'actualisation de l'arborescence Monitoring immédiatement
+        if (window.foldersTree && typeof window.foldersTree.loadFolders === 'function') {
+          try { await window.foldersTree.loadFolders(true); } catch (_) {}
+        }
         
-        // Fermer le modal correctement avec Bootstrap
+  // Fermer le modal correctement avec Bootstrap
         const modalElement = document.getElementById('folderModal');
         if (modalElement) {
           const modal = bootstrap.Modal.getInstance(modalElement);
@@ -1956,14 +2075,28 @@ class MailMonitor {
         }
         
         const count = result.count || 1;
-        this.showNotification('Configuration sauvegardée', `"${count}" dossier(s) ajouté(s) en "${category}"`, 'success');
+        // Afficher un feedback discret dans la console (les toasts sont désactivés)
+        console.log(`✅ Configuration sauvegardée: ${count} dossier(s) ajouté(s) en "${category}"`);
         console.log('✅ Configuration de dossier sauvegardée (avec sous-dossiers)');
       } else {
-        this.showNotification('Erreur de sauvegarde', result.error || 'Impossible de sauvegarder la configuration', 'danger');
+        const msg = result.error || 'Impossible de sauvegarder la configuration';
+        console.warn('Erreur de sauvegarde', msg);
+        if (alertBox) { alertBox.textContent = msg; alertBox.classList.remove('d-none'); }
       }
     } catch (error) {
       console.error('❌ Erreur sauvegarde configuration:', error);
-      this.showNotification('Erreur', error.message, 'danger');
+      // Highlight the form to show an error occurred
+      try {
+        const el = document.getElementById('folder-tree');
+        el?.parentElement?.classList.add('border-danger');
+        const alertBox = document.getElementById('folder-modal-alert');
+        if (alertBox) { alertBox.textContent = error.message || 'Erreur de sauvegarde'; alertBox.classList.remove('d-none'); }
+      } catch(_) {}
+    } finally {
+      const btn = document.getElementById('save-folder-config');
+      const spinner = btn?.querySelector('.spinner-border');
+      const text = btn?.querySelector('.save-text');
+      try { spinner?.classList.add('d-none'); if (text) text.textContent = 'Ajouter'; if (btn) btn.disabled = false; } catch(_) {}
     }
   }
 
@@ -2023,6 +2156,11 @@ class MailMonitor {
           if (!this.state.folderCategories[folderPath]) this.state.folderCategories[folderPath] = {};
           this.state.folderCategories[folderPath].category = newCategory;
           this.updateFolderConfigDisplay();
+
+          // Forcer la vue Monitoring à refléter la nouvelle catégorie
+          if (window.foldersTree && typeof window.foldersTree.loadFolders === 'function') {
+            try { await window.foldersTree.loadFolders(true); } catch (_) {}
+          }
 
           bootstrap.Modal.getInstance(document.getElementById(modalId))?.hide();
           this.showNotification('Catégorie mise à jour', `Nouvelle catégorie: "${newCategory}"`, 'success');
@@ -3198,6 +3336,10 @@ class MailMonitor {
         
         // 6. Rafraîchir l'affichage avec les données actualisées
         this.updateFolderConfigDisplay();
+        // 6bis. Forcer la vue Monitoring à se recharger pour refléter la suppression
+        if (window.foldersTree && typeof window.foldersTree.loadFolders === 'function') {
+          try { await window.foldersTree.loadFolders(true); } catch (_) {}
+        }
         await this.refreshFoldersDisplay();
         
         // 7. Attendre un peu puis rafraîchir les statistiques
@@ -4074,30 +4216,41 @@ class MailMonitor {
    * Charge les statistiques de la semaine actuelle
    */
   async loadCurrentWeekStats() {
-    try {
-      // Log API weekly stats - simplifié
-      // console.log('📅 Appel API api-weekly-current-stats...');
-      const response = await window.electronAPI.invoke('api-weekly-current-stats');
-      console.log('📅 Réponse API reçue:', response);
-      
-      if (response.success) {
-        // Les données sont dans response.weekInfo et response.categories
-        const weekData = {
-          weekInfo: response.weekInfo,
-          categories: response.categories
-        };
-        console.log('📅 Données formatées pour affichage:', weekData);
-  // Stocker l'information de semaine pour les ajustements
-  this.state.currentWeekInfo = response.weekInfo || null;
-        this.updateCurrentWeekDisplay(weekData);
-      } else {
-        console.error('❌ Erreur lors du chargement des stats hebdomadaires:', response.error);
-        this.showWeeklyError(response.error);
+    // Single-flight + throttle guard
+    if (this._weeklyInFlight && this._weeklyInFlight.stats) return this._weeklyInFlight.stats;
+    const now = Date.now();
+    this._weeklyLastCall = this._weeklyLastCall || { stats: 0, history: 0 };
+    if (now - (this._weeklyLastCall.stats || 0) < 800) return;
+    this._weeklyLastCall.stats = now;
+    this._weeklyInFlight.stats = (async () => {
+      try {
+        // Log API weekly stats - simplifié
+        // console.log('📅 Appel API api-weekly-current-stats...');
+        const response = await window.electronAPI.invoke('api-weekly-current-stats');
+        console.log('📅 Réponse API reçue:', response);
+        
+        if (response.success) {
+          // Les données sont dans response.weekInfo et response.categories
+          const weekData = {
+            weekInfo: response.weekInfo,
+            categories: response.categories
+          };
+          console.log('📅 Données formatées pour affichage:', weekData);
+          // Stocker l'information de semaine pour les ajustements
+          this.state.currentWeekInfo = response.weekInfo || null;
+          this.updateCurrentWeekDisplay(weekData);
+        } else {
+          console.error('❌ Erreur lors du chargement des stats hebdomadaires:', response.error);
+          this.showWeeklyError(response.error);
+        }
+      } catch (error) {
+        console.error('❌ Erreur lors du chargement des stats hebdomadaires:', error);
+        this.showWeeklyError('Erreur de communication avec le serveur');
+      } finally {
+        this._weeklyInFlight.stats = null;
       }
-    } catch (error) {
-      console.error('❌ Erreur lors du chargement des stats hebdomadaires:', error);
-      this.showWeeklyError('Erreur de communication avec le serveur');
-    }
+    })();
+    return this._weeklyInFlight.stats;
   }
 
   /**
@@ -4281,23 +4434,34 @@ class MailMonitor {
    * Charge l'historique hebdomadaire
    */
   async loadWeeklyHistory() {
-    try {
-      const { page, pageSize } = this.state.weeklyHistory;
-      const response = await window.electronAPI.invoke('api-weekly-history', { page, pageSize, limit: pageSize });
-      if (response.success) {
-        this.updateWeeklyHistoryDisplay(response.data);
-        // Mettre à jour l'état de pagination
-        this.state.weeklyHistory.page = response.page || page;
-        this.state.weeklyHistory.pageSize = response.pageSize || pageSize;
-        this.state.weeklyHistory.totalWeeks = response.totalWeeks || 0;
-        this.state.weeklyHistory.totalPages = response.totalPages || 1;
-        this.updateWeeklyPaginationControls();
-      } else {
-        console.error('Erreur lors du chargement de l\'historique:', response.error);
+    // Single-flight + throttle guard
+    if (this._weeklyInFlight && this._weeklyInFlight.history) return this._weeklyInFlight.history;
+    const now = Date.now();
+    this._weeklyLastCall = this._weeklyLastCall || { stats: 0, history: 0 };
+    if (now - (this._weeklyLastCall.history || 0) < 800) return;
+    this._weeklyLastCall.history = now;
+    this._weeklyInFlight.history = (async () => {
+      try {
+        const { page, pageSize } = this.state.weeklyHistory;
+        const response = await window.electronAPI.invoke('api-weekly-history', { page, pageSize, limit: pageSize });
+        if (response.success) {
+          this.updateWeeklyHistoryDisplay(response.data);
+          // Mettre à jour l'état de pagination
+          this.state.weeklyHistory.page = response.page || page;
+          this.state.weeklyHistory.pageSize = response.pageSize || pageSize;
+          this.state.weeklyHistory.totalWeeks = response.totalWeeks || 0;
+          this.state.weeklyHistory.totalPages = response.totalPages || 1;
+          this.updateWeeklyPaginationControls();
+        } else {
+          console.error('Erreur lors du chargement de l\'historique:', response.error);
+        }
+      } catch (error) {
+        console.error('Erreur lors du chargement de l\'historique:', error);
+      } finally {
+        this._weeklyInFlight.history = null;
       }
-    } catch (error) {
-      console.error('Erreur lors du chargement de l\'historique:', error);
-    }
+    })();
+    return this._weeklyInFlight.history;
   }
 
   /**
