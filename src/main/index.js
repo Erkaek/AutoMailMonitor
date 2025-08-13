@@ -1529,11 +1529,39 @@ ipcMain.handle('api-folders-add', async (event, { folderPath, category }) => {
               return;
             }
 
+            // Helper to fetch a specific EWS scope directly (Root) if needed
+            const fetchScope = async (scope) => {
+              try {
+                const { resolveResource } = require('../server/scriptPathResolver');
+                const scriptRes = resolveResource(['scripts'], 'ews-list-folders.ps1');
+                const dllRes = resolveResource(['ews'], 'Microsoft.Exchange.WebServices.dll');
+                if (!scriptRes.path || !dllRes.path) return [];
+                const oc = require('../server/outlookConnector');
+                const raw = await oc.ewsRun(['-File', scriptRes.path, '-Mailbox', (mailboxSmtp || mailboxDisplay), '-Scope', scope, '-DllPath', dllRes.path], 20000).catch(()=> '');
+                const data = oc.constructor.parseJsonOutput(raw);
+                const payload = Array.isArray(data) ? data[0] : data;
+                const list = payload?.Folders || [];
+                return Array.isArray(list) ? list.map(f => ({ Id: f.Id, Name: f.Name, ChildCount: Number(f.ChildCount || 0) })) : [];
+              } catch { return []; }
+            };
+
             // Resolve starting folder (first effective segment)
             for (const f of folders) {
               if (normalizeName(f?.Name || '') === normalizeName(effectiveSegs[0])) { cur = f; break; }
             }
-            if (!cur) { console.log('[ADD][DFS][EWS] Starting segment not found in EWS top-level:', effectiveSegs[0]); return; }
+            if (!cur) {
+              // Try Root scope fallback if inbox-scope list did not contain it and we had no Inbox prefix
+              if (!hadInbox) {
+                const rootList = await fetchScope('Root');
+                for (const f of rootList) {
+                  if (normalizeName(f?.Name || '') === normalizeName(effectiveSegs[0])) { cur = f; break; }
+                }
+                if (cur) {
+                  console.log('[ADD][DFS][EWS] Résolution via scope Root pour segment:', effectiveSegs[0]);
+                }
+              }
+              if (!cur) { console.log('[ADD][DFS][EWS] Starting segment introuvable (Inbox+Root):', effectiveSegs[0]); return; }
+            }
             namesChain = [cur.Name];
             // Traverse remaining effectiveSegs
             for (let i = 1; i < effectiveSegs.length; i++) {
@@ -1551,7 +1579,8 @@ ipcMain.handle('api-folders-add', async (event, { folderPath, category }) => {
             if (!seen.has(baseNorm)) { seen.add(baseNorm); toInsert.push({ path: baseNorm, name: namesChain[namesChain.length-1] }); }
             // DFS deeper
             const stack = [{ id: cur.Id, chain: namesChain.slice() }];
-            while (stack.length) {
+      let safetyCounter = 0;
+      while (stack.length) {
               const node = stack.pop();
               const kids = await outlookConnector.getChildFoldersFast?.(mailboxSmtp || mailboxDisplay, node.id);
               for (const k of (kids || [])) {
@@ -1563,6 +1592,8 @@ ipcMain.handle('api-folders-add', async (event, { folderPath, category }) => {
                   toInsert.push({ path: norm, name: k.Name });
                 }
                 stack.push({ id: k.Id, chain: childChain });
+        safetyCounter++;
+        if (safetyCounter > 5000) { console.warn('[ADD][DFS][EWS] Limite de sécurité atteinte (5000 dossiers)'); stack.length = 0; break; }
               }
             }
           } catch {}
