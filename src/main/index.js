@@ -1733,6 +1733,8 @@ ipcMain.handle('api-folders-add', async (event, { folderPath, category }) => {
       }
   }
 
+    // Nouvelle logique prioritaire: si seulement le dossier de base a été ajouté (ou zéro enfants), utiliser l'arbre COM global pour récupérer tous les descendants.
+    let initialInsertedCount = 0;
     // Insérer tous les dossiers (OR REPLACE évite les doublons)
     debugPhases.push('insert-start');
     let inserted = 0;
@@ -1745,13 +1747,78 @@ ipcMain.handle('api-folders-add', async (event, { folderPath, category }) => {
         console.error('❌ Erreur insertion dossier enfant:', item.path, e.message || e);
       }
     }
+    initialInsertedCount = inserted;
     debugPhases.push('insert-done');
+
+    // COM full tree fallback if little or no children captured (heuristic: < 2 insertions)
+    if (inserted < 2) {
+      try {
+        debugPhases.push('com-tree-fallback-start');
+        const outlookConnector2 = require('../server/outlookConnector');
+        const tree = await outlookConnector2.getAllStoresAndTreeViaCOM({ forceRefresh: false });
+        if (!tree || !tree.index || !tree.index.byPath) throw new Error('Arbre COM indisponible');
+        const lowerBase = String(folderPath).toLowerCase();
+        // Chercher nœud de base (exact ou commençant par)
+        const baseNode = tree.index.byPath.get(lowerBase) || null;
+        if (baseNode) {
+          // Insérer tous les descendants sous ce path (paths commençant par base path + '\\')
+          let added = 0;
+          for (const [p, node] of tree.index.byPath.entries()) {
+            if (p === lowerBase) continue;
+            if (p.startsWith(lowerBase + '\\')) {
+              const normPath = node.path; // déjà canonical
+              if (!seen.has(normPath)) {
+                try {
+                  await dbRef.addFolderConfiguration(normPath, category, node.name || normPath.split('\\').pop());
+                  seen.add(normPath);
+                  added++; inserted++;
+                  if (toInsertDebugSample.length < 10) toInsertDebugSample.push(normPath);
+                } catch (e) {
+                  console.warn('[COM-TREE][ADD] Échec insertion descendant:', normPath, e.message || e);
+                }
+              }
+            }
+          }
+          console.log(`[COM-TREE][ADD] Descendants ajoutés via fallback: ${added}`);
+        } else {
+          console.warn('[COM-TREE][ADD] Base introuvable dans index COM, tentative forceRefresh…');
+          const tree2 = await outlookConnector2.getAllStoresAndTreeViaCOM({ forceRefresh: true });
+          const base2 = tree2.index.byPath.get(lowerBase);
+          if (base2) {
+            let added2 = 0;
+            for (const [p, node] of tree2.index.byPath.entries()) {
+              if (p === lowerBase) continue;
+              if (p.startsWith(lowerBase + '\\')) {
+                const normPath = node.path;
+                if (!seen.has(normPath)) {
+                  try {
+                    await dbRef.addFolderConfiguration(normPath, category, node.name || normPath.split('\\').pop());
+                    seen.add(normPath);
+                    added2++; inserted++;
+                    if (toInsertDebugSample.length < 10) toInsertDebugSample.push(normPath);
+                  } catch (e) {
+                    console.warn('[COM-TREE][ADD] Échec insertion descendant (refresh):', normPath, e.message || e);
+                  }
+                }
+              }
+            }
+            console.log(`[COM-TREE][ADD] Descendants ajoutés après refresh: ${added2}`);
+          } else {
+            console.warn('[COM-TREE][ADD] Base toujours introuvable après refresh');
+          }
+        }
+        debugPhases.push('com-tree-fallback-done');
+      } catch (e) {
+        debugPhases.push('com-tree-fallback-error');
+        console.warn('[COM-TREE][ADD] Fallback échec:', e.message || e);
+      }
+    }
 
     // OPTIMIZED: Invalidation intelligente du cache
   try { cacheService.invalidateFoldersConfig(); } catch (e) { console.warn('Cache invalidation failed:', e?.message || e); }
     debugPhases.push('cache-invalidated');
 
-    console.log(`✅ [ADD] ${inserted} dossier(s) ajouté(s) au monitoring (incl. sous-dossiers)`);
+  console.log(`✅ [ADD] ${inserted} dossier(s) ajouté(s) (initial=${initialInsertedCount}, fallback=${inserted-initialInsertedCount})`);
 
     // Redémarrer le monitoring en arrière-plan pour prendre en compte le nouveau dossier
     if (global.unifiedMonitoringService) {
@@ -1773,7 +1840,7 @@ ipcMain.handle('api-folders-add', async (event, { folderPath, category }) => {
       message: `Dossier ajouté (avec sous-dossiers): ${inserted} élément(s)` ,
       folderPath: folderPath,
       category: category,
-      count: inserted,
+  count: inserted,
       durationMs: Date.now() - startedAt,
       debug: { phases: debugPhases, sample: toInsertDebugSample }
     };

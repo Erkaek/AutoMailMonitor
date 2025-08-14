@@ -1810,7 +1810,97 @@ class OutlookConnector extends EventEmitter {
       return [];
     }
   }
-}
+  /**
+   * Build (or return cached) full folder tree for all stores via COM only.
+   * Depth guard + timeout.
+   * @param {object} opts
+   * @param {number} [opts.maxDepth]
+   * @param {boolean} [opts.forceRefresh]
+   * @returns {Promise<object>} cached object
+   */
+  async getAllStoresAndTreeViaCOM(opts = {}) {
+    const started = Date.now();
+    const maxDepth = Number(opts.maxDepth || this.settings?.outlook?.maxEnumerationDepth || 6);
+    if (!opts.forceRefresh && this._fullComTree && (Date.now() - this._fullComTree.builtAt) < this._fullComTreeTtlMs) {
+      console.log('♻️ [COM-TREE] Cache hit');
+      return this._fullComTree;
+    }
+    console.log('⏳ [COM-TREE] Building full Outlook folder tree via COM…');
+    const ok = await this.ensureConnected();
+    if (!ok) throw new Error('Outlook non connecté');
+    const res = { builtAt: Date.now(), ttlMs: this._fullComTreeTtlMs, stores: [], foldersByStore: {}, index: { byPath: new Map(), byId: new Map() } };
+    try {
+      const script = `
+        $enc = New-Object System.Text.UTF8Encoding $false; [Console]::OutputEncoding = $enc; $OutputEncoding=$enc
+        $outlook = New-Object -ComObject Outlook.Application
+        $ns = $outlook.GetNamespace('MAPI')
+        $stores = @()
+        foreach ($st in $ns.Stores) {
+          try {
+            $name = $st.DisplayName
+            $stype = 0; try { $stype = [int]$st.ExchangeStoreType } catch {}
+            $isDefault = $false; try { if ($st -eq $ns.DefaultStore) { $isDefault = $true } } catch {}
+            $smtp = $null
+            try { $accounts = $outlook.Session.Accounts; foreach ($acc in $accounts) { if ($acc.DisplayName -eq $name -or $name -like "*$($acc.DisplayName)*") { if ($acc.SmtpAddress) { $smtp = $acc.SmtpAddress; break } } } } catch {}
+            $stores += @{ Name=$name; StoreID=$st.StoreID; ExchangeStoreType=$stype; IsDefault=$isDefault; SmtpAddress=$smtp }
+          } catch {}
+        }
+        $result = @{ success=$true; stores=$stores } | ConvertTo-Json -Depth 10 -Compress
+        Write-Output $result
+      `;
+      const storeExec = await this.executePowerShellScript(script, 60000);
+      if (!storeExec.success) throw new Error(storeExec.error || 'Échec récupération stores');
+      const parsed = OutlookConnector.parseJsonOutput(storeExec.output) || {};
+      const stores = Array.isArray(parsed.stores) ? parsed.stores : [];
+      res.stores = stores;
+      // For each store, enumerate tree with depth guard
+      for (const st of stores) {
+        const safeStoreId = String(st.StoreID || '').replace(/`/g,'``').replace(/"/g,'\"');
+        const treeScript = `
+          $enc = New-Object System.Text.UTF8Encoding $false; [Console]::OutputEncoding = $enc; $OutputEncoding=$enc
+          $outlook = New-Object -ComObject Outlook.Application
+          $ns = $outlook.GetNamespace('MAPI')
+          $target = $null; foreach ($s in $ns.Stores) { if ($s.StoreID -eq "${safeStoreId}") { $target=$s; break } }
+          if (-not $target) { $target = $ns.DefaultStore }
+          $root = $target.GetRootFolder()
+          $result = @()
+          function Add-Folder($f,$depth){
+            if ($depth -gt ${maxDepth}) { return }
+            $childCount = 0; try { $childCount = $f.Folders.Count } catch {}
+            $entry = @{ Name=$f.Name; EntryID=$f.EntryID; Path=$f.FolderPath; ChildCount=$childCount; Depth=$depth }
+            $result += $entry
+            if ($childCount -gt 0) {
+              foreach ($sf in $f.Folders) { Add-Folder -f $sf -depth ($depth+1) }
+            }
+          }
+          Add-Folder -f $root -depth 0
+          @{ success=$true; folders=$result } | ConvertTo-Json -Depth 12 -Compress | Write-Output
+        `;
+        const treeExec = await this.executePowerShellScript(treeScript, 120000);
+        if (!treeExec.success) { console.warn('[COM-TREE] Échec store', st.Name, treeExec.error); continue; }
+        const treeParsed = OutlookConnector.parseJsonOutput(treeExec.output) || {};
+        const folders = Array.isArray(treeParsed.folders) ? treeParsed.folders : [];
+        const map = {};
+        for (const f of folders) {
+          const id = f.EntryID || `${st.StoreID}:${f.Path}`;
+          const canonicalPath = `${st.Name}\\${f.Path?.split('\\').slice(1).join('\\') || ''}`.replace(/\\+/g,'\\');
+          map[id] = { id, name: f.Name, path: canonicalPath.startsWith(st.Name) ? canonicalPath : `${st.Name}\\${f.Name}`, entryId: f.EntryID, depth: f.Depth, childCount: f.ChildCount };
+          res.index.byId.set(id, map[id]);
+          res.index.byPath.set(map[id].path.toLowerCase(), map[id]);
+        }
+        res.foldersByStore[st.StoreID] = map;
+      }
+      this._fullComTree = res;
+      const dur = Date.now() - started;
+      console.log(`✅ [COM-TREE] Build complet en ${dur}ms (stores=${res.stores.length})`);
+      return res;
+    } catch (e) {
+      console.error('❌ [COM-TREE] Erreur build:', e.message);
+      throw e;
+    }
+  }
+
+} // end class OutlookConnector
 
 // Export singleton
 const outlookConnector = new OutlookConnector();
