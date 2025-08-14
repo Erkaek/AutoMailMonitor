@@ -1185,7 +1185,37 @@ ipcMain.handle('api-folders-add', async (event, { folderPath, category }) => {
       const tree = await outlookConnector2.getAllStoresAndTreeViaCOM({ forceRefresh: false });
       if (tree && tree.index && tree.index.byPath) {
         const lowerBase = String(folderPath).toLowerCase();
-        const baseNode = tree.index.byPath.get(lowerBase) || null;
+        let baseNode = tree.index.byPath.get(lowerBase) || null;
+        // Fallback: tenter de retrouver un noeud même si le segment Inbox localisé manque dans folderPath fourni
+        if (!baseNode) {
+          try {
+            const partsUser = String(folderPath).split('\\');
+            const mailboxUser = (partsUser[0] || '').toLowerCase();
+            const tailUserNorm = partsUser.slice(1).map(s => s.normalize('NFD').replace(/\p{Diacritic}/gu,'').toLowerCase().trim());
+            const isInboxLike = (s) => {
+              const n = String(s||'').normalize('NFD').replace(/\p{Diacritic}/gu,'').toLowerCase();
+              return n === 'inbox' || n.includes('boite') || n.includes('reception');
+            };
+            for (const [p, node] of tree.index.byPath.entries()) {
+              if (baseNode) break;
+              const segs = p.split('\\');
+              if (!segs.length) continue;
+              const mailboxSeg = segs[0].toLowerCase();
+              if (mailboxSeg !== mailboxUser) continue;
+              const tailSegsNorm = segs.slice(1).map(s => s.normalize('NFD').replace(/\p{Diacritic}/gu,'').toLowerCase().trim());
+              // Cas 1: taille identique et correspondance segment par segment
+              let match = tailSegsNorm.length === tailUserNorm.length && tailSegsNorm.every((v,i)=> v === tailUserNorm[i]);
+              // Cas 2: tailSegs a un segment supplémentaire en tête qui est Inbox-like
+              if (!match && tailSegsNorm.length === tailUserNorm.length + 1 && isInboxLike(tailSegsNorm[0])) {
+                match = tailSegsNorm.slice(1).every((v,i)=> v === tailUserNorm[i]);
+              }
+              if (match) baseNode = node;
+            }
+            if (baseNode) {
+              debugPhases.push('structure-empty-com-fallback-variant-match');
+            }
+          } catch { /* ignore */ }
+        }
         if (baseNode) {
           if (!seen.has(baseNode.path)) {
             seen.add(baseNode.path);
@@ -1795,8 +1825,35 @@ ipcMain.handle('api-folders-add', async (event, { folderPath, category }) => {
         const tree = await outlookConnector2.getAllStoresAndTreeViaCOM({ forceRefresh: false });
         if (!tree || !tree.index || !tree.index.byPath) throw new Error('Arbre COM indisponible');
         const lowerBase = String(folderPath).toLowerCase();
-        // Chercher nœud de base (exact ou commençant par)
-        const baseNode = tree.index.byPath.get(lowerBase) || null;
+        // Chercher nœud de base (exact ou commençant par) avec logique de variante Inbox
+        let baseNode = tree.index.byPath.get(lowerBase) || null;
+        if (!baseNode) {
+          try {
+            const partsUser = String(folderPath).split('\\');
+            const mailboxUser = (partsUser[0] || '').toLowerCase();
+            const tailUserNorm = partsUser.slice(1).map(s => s.normalize('NFD').replace(/\p{Diacritic}/gu,'').toLowerCase().trim());
+            const isInboxLike = (s) => {
+              const n = String(s||'').normalize('NFD').replace(/\p{Diacritic}/gu,'').toLowerCase();
+              return n === 'inbox' || n.includes('boite') || n.includes('reception');
+            };
+            for (const [p, node] of tree.index.byPath.entries()) {
+              if (baseNode) break;
+              const segs = p.split('\\');
+              if (!segs.length) continue;
+              const mailboxSeg = segs[0].toLowerCase();
+              if (mailboxSeg !== mailboxUser) continue;
+              const tailSegsNorm = segs.slice(1).map(s => s.normalize('NFD').replace(/\p{Diacritic}/gu,'').toLowerCase().trim());
+              let match = tailSegsNorm.length === tailUserNorm.length && tailSegsNorm.every((v,i)=> v === tailUserNorm[i]);
+              if (!match && tailSegsNorm.length === tailUserNorm.length + 1 && isInboxLike(tailSegsNorm[0])) {
+                match = tailSegsNorm.slice(1).every((v,i)=> v === tailUserNorm[i]);
+              }
+              if (match) baseNode = node;
+            }
+            if (baseNode) {
+              debugPhases.push('com-tree-fallback-variant-match');
+            }
+          } catch { /* ignore */ }
+        }
         if (baseNode) {
           // Insérer tous les descendants sous ce path (paths commençant par base path + '\\')
           let added = 0;
