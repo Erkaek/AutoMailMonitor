@@ -41,6 +41,16 @@ class OutlookConnector extends EventEmitter {
     
     // Auto-connexion
     this.autoConnect();
+
+  // New settings defaults (can be overridden by app settings loader elsewhere)
+  this.settings = this.settings || {};
+  this.settings.outlook = Object.assign({ maxEnumerationDepth: 6 }, this.settings.outlook || {});
+  this.settings.exchange = Object.assign({ timeoutMs: 180000, retry: { maxAttempts: 3, backoff: 'exponential' }, ewsUrlOverride: '' }, this.settings.exchange || {});
+
+  // Full COM tree cache + EWS invalid tracking
+  this._fullComTree = null;
+  this._fullComTreeTtlMs = 120000; // 2 minutes
+  this._ewsInvalid = this._ewsInvalid || new Set();
   }
 
   // Robust JSON extraction from potentially noisy PowerShell output
@@ -549,6 +559,17 @@ class OutlookConnector extends EventEmitter {
       if (mailboxes.length > 0) {
         this.lastMailboxes = mailboxes;
         this.lastMailboxesAt = Date.now();
+        // Marquer les stores partagés sans SMTP comme COM-only (pas d'EWS / autodiscover)
+        for (const mb of mailboxes) {
+          try {
+            if ((mb.ExchangeStoreType !== 0) && !mb.SmtpAddress) {
+              if (!this._ewsInvalid.has(mb.Name)) {
+                this._ewsInvalid.add(mb.Name);
+                console.warn(`🔐 [COM-ONLY] Store partagé sans SMTP: ${mb.Name} -> EWS ignoré (COM uniquement)`);
+              }
+            }
+          } catch {}
+        }
       }
 
       return mailboxes;
@@ -1552,49 +1573,47 @@ class OutlookConnector extends EventEmitter {
    * Exécuter un script PowerShell
    */
   async executePowerShellScript(script, timeout = 15000, opts = {}) {
-    try {
-      // console.log(`🔧 [DEBUG] Exécution PowerShell - Longueur script: ${script.length} caractères`);
-      
-      // Pour les scripts longs, créer un fichier temporaire
-      const fs = require('fs');
-      const path = require('path');
-      const tempDir = require('os').tmpdir();
-      const tempFile = path.join(tempDir, `outlook_script_${Date.now()}.ps1`);
-      
-      // Écrire le script dans un fichier temporaire avec UTF-8 BOM
-      const BOM = '\uFEFF';
-      fs.writeFileSync(tempFile, BOM + script, { encoding: 'utf8' });
-      // console.log(`📄 [DEBUG] Script temporaire: ${tempFile}`);
-      
-  // Choisir l'exécutable PowerShell (64-bit par défaut, fallback 32-bit en option)
-  const winDir = process.env.WINDIR || 'C:\\Windows';
-  const pwsh32 = `${winDir}\\SysWOW64\\WindowsPowerShell\\v1.0\\powershell.exe`;
-  const pwsh64 = `${winDir}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe`;
-
-  const command = opts.force32Bit ? pwsh32 : pwsh64;
-  const result = await this.executeCommand(command, ['-NoProfile','-STA','-ExecutionPolicy','Bypass','-File', tempFile], timeout);
-      
-      // Nettoyer le fichier temporaire
+    const attempts = this.settings?.exchange?.retry?.maxAttempts || 3;
+    const baseTimeout = timeout || this.settings?.exchange?.timeoutMs || 180000;
+    const startedAll = Date.now();
+    let lastErr = null;
+    for (let i = 0; i < attempts; i++) {
+      const attemptTimeout = (this.settings?.exchange?.retry?.backoff === 'exponential') ? baseTimeout * Math.pow(2, i) : baseTimeout;
+      const attemptStart = Date.now();
       try {
-        fs.unlinkSync(tempFile);
-      } catch (e) {
-        console.warn(`⚠️ Impossible de supprimer le fichier temporaire: ${tempFile}`);
+        const fs = require('fs');
+        const path = require('path');
+        const tempDir = require('os').tmpdir();
+        const tempFile = path.join(tempDir, `outlook_script_${Date.now()}_${i}.ps1`);
+        const BOM = '\uFEFF';
+        fs.writeFileSync(tempFile, BOM + script, { encoding: 'utf8' });
+        const winDir = process.env.WINDIR || 'C:\\Windows';
+        const pwsh32 = `${winDir}\\SysWOW64\\WindowsPowerShell\\v1.0\\powershell.exe`;
+        const pwsh64 = `${winDir}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe`;
+        const command = opts.force32Bit ? pwsh32 : pwsh64;
+        const result = await this.executeCommand(command, ['-NoProfile','-ExecutionPolicy','Bypass','-File', tempFile], attemptTimeout);
+        try { fs.unlinkSync(tempFile); } catch {}
+        console.log(`⚙️ [PS] Attempt ${i+1}/${attempts} ok in ${Date.now()-attemptStart}ms`);
+        return result;
+      } catch (error) {
+        lastErr = error;
+        const msg = error?.message || '';
+        // Detect timeout (exec throws) or code null
+        const structured = { success: false, error: msg, code: null };
+        if (/ETIMEDOUT|timeout/i.test(msg) || /code null/.test(msg)) {
+          structured.code = 'PS_TIMEOUT';
+          structured.step = opts.step || 'powershell';
+          structured.durationMs = Date.now() - attemptStart;
+          console.warn(`⏱️ [PS] Timeout/échec tentative ${i+1}/${attempts} (${structured.durationMs}ms)`);
+        } else {
+          console.warn(`⚠️ [PS] Erreur tentative ${i+1}/${attempts}: ${msg}`);
+        }
+        if (i === attempts - 1) {
+          return structured;
+        }
       }
-      
-      console.log(`✅ [DEBUG] PowerShell terminé - Success: ${result.success}`);
-      if (result.output) {
-        // console.log(`📄 [DEBUG] Output length: ${result.output.length} chars`);
-        // console.log(`📄 [DEBUG] First 500 chars: ${result.output.substring(0, 500)}`);
-      }
-      if (result.error) {
-        console.log(`❌ [DEBUG] Error: ${result.error}`);
-      }
-      
-  return result;
-    } catch (error) {
-      console.error(`❌ [DEBUG] Exception PowerShell: ${error.message}`);
-      return { success: false, error: error.message };
     }
+    return { success: false, error: lastErr?.message || 'Unknown PS failure', code: 'PS_FAILED', totalDurationMs: Date.now() - startedAll };
   }
 
   /**
@@ -1700,7 +1719,16 @@ class OutlookConnector extends EventEmitter {
     this._ewsFailures = this._ewsFailures || 0;
     this._ewsInvalid = this._ewsInvalid || new Set();
     this._ewsAliasMap = this._ewsAliasMap || {};
+    // Si déjà marqué COM-only, court-circuit
+    if (this._ewsInvalid.has(mailbox)) {
+      console.warn(`[EWS-SKIP] ${mailbox} marqué COM-only (smtp nul / shared) -> pas d'autodiscover`);
+      return [];
+    }
     if (!this.isLikelyEmail(mailbox)) {
+      // Si le displayName correspond à un store partagé marqué invalid → ne pas tenter guesses
+      if (this._ewsInvalid.has(mailbox)) {
+        return [];
+      }
       const guesses = this.guessMailboxEmails(mailbox);
       if (guesses.length) {
         console.warn(`ℹ️ Guesses EWS pour ${mailbox}: ${guesses.join(', ')}`);

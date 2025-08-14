@@ -1178,7 +1178,44 @@ ipcMain.handle('api-folders-add', async (event, { folderPath, category }) => {
   // 2) Obtenir la mailbox (affichage + SMTP) pour normaliser les chemins
   const mailboxes = await outlookConnector.getFolderStructure?.(storeId);
   const mb = Array.isArray(mailboxes) ? mailboxes[0] : null;
-  if (!mb) throw new Error('Structure de dossier non disponible');
+  if (!mb) {
+    debugPhases.push('structure-empty-com-fallback');
+    try {
+      const outlookConnector2 = require('../server/outlookConnector');
+      const tree = await outlookConnector2.getAllStoresAndTreeViaCOM({ forceRefresh: false });
+      if (tree && tree.index && tree.index.byPath) {
+        const lowerBase = String(folderPath).toLowerCase();
+        const baseNode = tree.index.byPath.get(lowerBase) || null;
+        if (baseNode) {
+          if (!seen.has(baseNode.path)) {
+            seen.add(baseNode.path);
+            toInsert.push({ path: baseNode.path, name: baseNode.name || extractFolderName(baseNode.path) });
+          }
+          let added = 0;
+          for (const [p, node] of tree.index.byPath.entries()) {
+            if (p === lowerBase) continue;
+            if (p.startsWith(lowerBase + '\\')) {
+              if (!seen.has(node.path)) {
+                seen.add(node.path);
+                toInsert.push({ path: node.path, name: node.name || extractFolderName(node.path) });
+                added++;
+                if (toInsertDebugSample.length < 10) toInsertDebugSample.push(node.path);
+              }
+            }
+          }
+          debugPhases.push(`structure-empty-com-fallback-added-${added}`);
+        } else {
+          debugPhases.push('structure-empty-com-notfound');
+        }
+      }
+    } catch (e) {
+      console.warn('[ADD][COM-FALLBACK] échec:', e.message || e);
+      debugPhases.push('structure-empty-com-error');
+    }
+    if (toInsert.length === 0) {
+      throw new Error('Structure de dossier non disponible');
+    }
+  }
   const mailboxDisplay = mb?.Name || mailboxName;
   const mailboxSmtp = mb?.SmtpAddress || '';
   // Tenter de récupérer le nom localisé de l'Inbox depuis la structure
