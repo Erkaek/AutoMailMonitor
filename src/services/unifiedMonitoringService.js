@@ -178,9 +178,16 @@ class UnifiedMonitoringService extends EventEmitter {
     /**
      * Chargement des dossiers configurés pour le monitoring
      */
-    async loadMonitoredFolders() {
+    async loadMonitoredFolders(options = {}) {
+        const { force = false } = options;
         try {
             this.log('📁 Chargement des dossiers configurés...', 'CONFIG');
+
+            // Option pour forcer l'invalidation du cache (surveillance config)
+            if (force && this.dbService && this.dbService.cache) {
+                try { this.dbService.cache.del('folders_config'); } catch {}
+            }
+
             const foldersConfig = await this.dbService.getFoldersConfiguration();
             
             // Calculer le hash de la nouvelle configuration
@@ -191,8 +198,7 @@ class UnifiedMonitoringService extends EventEmitter {
                 this.monitoredFolders = foldersConfig.filter(folder => 
                     folder && 
                     (folder.folder_path || folder.folder_name || folder.path) &&
-                    (folder.folder_name !== 'folderCategories') &&
-                    folder.category // S'assurer qu'une catégorie est définie
+                    (folder.folder_name !== 'folderCategories')
                 ).map(folder => {
                     // Debug réduit: afficher seulement l'essentiel et éviter undefined
                     if (this.config.enableDetailedLogging) {
@@ -204,7 +210,7 @@ class UnifiedMonitoringService extends EventEmitter {
                     const resolvedPath = (folder.folder_path || folder.path || folder.folder_name || '').replace(/\\/g, '\\');
                     const mapped = {
                         path: resolvedPath,
-                        category: folder.category,
+                        category: folder.category || 'Mails simples',
                         name: folder.folder_name || folder.name || resolvedPath.split('\\').pop() || '',
                         enabled: true
                     };
@@ -251,8 +257,12 @@ class UnifiedMonitoringService extends EventEmitter {
         // Créer une signature basée sur les chemins et catégories
         const signature = foldersConfig
             .filter(folder => folder && (folder.folder_path || folder.folder_name || folder.path))
-            .map(folder => `${folder.folder_path || folder.folder_name || folder.path}:${folder.category}`)
-            .sort()
+            .map(folder => {
+                const p = (folder.folder_path || folder.folder_name || folder.path || '').trim().toLowerCase();
+                const c = (folder.category || 'Mails simples').trim().toLowerCase();
+                return `${p}:${c}`;
+            })
+            .sort((a,b) => a.localeCompare(b))
             .join('|');
             
         return signature;
@@ -364,7 +374,7 @@ class UnifiedMonitoringService extends EventEmitter {
         if (this.lastConfigCheck && now - this.lastConfigCheck < 10000) return;
         this.lastConfigCheck = now;
         try {
-            const configChanged = await this.loadMonitoredFolders();
+        const configChanged = await this.loadMonitoredFolders({ force: true });
             if (configChanged) {
                 this.log('🔔 Configuration des dossiers modifiée détectée', 'CONFIG');
                 this.emit('configuration-changed', {
@@ -376,25 +386,7 @@ class UnifiedMonitoringService extends EventEmitter {
             this.log(`❌ Erreur vérification configuration: ${error.message}`, 'ERROR');
         }
     }
-
-    /**
-     * Redémarrer le monitoring avec la nouvelle configuration
-     */
-    async restartMonitoring() {
-        try {
-            this.log('🔄 Redémarrage du monitoring avec nouvelle configuration...', 'RESTART');
-            
-            if (this.isMonitoring) {
-                await this.stopRealtimeMonitoring();
-                await this.sleep(1000); // Attendre un peu
-                await this.startRealtimeMonitoring();
-            }
-            
-            this.log('✅ Monitoring redémarré avec succès', 'RESTART');
-        } catch (error) {
-            this.log(`❌ Erreur redémarrage monitoring: ${error.message}`, 'ERROR');
-        }
-    }
+    // NOTE: La méthode comprehensive restartMonitoring est définie plus haut.
 
     /**
      * Démarrage du monitoring
