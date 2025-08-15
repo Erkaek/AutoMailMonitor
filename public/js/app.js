@@ -1505,15 +1505,30 @@ class MailMonitor {
             try {
               // COM rapide (Inbox shallow)
               let nodes = [];
+              let diagMsg = '';
               try {
                 const res = await window.electronAPI.olFoldersShallow(mb?.StoreID || '', '');
                 if (res && res.ok) {
-                  const arr = Array.isArray(res.data) ? res.data : (res.data?.folders || []);
-                  if (Array.isArray(arr)) {
-                    nodes = arr.map(n => ({ Name: n.Name, Id: n.EntryId, ChildCount: n.ChildCount }));
+                  const payload = res.data;
+                  const arr = Array.isArray(payload) ? payload : (payload?.folders || []);
+                  if (Array.isArray(arr)) nodes = arr.map(n => ({ Name: n.Name, Id: n.EntryId, ChildCount: n.ChildCount }));
+                  if (!nodes.length && payload && payload.error) diagMsg = payload.error;
+                  if (payload && payload.storesDiag && payload.storesDiag.length) {
+                    diagMsg += ' | Stores:' + payload.storesDiag.map(s=>s.DisplayName).join(', ');
+                  }
+                  // Fallback: si store non trouvé et on a un displayName != StoreID, retenter avec displayName
+                  if (!nodes.length && payload && payload.error && mb?.Name && mb?.Name !== mb?.StoreID) {
+                    try {
+                      const retry = await window.electronAPI.olFoldersShallow(mb.Name, '');
+                      const arr2 = Array.isArray(retry?.data) ? retry.data : (retry?.data?.folders || []);
+                      if (Array.isArray(arr2) && arr2.length) {
+                        nodes = arr2.map(n => ({ Name: n.Name, Id: n.EntryId, ChildCount: n.ChildCount }));
+                        diagMsg = ''; // Réussi
+                      }
+                    } catch(_) {}
                   }
                 }
-              } catch {}
+              } catch(e){ diagMsg = e?.message || 'Erreur inconnue'; }
               if (!nodes.length) {
                 // Fallback EWS
                 try {
@@ -1525,7 +1540,8 @@ class MailMonitor {
                 }
               }
               if (!nodes.length) {
-                folderTree.innerHTML = '<div class="text-warning"><i class="bi bi-info-circle me-2"></i>Aucun dossier trouvé</div>';
+                const safeDiag = diagMsg ? `<br/><small class="text-muted">${this.escapeHtml(diagMsg)}</small>` : '';
+                folderTree.innerHTML = `<div class="text-warning"><i class="bi bi-info-circle me-2"></i>Aucun dossier trouvé${safeDiag}</div>`;
                 return;
               }
               // Adapter data pour createFolderTree

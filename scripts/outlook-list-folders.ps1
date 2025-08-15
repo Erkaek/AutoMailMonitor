@@ -1,6 +1,7 @@
 param(
   [Parameter(Mandatory=$true)][string]$StoreId,
-  [string]$ParentEntryId
+  [string]$ParentEntryId,
+  [switch]$LooseMatch
 )
 
 $ErrorActionPreference = 'Stop'
@@ -11,6 +12,8 @@ $enc = New-Object System.Text.UTF8Encoding $false
 $OutputEncoding = $enc
 
 try {
+  # Normaliser / trim du StoreId reçu (élimine espaces accidentels)
+  try { if ($StoreId) { $StoreId = $StoreId.Trim() } } catch {}
   try { Add-Type -AssemblyName Microsoft.Office.Interop.Outlook | Out-Null } catch {}
   $olApp = New-Object -ComObject Outlook.Application
   $session = $olApp.Session
@@ -18,27 +21,33 @@ try {
   # Constante Inbox
   $olFolderInbox = 6
 
-  # Trouver le Store
+  # ===================== Résolution robuste du Store =====================
   $target = $null
-  foreach ($st in $session.Stores) {
-    try { if ($st.StoreID -eq $StoreId) { $target = $st; break } } catch {}
-  }
-  # Fallback: si pas trouvé par EntryID, tenter par DisplayName (égalité stricte puis inclusif)
-  if (-not $target -and $StoreId) {
+
+  # 1) Match exact StoreID
+  foreach ($st in $session.Stores) { try { if ($st.StoreID -eq $StoreId) { $target = $st; break } } catch {} }
+
+  # 2) Match loose sur début / inclusion si option ou pas trouvé
+  if (-not $target) {
     foreach ($st in $session.Stores) {
       try {
-        if ($st.DisplayName -eq $StoreId) { $target = $st; break }
+        $sid = $st.StoreID
+        if ($sid -and ($sid.StartsWith($StoreId) -or $StoreId.StartsWith($sid) -or $sid -like "*${StoreId}*")) { $target = $st; break }
       } catch {}
     }
   }
-  if (-not $target -and $StoreId) {
-    foreach ($st in $session.Stores) {
-      try {
-        if ($st.DisplayName -like "*${StoreId}*") { $target = $st; break }
-      } catch {}
-    }
+
+  # 3) DisplayName exact
+  if (-not $target) {
+    foreach ($st in $session.Stores) { try { if ($st.DisplayName -eq $StoreId) { $target = $st; break } } catch {} }
   }
-  # Fallback: si $StoreId ressemble à un SMTP, mapper via Accounts.DeliveryStore
+
+  # 4) DisplayName contenant
+  if (-not $target) {
+    foreach ($st in $session.Stores) { try { if ($st.DisplayName -like "*${StoreId}*") { $target = $st; break } } catch {} }
+  }
+
+  # 5) SMTP -> DeliveryStore
   if (-not $target -and $StoreId -and $StoreId.Contains('@')) {
     try {
       foreach ($acc in $session.Accounts) {
@@ -51,7 +60,27 @@ try {
       }
     } catch {}
   }
-  if (-not $target) { throw "Store non trouvé" }
+
+  # 6) Si toujours pas trouvé: construire payload diagnostique et retourner liste vide au lieu d'erreur dure
+  if (-not $target) {
+    $storesDiag = @()
+    foreach ($st in $session.Stores) {
+      try {
+        $storesDiag += [pscustomobject]@{ DisplayName=$st.DisplayName; StoreId=($st.StoreID.Substring(0,120)); Len=$st.StoreID.Length }
+      } catch {}
+    }
+    $payload = [pscustomobject]@{
+      StoreId       = $StoreId
+      ParentEntryId = $ParentEntryId
+      ParentName    = $null
+      Folders       = @()
+      Error         = 'Store non trouvé'
+      StoresDiag    = $storesDiag
+    }
+    $json = $payload | ConvertTo-Json -Depth 6 -Compress
+    [Console]::Out.Write($json)
+    exit 0
+  }
 
   # Déterminer le parent: Inbox du store si ParentEntryId vide, sinon GetFolderFromID
   if ([string]::IsNullOrEmpty($ParentEntryId)) {

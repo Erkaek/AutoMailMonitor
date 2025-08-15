@@ -97,6 +97,10 @@ async function listFoldersShallow(storeId, parentEntryId = '') {
   const raw = await runPwshFallback(args, 20000);
   try {
     const data = raw ? JSON.parse(raw) : null;
+    if (data && data.Error) {
+      // Pass through diagnostic payload so UI can show reason
+      return { parentName: data.ParentName || null, folders: data.Folders || [], error: data.Error, storesDiag: data.StoresDiag };
+    }
     // Return the whole payload so caller can access ParentName, but keep backward compatibility
     if (data && Array.isArray(data.Folders)) {
       return { parentName: data.ParentName || null, folders: data.Folders };

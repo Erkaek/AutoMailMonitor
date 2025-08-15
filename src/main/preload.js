@@ -34,6 +34,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // API Settings
   saveFoldersConfig: (data) => ipcRenderer.invoke('api-settings-folders', data),
   loadFoldersConfig: () => ipcRenderer.invoke('api-settings-folders-load'),
+  dumpFoldersConfig: () => ipcRenderer.invoke('api-settings-folders-dump'),
   
   // API Gestion hiérarchique des dossiers (nouveau)
   getFoldersTree: () => ipcRenderer.invoke('api-folders-tree'),
