@@ -15,12 +15,41 @@ function pwshPath32() {
 }
 
 function resolveScript(name) {
-  const dev = path.join(process.cwd(), 'scripts', name);
-  if (fs.existsSync(dev)) return dev;
-  const resDir = (process.resourcesPath || process.cwd());
-  const prod = path.join(resDir, 'resources', 'scripts', name);
-  if (fs.existsSync(prod)) return prod;
-  return dev; // fallback
+  const candidates = [];
+  // ENV override (full path)
+  const envKey = name.toUpperCase().replace(/[^A-Z0-9]/g,'_');
+  if (process.env[envKey + '_PATH']) {
+    candidates.push(process.env[envKey + '_PATH']);
+  }
+  // Packaged resourcesPath patterns
+  const resDir = process.resourcesPath || '';
+  if (resDir) {
+    // Standard extraResources copy (scripts placed directly under resources)
+    candidates.push(path.join(resDir, 'scripts', name));
+    // Some builds might nest inside app.asar.unpacked
+    candidates.push(path.join(resDir, 'app.asar.unpacked', 'scripts', name));
+    candidates.push(path.join(resDir, 'app.asar.unpacked', 'resources', 'scripts', name));
+    // Defensive older pattern (resources/resources)
+    candidates.push(path.join(resDir, 'resources', 'scripts', name));
+  }
+  // Executable directory fallbacks
+  try {
+    const execDir = path.dirname(process.execPath || '');
+    candidates.push(path.join(execDir, 'resources', 'scripts', name));
+    candidates.push(path.join(execDir, 'scripts', name));
+  } catch {}
+  // Dev / cwd last
+  candidates.push(path.join(process.cwd(), 'scripts', name));
+
+  for (const c of candidates) {
+    try { if (c && fs.existsSync(c)) return c; } catch {}
+  }
+  // Emit diagnostic once
+  if (!resolveScript._warned) {
+    resolveScript._warned = true;
+    console.warn('[SCRIPT-RESOLVE] Introuvable', name, 'candidats essayés:', candidates.slice(0,8));
+  }
+  return candidates[candidates.length - 1];
 }
 
 function runPwshOnce(exePath, args, timeoutMs = 15000) {
@@ -62,7 +91,8 @@ async function listStores() {
 }
 
 async function listFoldersShallow(storeId, parentEntryId = '') {
-  const args = ['-File', resolveScript('outlook-list-folders.ps1'), '-StoreId', storeId];
+  const scriptPath = resolveScript('outlook-list-folders.ps1');
+  const args = ['-File', scriptPath, '-StoreId', storeId];
   if (parentEntryId) args.push('-ParentEntryId', parentEntryId);
   const raw = await runPwshFallback(args, 20000);
   try {
