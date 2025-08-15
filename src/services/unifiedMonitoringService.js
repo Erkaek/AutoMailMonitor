@@ -107,6 +107,17 @@ class UnifiedMonitoringService extends EventEmitter {
             
             // Charger les dossiers configurés
             await this.loadMonitoredFolders();
+            if (this.monitoredFolders.length === 0 && this.dbService && this.dbService.db) {
+                try {
+                    const rawRows = this.dbService.db.prepare('SELECT folder_path, category, folder_name FROM folder_configurations').all();
+                    if (rawRows.length > 0) {
+                        this.log(`⚠️ Aucune configuration détectée via cache mais ${rawRows.length} lignes en BDD -> rechargement forcé`, 'WARNING');
+                        await this.loadMonitoredFolders({ force: true });
+                    }
+                } catch (e) {
+                    this.log(`⚠️ Vérification directe table configs échouée: ${e.message}`, 'WARNING');
+                }
+            }
             
             // La surveillance de la configuration est gérée par startConfigWatcher()
             

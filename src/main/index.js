@@ -1045,6 +1045,18 @@ ipcMain.handle('api-settings-folders', async (event, data) => {
   }
 });
 
+// Diagnostic: dump direct des configurations de dossiers
+ipcMain.handle('api-settings-folders-dump', async () => {
+  try {
+    const databaseService = require('../services/optimizedDatabaseService');
+    await databaseService.initialize();
+    const rows = databaseService.debugDumpFolderConfigurations ? databaseService.debugDumpFolderConfigurations() : [];
+    return { success: true, rows };
+  } catch (e) {
+    return { success: false, error: e.message };
+  }
+});
+
 // === HANDLERS IPC POUR LA GESTION HIÉRARCHIQUE DES DOSSIERS ===
 
 // Récupérer l'arbre hiérarchique des dossiers

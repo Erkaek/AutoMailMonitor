@@ -710,6 +710,8 @@ class OptimizedDatabaseService {
      */
     saveFoldersConfiguration(payload) {
         this.cache.del('folders_config');
+        const debugStart = Date.now();
+        try { console.log('🛠️ [FOLDERS-CONFIG] Sauvegarde payload brut:', JSON.stringify(payload).slice(0,1000)); } catch {}
         const tx = this.db.transaction((rows) => {
             // Remplacer tout pour garder la source unique (UI) en cohérence
             this.db.prepare('DELETE FROM folder_configurations').run();
@@ -717,19 +719,24 @@ class OptimizedDatabaseService {
             for (const r of rows) {
                 const folderPath = r.folder_path || r.path || r.key || r.folderPath;
                 if (!folderPath) continue;
-                const category = this.normalizeCategory(r.category || '');
+                // Toujours appliquer une catégorie par défaut si absente
+                const categoryRaw = r.category || '';
+                const category = this.normalizeCategory(categoryRaw || 'Mails simples') || 'Mails simples';
                 const name = r.folder_name || r.name || String(folderPath).split('\\').pop();
-                if (!category) continue;
+                if (!category) {
+                    // Cela ne devrait plus arriver, mais log si vide
+                    console.warn('⚠️ [FOLDERS-CONFIG] Catégorie vide après normalisation, fallback Mails simples', folderPath);
+                }
                 insert.run(folderPath, category, name);
             }
         });
 
         // Normaliser payload en tableau de lignes
         let rows = [];
-    if (payload && typeof payload === 'object' && payload.folderCategories && typeof payload.folderCategories === 'object') {
+        if (payload && typeof payload === 'object' && payload.folderCategories && typeof payload.folderCategories === 'object') {
             rows = Object.entries(payload.folderCategories).map(([folder_path, cfg]) => ({
                 folder_path,
-        category: this.normalizeCategory(cfg?.category),
+                category: this.normalizeCategory(cfg?.category || 'Mails simples') || 'Mails simples',
                 folder_name: cfg?.name || String(folder_path).split('\\').pop()
             }));
         } else if (Array.isArray(payload)) {
@@ -739,7 +746,27 @@ class OptimizedDatabaseService {
         }
 
         tx(rows);
-        return { success: true, count: rows.length };
+        try {
+            const verify = this.db.prepare('SELECT folder_path, category, folder_name FROM folder_configurations').all();
+            console.log(`✅ [FOLDERS-CONFIG] ${verify.length} lignes enregistrées.`, verify.slice(0,10));
+        } catch (e) {
+            console.warn('⚠️ [FOLDERS-CONFIG] Vérification post-insert impossible:', e.message);
+        }
+        return { success: true, count: rows.length, durationMs: Date.now()-debugStart };
+    }
+
+    /**
+     * Diagnostic: dump rapide des configurations de dossiers (non mis en cache)
+     */
+    debugDumpFolderConfigurations() {
+        try {
+            const rows = this.db.prepare('SELECT folder_path, category, folder_name, created_at, updated_at FROM folder_configurations').all();
+            console.log('🧪 [FOLDERS-CONFIG][DUMP]', rows);
+            return rows;
+        } catch (e) {
+            console.error('❌ [FOLDERS-CONFIG] Dump impossible:', e.message);
+            return [];
+        }
     }
 
     /**
