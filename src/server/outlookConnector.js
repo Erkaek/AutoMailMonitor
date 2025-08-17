@@ -178,16 +178,19 @@ class OutlookConnector extends EventEmitter {
           foreach ($searchPath in $searchPaths) {
             if (Test-Path $searchPath) {
               $found = Get-ChildItem -Path $searchPath -Name "OUTLOOK.EXE" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
-              if ($found) {
-                $fullPath = Join-Path $searchPath $found
-                Write-Output $fullPath
-                exit 0
-              }
-            }
+              if ($inbox) {
+                $children = @()
+                foreach ($sf in $inbox.Folders) {
+                  # Filtre: ne garder que les enfants directs de l'Inbox contenant "11" dans le nom
+                  if ($sf.Name -like '*11*') {
+                    $childCount = 0; try { $childCount = $sf.Folders.Count } catch {}
+                    $children += @{ Name = $sf.Name; FolderPath = "$mailboxName\$($inbox.Name)\$($sf.Name)"; EntryID = $sf.EntryID; ChildCount = $childCount; SubFolders = @() }
+                  }
+                }
           }
           
           # Dernière tentative : chercher dans le PATH
-          $outlookInPath = Get-Command outlook.exe -ErrorAction SilentlyContinue
+                if ($inboxChilds -eq 0 -and $children.Count -eq 0) {
           if ($outlookInPath) {
             Write-Output $outlookInPath.Source
             exit 0
@@ -893,15 +896,23 @@ class OutlookConnector extends EventEmitter {
           }
 
           $children = @()
+          # Si le parent est l'Inbox (ou équivalent localisé), ne renvoyer que les enfants dont le nom contient "11"
+          $isInboxParent = $false
+          try {
+            $inboxRef = $store.GetDefaultFolder(6)
+            if ($inboxRef -ne $null -and $parent.EntryID -eq $inboxRef.EntryID) { $isInboxParent = $true }
+          } catch {}
+
           foreach ($sf in $parent.Folders) {
             $childCount = 0; try { $childCount = $sf.Folders.Count } catch {}
-            $path = Get-FolderDisplayPath -folder $sf -mailboxName $mbName -rootFolder $root
-            $children += @{
-              Name = $sf.Name
-              FolderPath = $path
-              EntryID = $sf.EntryID
-              ChildCount = $childCount
-              SubFolders = @()
+            if ($isInboxParent) {
+              if ($sf.Name -like '*11*') {
+                $path = Get-FolderDisplayPath -folder $sf -mailboxName $mbName -rootFolder $root
+                $children += @{ Name = $sf.Name; FolderPath = $path; EntryID = $sf.EntryID; ChildCount = $childCount; SubFolders = @() }
+              }
+            } else {
+              $path = Get-FolderDisplayPath -folder $sf -mailboxName $mbName -rootFolder $root
+              $children += @{ Name = $sf.Name; FolderPath = $path; EntryID = $sf.EntryID; ChildCount = $childCount; SubFolders = @() }
             }
           }
           $res = @{ success = $true; children = $children } | ConvertTo-Json -Depth 12 -Compress
