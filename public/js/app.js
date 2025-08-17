@@ -1503,32 +1503,46 @@ class MailMonitor {
             folderTree.dataset.storeId = mb?.StoreID || '';
             folderTree.innerHTML = '<div class="text-muted"><i class="bi bi-hourglass-split me-2"></i>Chargement…</div>';
             try {
-              // COM rapide (Inbox shallow)
+              // 1) COM structure complète (préserve boîtes partagées, Inbox localisée, et chemins d'affichage)
               let nodes = [];
               let diagMsg = '';
               try {
-                const res = await window.electronAPI.olFoldersShallow(mb?.StoreID || '', '');
-                if (res && res.ok) {
-                  const payload = res.data;
-                  const arr = Array.isArray(payload) ? payload : (payload?.folders || []);
-                  if (Array.isArray(arr)) nodes = arr.map(n => ({ Name: n.Name, Id: n.EntryId, ChildCount: n.ChildCount }));
-                  if (!nodes.length && payload && payload.error) diagMsg = payload.error;
-                  if (payload && payload.storesDiag && payload.storesDiag.length) {
-                    diagMsg += ' | Stores:' + payload.storesDiag.map(s=>s.DisplayName).join(', ');
-                  }
-                  // Fallback: si store non trouvé et on a un displayName != StoreID, retenter avec displayName
-                  if (!nodes.length && payload && payload.error && mb?.Name && mb?.Name !== mb?.StoreID) {
-                    try {
-                      const retry = await window.electronAPI.olFoldersShallow(mb.Name, '');
-                      const arr2 = Array.isArray(retry?.data) ? retry.data : (retry?.data?.folders || []);
-                      if (Array.isArray(arr2) && arr2.length) {
-                        nodes = arr2.map(n => ({ Name: n.Name, Id: n.EntryId, ChildCount: n.ChildCount }));
-                        diagMsg = ''; // Réussi
-                      }
-                    } catch(_) {}
-                  }
+                const struct = await window.electronAPI.getFolderStructure(mb?.StoreID || '');
+                if (struct && struct.success && Array.isArray(struct.folders) && struct.folders.length > 0) {
+                  const mailbox = struct.folders[0];
+                  const sub = Array.isArray(mailbox.SubFolders) ? mailbox.SubFolders : [];
+                  // Conserver la structure complète pour pouvoir rendre les sous-dossiers immédiatement
+                  nodes = sub;
                 }
               } catch(e){ diagMsg = e?.message || 'Erreur inconnue'; }
+              // 2) Fallback COM rapide (Inbox shallow)
+              if (!nodes.length) {
+                try {
+                  const res = await window.electronAPI.olFoldersShallow(mb?.StoreID || '', '');
+                  if (res && res.ok) {
+                    const payload = res.data;
+                    const arr = Array.isArray(payload) ? payload : (payload?.folders || []);
+                    if (Array.isArray(arr)) nodes = arr.map(n => ({ Name: n.Name, Id: n.EntryId, ChildCount: n.ChildCount }));
+                    // If COM shallow returned children of a known parent (e.g., Inbox), remember it
+                    var parentLabel = (payload && (payload.ParentName || payload.parentName)) ? String(payload.ParentName || payload.parentName) : '';
+                    if (!nodes.length && payload && payload.error) diagMsg = payload.error;
+                    if (payload && payload.storesDiag && payload.storesDiag.length) {
+                      diagMsg += ' | Stores:' + payload.storesDiag.map(s=>s.DisplayName).join(', ');
+                    }
+                    // Fallback: si store non trouvé et on a un displayName != StoreID, retenter avec displayName
+                    if (!nodes.length && payload && payload.error && mb?.Name && mb?.Name !== mb?.StoreID) {
+                      try {
+                        const retry = await window.electronAPI.olFoldersShallow(mb.Name, '');
+                        const arr2 = Array.isArray(retry?.data) ? retry.data : (retry?.data?.folders || []);
+                        if (Array.isArray(arr2) && arr2.length) {
+                          nodes = arr2.map(n => ({ Name: n.Name, Id: n.EntryId, ChildCount: n.ChildCount }));
+                          diagMsg = ''; // Réussi
+                        }
+                      } catch(_) {}
+                    }
+                  }
+                } catch(e){ diagMsg = e?.message || 'Erreur inconnue'; }
+              }
               if (!nodes.length) {
                 // Fallback EWS
                 try {
@@ -1544,15 +1558,29 @@ class MailMonitor {
                 folderTree.innerHTML = `<div class="text-warning"><i class="bi bi-info-circle me-2"></i>Aucun dossier trouvé${safeDiag}</div>`;
                 return;
               }
-              // Adapter data pour createFolderTree
-              const treeItems = nodes.map(n => ({
-                Name: n.Name,
-                // IMPORTANT: Utiliser le libellé d'affichage pour le chemin de sélection (préserve Inbox localisée)
-                FolderPath: `${mailboxDisplay}\\${n.Name}`,
-                EntryID: n.Id,
-                ChildCount: n.ChildCount,
-                SubFolders: []
-              }));
+              // Adapter data pour createFolderTree en préservant les sous-dossiers (COM)
+              const buildTreeItem = (node, parentDisplayPath) => {
+                const name = node.Name;
+                const entryId = node.Id || node.EntryID || node.EntryId || '';
+                const childCount = node.ChildCount || (Array.isArray(node.SubFolders) ? node.SubFolders.length : 0);
+                const rawPath = node.FolderPath || node.Path || '';
+                const folderPath = (rawPath && rawPath.startsWith(mailboxDisplay)) ? rawPath : `${parentDisplayPath}\\${name}`;
+                const children = Array.isArray(node.SubFolders) ? node.SubFolders.map(sf => buildTreeItem(sf, folderPath)) : [];
+                return { Name: name, FolderPath: folderPath, EntryID: entryId, ChildCount: childCount, SubFolders: children };
+              };
+              let treeItems = nodes.map(n => buildTreeItem(n, mailboxDisplay));
+              // If we know these nodes are direct children of the Inbox, wrap them under the Inbox parent
+              if (typeof parentLabel === 'string' && parentLabel.trim() && treeItems.length) {
+                const p = parentLabel.trim();
+                const children = treeItems;
+                treeItems = [{
+                  Name: p,
+                  FolderPath: `${mailboxDisplay}\\${p}`,
+                  EntryID: '',
+                  ChildCount: children.length,
+                  SubFolders: children
+                }];
+              }
               let html = '';
               for (const it of treeItems) html += this.createFolderTree(it, 0);
               folderTree.innerHTML = html;
@@ -1806,19 +1834,40 @@ class MailMonitor {
         } catch (_) {}
       }
       try {
-        // COM rapide d'abord
+        // COM structure complète d'abord (fonctionne pour boîtes partagées)
         let list = [];
   const diag = { mailbox: mailboxDisplay, storeId: storeId || '(inconnu)', errors: [] };
     // Conserver le storeId pour le lazy-load ultérieur
     folderTree.dataset.storeId = storeId || '';
         try {
-          const res = await window.electronAPI.olFoldersShallow(storeId, '');
-          if (res && res.ok) {
-            const arr = Array.isArray(res.data) ? res.data : (res.data?.folders || []);
-            if (Array.isArray(arr)) list = arr.map(n => ({ Name: n.Name, Id: n.EntryId, ChildCount: n.ChildCount }));
+          const struct = await window.electronAPI.getFolderStructure(storeId || '');
+          if (struct && struct.success && Array.isArray(struct.folders) && struct.folders.length > 0) {
+            const mailbox = struct.folders[0];
+            const sub = Array.isArray(mailbox.SubFolders) ? mailbox.SubFolders : [];
+            // Conserver la structure complète
+            list = sub;
           }
-          else if (res && res.ok === false) diag.errors.push(`COM: ${res.error || 'erreur inconnue'}`);
         } catch (e) { diag.errors.push(`COM: ${e?.message || String(e)}`); }
+        // Fallback COM rapide si nécessaire
+        if (!list.length) {
+          try {
+            const res = await window.electronAPI.olFoldersShallow(storeId, '');
+            if (res && res.ok) {
+              const arr = Array.isArray(res.data) ? res.data : (res.data?.folders || []);
+              if (Array.isArray(arr)) list = arr.map(n => ({ Name: n.Name, Id: n.EntryId, ChildCount: n.ChildCount }));
+              // If shallow includes a ParentName, remember and wrap later
+              var parentLabel2 = (res.data && (res.data.ParentName || res.data.parentName)) ? String(res.data.ParentName || res.data.parentName) : '';
+              if (!list.length && res.data && res.data.error) diag.errors.push(`COM: ${res.data.error}`);
+              // Post-process wrap under Inbox-equivalent if parentLabel2 is present and items exist
+              if (typeof parentLabel2 === 'string' && parentLabel2.trim() && list.length) {
+                const p = parentLabel2.trim();
+                const children = list;
+                list = [{ Name: p, Id: '', ChildCount: children.length, FolderPath: `${mailboxDisplay}\\${p}`, SubFolders: children }];
+              }
+            }
+            else if (res && res.ok === false) diag.errors.push(`COM: ${res.error || 'erreur inconnue'}`);
+          } catch (e) { diag.errors.push(`COM: ${e?.message || String(e)}`); }
+        }
         if (!list.length) {
           // Fallback EWS
           try {
@@ -1834,14 +1883,16 @@ class MailMonitor {
           folderTree.innerHTML = `<div class="text-warning"><i class="bi bi-info-circle me-2"></i>Aucun dossier trouvé pour cette boîte mail<br/><small>${ctx}</small>${errs}</div>`;
           return;
         }
-        const treeItems = list.map(n => ({
-          Name: n.Name,
-          // Use mailbox DISPLAY label (without SMTP) so localized Inbox stays in the path
-          FolderPath: `${mailboxDisplay}\\${n.Name}`,
-          EntryID: n.Id,
-          ChildCount: n.ChildCount,
-          SubFolders: []
-        }));
+        const buildTreeItem2 = (node, parentDisplayPath) => {
+          const name = node.Name;
+          const entryId = node.Id || node.EntryID || node.EntryId || '';
+          const childCount = node.ChildCount || (Array.isArray(node.SubFolders) ? node.SubFolders.length : 0);
+          const rawPath = node.FolderPath || node.Path || '';
+          const folderPath = (rawPath && rawPath.startsWith(mailboxDisplay)) ? rawPath : `${parentDisplayPath}\\${name}`;
+          const children = Array.isArray(node.SubFolders) ? node.SubFolders.map(sf => buildTreeItem2(sf, folderPath)) : [];
+          return { Name: name, FolderPath: folderPath, EntryID: entryId, ChildCount: childCount, SubFolders: children };
+        };
+        const treeItems = list.map(n => buildTreeItem2(n, mailboxDisplay));
         let html = '';
         for (const it of treeItems) html += this.createFolderTree(it, 0);
         folderTree.innerHTML = html;
@@ -1934,15 +1985,29 @@ class MailMonitor {
               targetDiv.innerHTML = '<div class="text-muted ms-4"><i class="bi bi-hourglass-split me-2"></i>Chargement…</div>';
               try {
                 let children = [];
+                const parentDisplayPath = folderLine.getAttribute('data-path') || '';
+                // 1) COM getSubFolders avec parentPath (précis pour boîtes partagées)
                 try {
                   if (storeId) {
-                    const r = await window.electronAPI.olFoldersShallow(storeId, parentEntryId);
-                    if (r && r.ok) {
-                      const arr = Array.isArray(r.data) ? r.data : (r.data?.folders || []);
-                      if (Array.isArray(arr)) children = arr.map(n => ({ Name: n.Name, Id: n.EntryId, ChildCount: n.ChildCount }));
+                    const res = await window.electronAPI.getSubFolders({ storeId, parentEntryId: parentEntryId || '', parentPath: parentDisplayPath || '' });
+                    if (res && res.success && Array.isArray(res.children)) {
+                      children = res.children.map(n => ({ Name: n.Name, Id: n.EntryID || n.EntryId || '', ChildCount: n.ChildCount || 0 }));
                     }
                   }
                 } catch {}
+                // 2) Fallback COM shallow par EntryID
+                if (!children.length) {
+                  try {
+                    if (storeId && parentEntryId) {
+                      const r = await window.electronAPI.olFoldersShallow(storeId, parentEntryId);
+                      if (r && r.ok) {
+                        const arr = Array.isArray(r.data) ? r.data : (r.data?.folders || []);
+                        if (Array.isArray(arr)) children = arr.map(n => ({ Name: n.Name, Id: n.EntryId, ChildCount: n.ChildCount }));
+                      }
+                    }
+                  } catch {}
+                }
+                // 3) Fallback EWS
                 if (!children.length) {
                   const ewsMailbox = (smtp && smtp.includes('@')) ? smtp : (document.getElementById('folder-tree')?.dataset.mailboxDisplay || mailbox);
                   const res = await window.electronAPI.ewsChildren(ewsMailbox, parentEntryId);

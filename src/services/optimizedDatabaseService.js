@@ -349,7 +349,7 @@ class OptimizedDatabaseService {
                 INSERT INTO emails 
                 (outlook_id, subject, sender_email, received_time, folder_name, 
                  category, is_read, is_treated, deleted_at, treated_at, week_identifier, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, CURRENT_TIMESTAMP)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
             `),
             // Mise à jour par outlook_id (sans toucher received_time ni week_identifier)
             updateEmailByOutlookId: this.db.prepare(`

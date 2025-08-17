@@ -8,7 +8,7 @@
 
 const path = require('path');
 const fs = require('fs');
-const XLSX = require('xlsx');
+const { execFileSync, spawnSync } = require('child_process');
 
 const CATS = [
   { key: 'Declarations', row: 7 },
@@ -161,11 +161,47 @@ function importActivityFromXlsb(filePath, options = {}) {
     throw new Error('Fichier d\'entrée introuvable');
   }
   const year = options.year || inferYearFromFilename(filePath);
-  const weeksFilter = parseWeeksFilter(options.weeks);
 
-  const wb = XLSX.read(fs.readFileSync(filePath), { type: 'buffer', WTF: false });
-  const { rows, skippedWeeks } = computeFromWorkbook(wb, { year, weeksFilter });
-  return { rows, skippedWeeks, year };
+  // 1) Try secure PowerShell + Excel COM path (no JS parsing of untrusted binary)
+  try {
+    const psPath = path.join(__dirname, '..', '..', 'scripts', 'import-xlsb.ps1');
+    if (fs.existsSync(psPath)) {
+      const args = ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', psPath, '-Path', filePath, '-Year', String(year)];
+      if (options.weeks) {
+        args.push('-Weeks', String(options.weeks));
+      }
+      const res = spawnSync('powershell.exe', args, {
+        encoding: 'utf8',
+        windowsHide: true,
+        timeout: 60_000
+      });
+      if (res.status === 0 && res.stdout) {
+        const parsed = JSON.parse(res.stdout.trim());
+        if (parsed && Array.isArray(parsed.rows)) return parsed;
+      } else if (res.stderr) {
+        // Fall through to sandboxed JS fallback
+        // console.warn('[XLSB PS] stderr:', res.stderr);
+      }
+    }
+  } catch (_) {
+    // ignore and fallback
+  }
+
+  // 2) Sandbox fallback: run parsing in a separate Node process to isolate any prototype pollution
+  //    Can be disabled with XLSB_IMPORT_DISABLE_JS=1 to require Excel COM path only
+  if (String(process.env.XLSB_IMPORT_DISABLE_JS || '').toLowerCase() === '1') {
+    throw new Error('Échec import XLSB via PowerShell et fallback JS désactivé (XLSB_IMPORT_DISABLE_JS=1)');
+  }
+  try {
+    const reader = path.join(__dirname, '..', '..', 'scripts', 'xlsb-safe-reader.js');
+    const args = [reader, filePath, String(options.weeks || ''), String(year)];
+    const out = execFileSync(process.execPath, args, { encoding: 'utf8', env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' } });
+    const parsed = JSON.parse(out.trim());
+    if (parsed && Array.isArray(parsed.rows)) return parsed;
+  } catch (e) {
+    // Last resort: propagate error with context
+    throw new Error('Échec import XLSB (PS et sandbox): ' + e.message);
+  }
 }
 
 function toCsv(rows) {

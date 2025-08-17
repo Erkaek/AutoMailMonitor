@@ -12,6 +12,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getMailboxes: () => ipcRenderer.invoke('api-outlook-mailboxes'),
   getFolderStructure: (storeId) => ipcRenderer.invoke('api-outlook-folder-structure', storeId),
   getSubFolders: (payload) => ipcRenderer.invoke('api-outlook-subfolders', payload),
+  listFoldersRecursive: (storeId, maxDepth) => ipcRenderer.invoke('api-outlook-folders-recursive', { storeId, maxDepth }),
   // EWS fast enumeration
   ewsTopLevel: (mailbox) => ipcRenderer.invoke('api-ews-top-level', { mailbox }),
   ewsChildren: (mailbox, parentId) => ipcRenderer.invoke('api-ews-children', { mailbox, parentId }),

@@ -636,7 +636,7 @@ class OutlookConnector extends EventEmitter {
           try {
             $inbox = $null
             # 1) Tenter via Store.GetDefaultFolder (Outlook 2010+)
-            try { $inbox = $target.GetDefaultFolder([Microsoft.Office.Interop.Outlook.OlDefaultFolders]::olFolderInbox) } catch {}
+            try { $inbox = $target.GetDefaultFolder(6) } catch {}
             # 2) Fallback: chercher par nom localisé (liste élargie)
             if (-not $inbox) {
               $inboxPattern = 'Inbox|Boite de reception|Boîte de réception|Courrier entrant|Posteingang|Posta in arrivo|Bandeja de entrada|Caixa de Entrada|Postvak IN|Indbakke|Inkorgen|Saapuneet|Skrzynka odbiorcza|Doručená pošta|Beérkezett üzenetek|Mesaje primite|Gelen Kutusu|Εισερχόμενα|Входящие|受信トレイ|收件箱|Вхідні'
@@ -1641,6 +1641,33 @@ class OutlookConnector extends EventEmitter {
     });
   }
 
+  async execPowerShellFile(filePath, args = [], timeout = 180000) {
+    const { spawn } = require('child_process');
+    const winDir = process.env.WINDIR || 'C:\\Windows';
+    const pwsh64 = path.join(winDir, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+    const pwsh32 = path.join(winDir, 'SysWOW64', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+    const runOnce = (exe) => new Promise((resolve, reject) => {
+      const proc = spawn(exe, ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-STA', '-File', filePath, ...args], { windowsHide: true });
+      let out = '', err = '';
+      const t = setTimeout(() => { try { proc.kill('SIGTERM'); } catch {} reject(new Error('PS file timeout')); }, timeout);
+      proc.stdout.on('data', d => out += d.toString());
+      proc.stderr.on('data', d => err += d.toString());
+      proc.on('exit', code => { clearTimeout(t); if (code === 0) resolve({ ok: true, out }); else reject(new Error(err || `PowerShell exited ${code}`)); });
+      proc.on('error', e => { clearTimeout(t); reject(e); });
+    });
+    try {
+      const r64 = await runOnce(pwsh64);
+      return r64.out;
+    } catch (e64) {
+      try {
+        const r32 = await runOnce(pwsh32);
+        return r32.out;
+      } catch (e32) {
+        throw e32 || e64;
+      }
+    }
+  }
+
   // Validation simple adresse email (pour éviter Autodiscover inutiles sur noms affichés)
   isLikelyEmail(value) {
     if (!value || typeof value !== 'string') return false;
@@ -1838,6 +1865,217 @@ class OutlookConnector extends EventEmitter {
       return [];
     }
   }
+
+  /**
+   * Recursively list all folders for the given Store (supports shared mailboxes) via COM.
+   * Returns a flat array: [{ storeId, storeName, fullPath, entryId, name, childCount }]
+   * Options: { maxDepth?: number }
+   */
+  async listFoldersRecursive(targetStoreId, opts = {}) {
+    const maxDepthOpt = Number(opts.maxDepth || process.env.FOLDER_ENUM_MAX_DEPTH || -1);
+    const started = Date.now();
+    try {
+      const ok = await this.ensureConnected();
+      if (!ok) throw new Error('Outlook non connecté');
+      const safeTarget = String(targetStoreId || '').replace(/`/g, '``').replace(/"/g, '\"');
+      const script = `
+        $enc = New-Object System.Text.UTF8Encoding $false; [Console]::OutputEncoding = $enc; $OutputEncoding = $enc
+        $ErrorActionPreference = 'SilentlyContinue'; $ProgressPreference = 'SilentlyContinue'
+        try {
+          $ol = New-Object -ComObject Outlook.Application
+          $ns = $ol.Session
+          $stores = @()
+          foreach ($st in $ns.Stores) { try { $stores += $st } catch {} }
+          $filter = @'
+${safeTarget}
+'@
+          if ($filter -ne "") {
+            $tmp = @()
+            foreach ($s in $stores) { if ($s.StoreID -eq $filter -or $s.DisplayName -eq $filter -or $s.DisplayName -like ("*" + $filter + "*")) { $tmp += $s } }
+            $stores = $tmp
+          }
+          $maxDepth = ${maxDepthOpt}
+          function Get-FolderFlat([object]$folder, [string]$parentPath, [int]$depth, [string]$storeName, [string]$storeId) {
+            $items = @()
+            try {
+              $name = ''; try { $name = [string]$folder.Name } catch {}
+              if ([string]::IsNullOrEmpty($name)) { return @() }
+              $curPath = if ([string]::IsNullOrEmpty($parentPath)) { "$storeName\\$name" } else { "$parentPath\\$name" }
+              $eid = ''; try { $eid = [string]$folder.EntryID } catch {}
+              $childCount = 0; try { $childCount = [int]$folder.Folders.Count } catch {}
+              $items += @([ordered]@{ StoreDisplayName=$storeName; StoreEntryID=$storeId; FolderName=$name; FolderEntryID=$eid; FullPath=$curPath; ChildCount=$childCount })
+              if ($maxDepth -ge 0 -and $depth -ge $maxDepth) { return $items }
+              if ($childCount -gt 0) {
+                foreach ($ch in $folder.Folders) {
+                  try { $items += Get-FolderFlat -folder $ch -parentPath $curPath -depth ($depth+1) -storeName $storeName -storeId $storeId } catch {} finally { try { [void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($ch) | Out-Null } catch {} }
+                }
+              }
+            } catch {}
+            return $items
+          }
+          $all = @()
+          foreach ($store in $stores) {
+            $root = $null
+            try {
+              $storeName = ''; try { $storeName = [string]$store.DisplayName } catch {}
+              $sid = ''; try { $sid = [string]$store.StoreID } catch {}
+              try { $root = $store.GetRootFolder() } catch {}
+              if ($root -ne $null) {
+                foreach ($top in $root.Folders) {
+                  try { $all += Get-FolderFlat -folder $top -parentPath $storeName -depth 0 -storeName $storeName -storeId $sid } catch {} finally { try { [void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($top) | Out-Null } catch {} }
+                }
+              }
+            } catch {}
+            finally { if ($root) { try { [void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($root) | Out-Null } catch {} } try { [void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($store) | Out-Null } catch {} }
+          }
+          try { [void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($ns) | Out-Null } catch {}
+          try { [void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($ol) | Out-Null } catch {}
+          [System.GC]::Collect(); [System.GC]::WaitForPendingFinalizers()
+          @{ success = $true; folders = $all } | ConvertTo-Json -Depth 6 -Compress | Write-Output
+        } catch {
+          $err = $_.Exception.Message
+          @{ success = $false; error = $err; folders = @() } | ConvertTo-Json -Depth 3 -Compress | Write-Output
+        }
+      `;
+  // Use external script to avoid complex quoting issues
+  const { resolveResource } = require('./scriptPathResolver');
+  const res = resolveResource(['powershell','scripts'], 'get-all-folders.ps1');
+  const psPath = res.path || path.join(__dirname, '../../powershell/get-all-folders.ps1');
+  const psArgs = [];
+  if (targetStoreId) { psArgs.push('-StoreId', String(targetStoreId)); }
+  if (Number.isFinite(maxDepthOpt) && maxDepthOpt >= 0) { psArgs.push('-MaxDepth', String(maxDepthOpt)); }
+      let lst = [];
+      try {
+        const raw = await this.execPowerShellFile(psPath, psArgs, 180000);
+        const json = OutlookConnector.parseJsonOutput(raw) || {};
+        lst = Array.isArray(json.folders) ? json.folders : [];
+      } catch (eps) {
+        console.warn('[COM-REC] PS external failed, will try fallbacks:', eps.message);
+        lst = [];
+      }
+      let flat = lst.map(f => ({
+        storeId: f.StoreEntryID,
+        storeName: f.StoreDisplayName,
+        fullPath: f.FullPath,
+        entryId: f.FolderEntryID,
+        name: f.FolderName,
+        childCount: Number(f.ChildCount || 0)
+      }));
+      if (!flat.length) {
+        // Fallback A: BFS using getFolderStructure + getSubFolders (multiple lightweight COM calls)
+        try {
+          const maxDepth = Number.isFinite(maxDepthOpt) && maxDepthOpt >= 0 ? maxDepthOpt : 20;
+          // Resolve the real MAPI StoreID first
+          let storeName = '';
+          let mapiStoreId = '';
+          try {
+            const mbs = await this.getMailboxes();
+            const q = String(targetStoreId || '').toLowerCase();
+            const found = mbs.find(s => String(s.StoreID || '').toLowerCase() === q || String(s.Name || '').toLowerCase() === q || (String(s.SmtpAddress || '').toLowerCase() === q));
+            if (found) { storeName = found.Name || ''; mapiStoreId = found.StoreID || ''; }
+          } catch {}
+          // Get top-level structure using whichever identifier resolves
+          const top = await this.getFolderStructure(mapiStoreId || storeName || targetStoreId);
+          const mb = Array.isArray(top) ? top[0] : null;
+          if (!storeName && mb?.Name) storeName = mb.Name;
+          const queue = [];
+          const seen = new Set();
+          const out = [];
+          function pushNode(node) {
+            if (!node || !node.Name) return;
+            const fullPath = node.FolderPath || (storeName ? `${storeName}\\${node.Name}` : node.Name);
+            const key = `${node.EntryID || fullPath}`;
+            if (seen.has(key)) return;
+            seen.add(key);
+            out.push({ storeId: String(mapiStoreId || targetStoreId || ''), storeName, fullPath, entryId: node.EntryID || null, name: node.Name, childCount: Number(node.ChildCount || (node.SubFolders?.length || 0)) });
+            queue.push({ depth: 1, path: fullPath, entryId: node.EntryID, childCount: Number(node.ChildCount || 0) });
+          }
+          if (mb && Array.isArray(mb.SubFolders)) {
+            for (const n of mb.SubFolders) { pushNode(n); }
+          }
+          const startedAt = Date.now();
+          while (queue.length) {
+            const cur = queue.shift();
+            if (cur.depth > maxDepth) continue;
+            if (cur.childCount <= 0) continue;
+            const kids = await this.getSubFolders(mapiStoreId || storeName || targetStoreId, cur.entryId, cur.path);
+            if (Array.isArray(kids) && kids.length) {
+              for (const k of kids) {
+                const fp = k.FolderPath || k.Folderpath || k.Folder || k.Path || k.path || (storeName ? `${storeName}\\${k.Name}` : k.Name);
+                const child = { Name: k.Name, FolderPath: fp, EntryID: k.EntryID, ChildCount: Number(k.ChildCount || 0), SubFolders: [] };
+                pushNode(child);
+                queue[queue.length - 1].depth = cur.depth + 1; // ensure depth increment for just-pushed
+              }
+            }
+            if (Date.now() - startedAt > 120000) { break; } // safety 2 min
+          }
+          if (out.length) {
+            flat = out;
+          }
+        } catch (ebfs) {
+          console.warn('[COM-REC] BFS fallback failed:', ebfs.message);
+        }
+      }
+      if (!flat.length) {
+        // Fallback to existing COM tree builder and flatten for the requested store
+        try {
+          // Try WSH JScript enumerator first (avoids PowerShell pipeline issues)
+          try {
+            const jsPath = path.join(__dirname, '../../scripts/enum-outlook-folders.js');
+            const { spawnSync } = require('child_process');
+            const run = spawnSync('cscript.exe', ['//nologo', jsPath, String(targetStoreId || ''), String(maxDepthOpt)], { encoding: 'utf8', windowsHide: true });
+            if (run && run.status === 0 && run.stdout) {
+              const j = OutlookConnector.parseJsonOutput(run.stdout) || {};
+              const ws = Array.isArray(j.folders) ? j.folders : [];
+              if (ws.length) {
+                flat = ws.map(f => ({
+                  storeId: f.StoreEntryID,
+                  storeName: f.StoreDisplayName,
+                  fullPath: f.FullPath,
+                  entryId: f.FolderEntryID,
+                  name: f.FolderName,
+                  childCount: Number(f.ChildCount || 0)
+                }));
+              }
+            }
+          } catch (ejs) {
+            console.warn('[COM-REC] WSH fallback failed:', ejs.message);
+          }
+          if (!flat.length) {
+            const tree = await this.getAllStoresAndTreeViaCOM({ maxDepth: opts.maxDepth || this.settings?.outlook?.maxEnumerationDepth || 6 });
+            const storeKey = (targetStoreId || '').toString();
+            // Match by StoreID or by display name if needed
+            let chosenStoreId = null;
+            if (tree.foldersByStore[storeKey]) {
+              chosenStoreId = storeKey;
+            } else {
+              // Try to find by store name
+              const st = tree.stores.find(s => s.Name === storeKey || (s.SmtpAddress && s.SmtpAddress === storeKey));
+              if (st && tree.foldersByStore[st.StoreID]) chosenStoreId = st.StoreID;
+            }
+            if (chosenStoreId) {
+              const map = tree.foldersByStore[chosenStoreId];
+              flat = Object.values(map).map(n => ({
+                storeId: chosenStoreId,
+                storeName: tree.stores.find(s => s.StoreID === chosenStoreId)?.Name || '',
+                fullPath: n.path,
+                entryId: n.entryId,
+                name: n.name,
+                childCount: Number(n.childCount || 0)
+              })).filter(x => x.name && x.fullPath);
+            }
+          }
+        } catch (e2) {
+          console.warn('[COM-REC] Fallback COM tree failed:', e2.message);
+        }
+      }
+      console.log(`📂 [COM-REC] Folders for store=${(targetStoreId||'').toString().slice(0,8)}… -> count=${flat.length} in ${Date.now()-started}ms`);
+      return flat;
+    } catch (e) {
+      console.error('❌ listFoldersRecursive:', e.message);
+      return [];
+    }
+  }
   /**
    * Build (or return cached) full folder tree for all stores via COM only.
    * Depth guard + timeout.
@@ -1881,42 +2119,28 @@ class OutlookConnector extends EventEmitter {
       const parsed = OutlookConnector.parseJsonOutput(storeExec.output) || {};
       const stores = Array.isArray(parsed.stores) ? parsed.stores : [];
       res.stores = stores;
-      // For each store, enumerate tree with depth guard
-      for (const st of stores) {
-        const safeStoreId = String(st.StoreID || '').replace(/`/g,'``').replace(/"/g,'\"');
-        const treeScript = `
-          $enc = New-Object System.Text.UTF8Encoding $false; [Console]::OutputEncoding = $enc; $OutputEncoding=$enc
-          $outlook = New-Object -ComObject Outlook.Application
-          $ns = $outlook.GetNamespace('MAPI')
-          $target = $null; foreach ($s in $ns.Stores) { if ($s.StoreID -eq "${safeStoreId}") { $target=$s; break } }
-          if (-not $target) { $target = $ns.DefaultStore }
-          $root = $target.GetRootFolder()
-          $result = @()
-          function Add-Folder($f,$depth){
-            if ($depth -gt ${maxDepth}) { return }
-            $childCount = 0; try { $childCount = $f.Folders.Count } catch {}
-            $entry = @{ Name=$f.Name; EntryID=$f.EntryID; Path=$f.FolderPath; ChildCount=$childCount; Depth=$depth }
-            $result += $entry
-            if ($childCount -gt 0) {
-              foreach ($sf in $f.Folders) { Add-Folder -f $sf -depth ($depth+1) }
-            }
+      // For each store, enumerate tree using external script with parameters (avoids inline binary StoreID issues)
+      const { resolveResource } = require('./scriptPathResolver');
+      const resPS = resolveResource(['powershell','scripts'], 'get-all-folders.ps1');
+      const psPath = resPS.path || path.join(__dirname, '../../powershell/get-all-folders.ps1');
+    for (const st of stores) {
+        try {
+      const args = ['-StoreName', String(st.Name || ''), '-MaxDepth', String(maxDepth)];
+          const raw = await this.execPowerShellFile(psPath, args, 180000);
+          const parsed = OutlookConnector.parseJsonOutput(raw) || {};
+          const flat = Array.isArray(parsed.folders) ? parsed.folders : [];
+          const map = {};
+          for (const f of flat) {
+            const id = f.FolderEntryID || `${st.StoreID}:${f.FullPath}`;
+            const fullPath = f.FullPath || `${st.Name}\\${f.FolderName || ''}`;
+            map[id] = { id, name: f.FolderName, path: fullPath, entryId: f.FolderEntryID, depth: undefined, childCount: Number(f.ChildCount || 0) };
+            res.index.byId.set(id, map[id]);
+            res.index.byPath.set(fullPath.toLowerCase(), map[id]);
           }
-          Add-Folder -f $root -depth 0
-          @{ success=$true; folders=$result } | ConvertTo-Json -Depth 12 -Compress | Write-Output
-        `;
-        const treeExec = await this.executePowerShellScript(treeScript, 120000);
-        if (!treeExec.success) { console.warn('[COM-TREE] Échec store', st.Name, treeExec.error); continue; }
-        const treeParsed = OutlookConnector.parseJsonOutput(treeExec.output) || {};
-        const folders = Array.isArray(treeParsed.folders) ? treeParsed.folders : [];
-        const map = {};
-        for (const f of folders) {
-          const id = f.EntryID || `${st.StoreID}:${f.Path}`;
-          const canonicalPath = `${st.Name}\\${f.Path?.split('\\').slice(1).join('\\') || ''}`.replace(/\\+/g,'\\');
-          map[id] = { id, name: f.Name, path: canonicalPath.startsWith(st.Name) ? canonicalPath : `${st.Name}\\${f.Name}`, entryId: f.EntryID, depth: f.Depth, childCount: f.ChildCount };
-          res.index.byId.set(id, map[id]);
-          res.index.byPath.set(map[id].path.toLowerCase(), map[id]);
+          res.foldersByStore[st.StoreID] = map;
+        } catch (eStore) {
+          console.warn('[COM-TREE] Échec store', st.Name, eStore.message);
         }
-        res.foldersByStore[st.StoreID] = map;
       }
       this._fullComTree = res;
       const dur = Date.now() - started;

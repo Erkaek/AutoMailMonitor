@@ -1462,27 +1462,31 @@ ipcMain.handle('api-folders-add', async (event, { folderPath, category }) => {
 
             // Si tout échoue, garder le chemin d'origine mais, si possible, y inclure Inbox localisée
             if (!resolvedDisplayPath) {
-              // Si le premier segment est un enfant direct d'une Inbox localisée, le préfixer d'Inbox
-              try {
-                if (inboxLocalizedName && partsRest.length) {
-                  resolvedDisplayPath = `${mailboxDisplay}\\${inboxLocalizedName}\\${rest}`;
-                } else {
-                  const top = await listKids(mailboxDisplay);
-                  const inbox = top.find(k => {
-                    const n = normalizeName(k?.Name || '');
-                    return n === 'inbox' || n.includes('boite') || n.includes('reception');
-                  });
-                  if (inbox && partsRest.length) {
-                    // Vérifier si le premier segment existe sous Inbox
-                    const kids = await listKids(inbox.FolderPath || `${mailboxDisplay}\\${inbox.Name}`);
-                    const first = kids.find(k => normalizeName(k?.Name || '') === normalizeName(partsRest[0]));
-                    if (first) {
-                      resolvedDisplayPath = `${mailboxDisplay}\\${inbox.Name}\\${rest}`;
+              // Ne pas dupliquer Inbox si l'utilisateur l'a déjà saisie
+              if (hasInboxHint) {
+                resolvedDisplayPath = `${mailboxDisplay}\\${rest}`;
+              } else {
+                try {
+                  if (inboxLocalizedName && partsRest.length) {
+                    resolvedDisplayPath = `${mailboxDisplay}\\${inboxLocalizedName}\\${rest}`;
+                  } else {
+                    const top = await listKids(mailboxDisplay);
+                    const inbox = top.find(k => {
+                      const n = normalizeName(k?.Name || '');
+                      return n === 'inbox' || n.includes('boite') || n.includes('reception');
+                    });
+                    if (inbox && partsRest.length) {
+                      // Vérifier si le premier segment existe sous Inbox
+                      const kids = await listKids(inbox.FolderPath || `${mailboxDisplay}\\${inbox.Name}`);
+                      const first = kids.find(k => normalizeName(k?.Name || '') === normalizeName(partsRest[0]));
+                      if (first) {
+                        resolvedDisplayPath = `${mailboxDisplay}\\${inbox.Name}\\${rest}`;
+                      }
                     }
                   }
-                }
-              } catch {}
-              if (!resolvedDisplayPath) resolvedDisplayPath = `${mailboxDisplay}\\${rest}`;
+                } catch {}
+                if (!resolvedDisplayPath) resolvedDisplayPath = `${mailboxDisplay}\\${rest}`;
+              }
             }
           }
       if (!rest) {
@@ -1720,7 +1724,7 @@ ipcMain.handle('api-folders-add', async (event, { folderPath, category }) => {
         })().catch(e => console.warn('[ADD][DFS] COM by display path failed:', e?.message || String(e)));
         const afterCount = toInsert.length;
         console.log(`[ADD][DFS] COM by display path inserted: ${afterCount - beforeCount}`);
-        if (afterCount === beforeCount) {
+  if (afterCount === beforeCount) {
           // COM yielded nothing; try EWS DFS
           await (async () => {
             console.log('[ADD][DFS] Falling back to EWS DFS...');
@@ -1780,6 +1784,31 @@ ipcMain.handle('api-folders-add', async (event, { folderPath, category }) => {
                   }
                 }
               })().catch(e => console.warn('[ADD][DFS] Last-resort fast COM traversal failed:', e?.message || String(e)));
+            }
+            // Ultimate fallback: backend recursive enumeration (COM BFS) then filter under selected base
+            if (toInsert.length === afterCount) {
+              await (async () => {
+                try {
+                  const list = await outlookConnector.listFoldersRecursive?.(storeId, { maxDepth: 25 });
+                  const base = displayBasePath;
+                  const toLower = (s) => String(s||'').toLowerCase();
+                  const isUnder = (fp) => {
+                    const a = toLower(fp); const b = toLower(base);
+                    return a === b || a.startsWith(b + '\\');
+                  };
+                  const items = Array.isArray(list) ? list.filter(x => isUnder(x.fullPath)) : [];
+                  for (const it of items) {
+                    const norm = normalizePath(it.fullPath || '');
+                    if (!norm) continue;
+                    if (!seen.has(norm)) {
+                      seen.add(norm);
+                      toInsert.push({ path: norm, name: it.name || extractFolderName(norm) });
+                    }
+                  }
+                } catch (e) {
+                  console.warn('[ADD][DFS] ultimate recursive fallback failed:', e?.message || String(e));
+                }
+              })();
             }
           }
         }
@@ -3278,6 +3307,17 @@ ipcMain.handle('api-outlook-subfolders', async (event, payload) => {
   } catch (error) {
     console.error('❌ Erreur récupération sous-dossiers:', error.message);
     return { success: false, error: error.message, children: [] };
+  }
+});
+
+// New: recursive folder enumeration (flat) for a given store
+ipcMain.handle('api-outlook-folders-recursive', async (_event, { storeId, maxDepth }) => {
+  try {
+    if (!storeId) return { success: false, error: 'storeId requis', folders: [] };
+    const list = await outlookConnector.listFoldersRecursive?.(storeId, { maxDepth });
+    return { success: true, folders: Array.isArray(list) ? list : [] };
+  } catch (e) {
+    return { success: false, error: e?.message || String(e), folders: [] };
   }
 });
 

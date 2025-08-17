@@ -148,16 +148,38 @@ git commit -m "chore: stop tracking ignored files" ; git push
 
 ## 📣 Astuces UI
 
-- Une seule zone de défilement par onglet (ergonomie améliorée)
-- Sidebar repliable + bouton flottant
-- Thèmes clair/sombre persistants
+````markdown
+# Mail Monitor
 
-## 📜 Licence
+Surveille des dossiers Outlook et affiche des statistiques simples.
 
-Usage interne. © 2025 Tanguy Raingeard. Tous droits réservés.
+## Installation (dev)
 
-## 🤝 Support
+```powershell
+git clone https://github.com/Erkaek/AutoMailMonitor.git
+cd AutoMailMonitor
+npm install
+npm start
+```
 
-- Ouvrir les DevTools (F12) pour inspecter
-- Vérifier la console Electron (terminal)
-- Issues/PR via GitHub
+## Utilisation
+
+- Dans l’onglet Monitoring, sélectionnez les dossiers Outlook à surveiller.
+- L’app collecte les nouveaux mails et calcule des stats (jour/semaine).
+
+## Import activité (.xlsb)
+
+- Menu Importer: choisissez un fichier .xlsb (feuilles S1..S52).
+- Sécurité: priorité à PowerShell/Excel COM; sinon lecteur isolé.
+- Pour forcer COM uniquement: définir `XLSB_IMPORT_DISABLE_JS=1`.
+
+## Données & build
+
+- Base locale: `data/emails.db` (SQLite, WAL).
+- Build Windows (optionnel): `npx electron-builder -w`.
+
+## Licence & support
+
+Usage interne. © 2025 Tanguy Raingeard.
+Issues/PR bienvenues.
+````
