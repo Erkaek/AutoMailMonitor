@@ -680,6 +680,45 @@ class OptimizedDatabaseService {
     }
 
     /**
+     * Insertion par lot des configurations de dossiers
+     * rows: Array<{ folder_path|path, category, folder_name|name }>
+     * Retourne { inserted, unique }
+     */
+    addFolderConfigurationsBatch(rows = []) {
+        try {
+            // Normaliser et dédupliquer par folder_path
+            const map = new Map();
+            for (const r of rows) {
+                if (!r) continue;
+                const folder_path = r.folder_path || r.path || r.key || r.folderPath;
+                if (!folder_path) continue;
+                const category = this.normalizeCategory(r.category || 'Mails simples') || 'Mails simples';
+                const folder_name = r.folder_name || r.name || String(folder_path).split('\\').pop();
+                map.set(folder_path, { folder_path, category, folder_name });
+            }
+
+            const uniqueRows = Array.from(map.values());
+            if (uniqueRows.length === 0) {
+                return { inserted: 0, unique: 0 };
+            }
+
+            const insert = this.statements.insertFolderConfig;
+            const tx = this.db.transaction((items) => {
+                for (const it of items) {
+                    insert.run(it.folder_path, it.category, it.folder_name);
+                }
+            });
+            tx(uniqueRows);
+            // Invalider le cache une seule fois
+            this.cache.del('folders_config');
+            return { inserted: uniqueRows.length, unique: uniqueRows.length };
+        } catch (e) {
+            console.error('❌ [DB] Erreur insertion par lot folder_configurations:', e.message);
+            return { inserted: 0, unique: 0, error: e.message };
+        }
+    }
+
+    /**
      * Suppression configuration dossier
      */
     deleteFolderConfiguration(folderPath) {

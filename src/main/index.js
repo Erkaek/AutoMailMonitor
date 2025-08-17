@@ -1843,17 +1843,29 @@ ipcMain.handle('api-folders-add', async (event, { folderPath, category }) => {
 
     // Nouvelle logique prioritaire: si seulement le dossier de base a été ajouté (ou zéro enfants), utiliser l'arbre COM global pour récupérer tous les descendants.
     let initialInsertedCount = 0;
-    // Insérer tous les dossiers (OR REPLACE évite les doublons)
+    // Insérer tous les dossiers via un batch (OR REPLACE évite les doublons)
     debugPhases.push('insert-start');
     let inserted = 0;
-    for (const item of toInsert) {
-      if (toInsertDebugSample.length < 10) toInsertDebugSample.push(item.path);
-      try {
-  await dbRef.addFolderConfiguration(item.path, category, item.name);
-        inserted++;
-      } catch (e) {
-        console.error('❌ Erreur insertion dossier enfant:', item.path, e.message || e);
+    try {
+      const batchRows = toInsert.map(it => ({
+        folder_path: it.path,
+        category,
+        folder_name: it.name
+      }));
+      const resBatch = (typeof dbRef.addFolderConfigurationsBatch === 'function')
+        ? dbRef.addFolderConfigurationsBatch(batchRows)
+        : null;
+      if (resBatch && resBatch.inserted >= 0) {
+        inserted = resBatch.inserted;
+      } else {
+        // Fallback: boucle simple si méthode indisponible
+        for (const item of toInsert) {
+          if (toInsertDebugSample.length < 10) toInsertDebugSample.push(item.path);
+          try { await dbRef.addFolderConfiguration(item.path, category, item.name); inserted++; } catch (e) { console.error('❌ Erreur insertion dossier enfant:', item.path, e.message || e); }
+        }
       }
+    } catch (e) {
+      console.error('❌ Erreur batch insert folder_configurations:', e.message || e);
     }
     initialInsertedCount = inserted;
     debugPhases.push('insert-done');

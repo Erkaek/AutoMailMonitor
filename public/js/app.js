@@ -1368,27 +1368,17 @@ class MailMonitor {
 
   // === CONFIGURATION DES DOSSIERS ===
   async showAddFolderModal() {
+    // Ouvre immédiatement le modal avec un état de chargement, puis remplit les boîtes mail
     try {
-      // Récupérer la structure des dossiers depuis Outlook
-      const mailboxes = await window.electronAPI.getMailboxes();
-      
-      if (!mailboxes.mailboxes || mailboxes.mailboxes.length === 0) {
-        // Tentative: charger l'arborescence du Store par défaut
-        this.showNotification('Aucune boîte mail', 'Tentative de chargement de l\'arborescence du compte par défaut…', 'info');
-        const ok = await this.showDefaultFolderTreeModal();
-        if (!ok) {
-          // Fallback ultime: ajout manuel
-          this.showNotification('Aucune boîte mail', 'Impossible de charger l\'arborescence Outlook. Vous pouvez ajouter un dossier manuellement.', 'warning');
-          this.showManualAddFolderModal();
-        }
-        return;
+      const ok = await this.showDefaultFolderTreeModal();
+      if (!ok) {
+        // Fallback ultime: ajout manuel
+        this.showNotification('Aucune boîte mail', 'Impossible de charger l\'arborescence Outlook. Vous pouvez ajouter un dossier manuellement.', 'warning');
+        this.showManualAddFolderModal();
       }
-
-      // Créer le modal pour ajouter un dossier
-      this.createFolderSelectionModal(mailboxes.mailboxes);
     } catch (error) {
-      console.error('❌ Erreur récupération dossiers:', error);
-      this.showNotification('Erreur', 'Impossible de récupérer la liste des dossiers', 'danger');
+      console.error('❌ Erreur ouverture modal d\'ajout:', error);
+      this.showNotification('Erreur', 'Impossible d\'ouvrir le sélecteur de dossier', 'danger');
     }
   }
 
@@ -1462,6 +1452,13 @@ class MailMonitor {
       const folderTree = document.getElementById('folder-tree');
       const mailboxSelect = document.getElementById('mailbox-select');
       let allMailboxes = [];
+      // Visuel de récupération et désactivation du select
+      try {
+        if (mailboxSelect) {
+          mailboxSelect.innerHTML = '<option value="">Récupération des boîtes mail…</option>';
+          mailboxSelect.disabled = true;
+        }
+      } catch(_) {}
   try {
         let storesRes = null;
         try { storesRes = await window.electronAPI.olStores(); } catch {}
@@ -1485,6 +1482,7 @@ class MailMonitor {
               const label = mb.SmtpAddress ? `${mb.Name} (${mb.SmtpAddress})` : mb.Name;
               return `<option value="${this.escapeHtml(mb.StoreID || mb.Name)}">${this.escapeHtml(label)}</option>`;
             }).join('');
+          try { mailboxSelect.disabled = false; } catch(_) {}
 
           // Si une seule, sélectionner automatiquement
           if (allMailboxes.length === 1) {
@@ -1599,11 +1597,13 @@ class MailMonitor {
         } else {
           const errMsg = this.escapeHtml(result?.error || 'Erreur de chargement');
           folderTree.innerHTML = `<div class="text-danger"><i class="bi bi-exclamation-triangle me-2"></i>${errMsg}<br/><small>Conseils: assurez-vous qu\'Outlook est démarré, que l\'exécution PowerShell est autorisée (ExecutionPolicy: Bypass autorisé), et que Outlook n\'est pas 32-bit sans PowerShell 32-bit.</small></div>`;
+          try { if (mailboxSelect) { mailboxSelect.innerHTML = '<option value="">Aucune boîte détectée</option>'; mailboxSelect.disabled = true; } } catch(_) {}
           return false;
         }
       } catch (e) {
         console.error('❌ Chargement boîtes/arbo:', e);
         folderTree.innerHTML = `<div class="text-danger"><i class="bi bi-exclamation-triangle me-2"></i>${this.escapeHtml(e.message || 'Erreur de chargement')}<br/><small>Conseils: démarrez Outlook et réessayez.</small></div>`;
+        try { if (mailboxSelect) { mailboxSelect.innerHTML = '<option value="">Erreur de chargement</option>'; mailboxSelect.disabled = true; } } catch(_) {}
         return false;
       }
 

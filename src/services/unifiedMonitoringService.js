@@ -56,7 +56,10 @@ class UnifiedMonitoringService extends EventEmitter {
             preferNativeComEvents: true, // Préférer FFI-NAPI COM si disponible
             forcePowerShellInitialSync: true, // NOUVEAU: Forcer sync PowerShell au démarrage
             enableRealtimeComAfterSync: true, // NOUVEAU: Activer COM après sync initiale
-            configCheckInterval: 3000 // Vérifier la config des dossiers toutes les 3 secondes
+            configCheckInterval: 3000, // Vérifier la config des dossiers toutes les 3 secondes
+            // Throttling démarrage monitoring
+            monitorStartBatchSize: 5, // démarrer par paquets de 5 dossiers
+            monitorStartDelayMs: 300 // délai entre démarrages d'items au sein d'un batch
         };
         
         // Statistiques
@@ -2284,13 +2287,25 @@ class UnifiedMonitoringService extends EventEmitter {
                 }
             });
 
-            // ===== DÉMARRER LE MONITORING POUR CHAQUE DOSSIER =====
-            for (const folderConfig of this.monitoredFolders) {
-                try {
-                    await this.outlookConnector.startFolderMonitoring(folderConfig.path);
-                    this.log(`✅ Monitoring complet activé pour: ${folderConfig.name}`, 'REALTIME');
-                } catch (error) {
-                    this.log(`❌ Erreur monitoring dossier ${folderConfig.name}: ${error.message}`, 'ERROR');
+            // ===== DÉMARRER LE MONITORING AVEC THROTTLING =====
+            const batchSize = this.config.monitorStartBatchSize || 5;
+            const delayMs = this.config.monitorStartDelayMs || 300;
+            const folders = this.monitoredFolders.slice();
+            for (let i = 0; i < folders.length; i += batchSize) {
+                const batch = folders.slice(i, i + batchSize);
+                // Démarrer les items d'un batch en série avec petit délai pour éviter les pics CPU/IO
+                for (const folderConfig of batch) {
+                    try {
+                        await this.outlookConnector.startFolderMonitoring(folderConfig.path);
+                        this.log(`✅ Monitoring activé: ${folderConfig.name}`, 'REALTIME');
+                        if (delayMs > 0) { await this.sleep(delayMs); }
+                    } catch (error) {
+                        this.log(`❌ Erreur monitoring dossier ${folderConfig.name}: ${error.message}`, 'ERROR');
+                    }
+                }
+                // Petite pause entre paquets lorsque grand nombre de dossiers
+                if (folders.length > batchSize && delayMs > 0) {
+                    await this.sleep(Math.min(1000, delayMs * 2));
                 }
             }
 
