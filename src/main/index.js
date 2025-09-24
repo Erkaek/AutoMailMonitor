@@ -3306,6 +3306,23 @@ ipcMain.handle('api-outlook-folder-structure', async (event, storeId) => {
   }
 });
 
+ipcMain.handle('api-outlook-folder-tree-from-path', async (_event, payload) => {
+  try {
+    const { rootPath, maxDepth } = payload || {};
+    if (!rootPath || typeof rootPath !== 'string') {
+      return { success: false, error: 'rootPath requis' };
+    }
+    const result = await outlookConnector.getFolderTreeFromRootPath?.(rootPath, { maxDepth });
+    if (result && result.success) {
+      return result;
+    }
+    return { success: false, error: result?.error || 'Arborescence non disponible' };
+  } catch (error) {
+    console.error('❌ Erreur récupération arbo depuis chemin racine:', error.message || error);
+    return { success: false, error: error.message || String(error) };
+  }
+});
+
 // Handler pour récupérer les sous-dossiers (lazy-load)
 ipcMain.handle('api-outlook-subfolders', async (event, payload) => {
   try {

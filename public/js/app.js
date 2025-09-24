@@ -1401,16 +1401,21 @@ class MailMonitor {
                 <div id="folder-modal-alert" class="alert alert-danger d-none" role="alert"></div>
                 <form id="add-folder-form">
                   <div class="mb-3">
-                    <label class="form-label">Boîte mail</label>
-                    <select class="form-select" id="mailbox-select" required>
-                      <option value="">Sélectionnez une boîte mail</option>
-                    </select>
+                    <label class="form-label">Chemin du dossier racine</label>
+                    <div class="input-group">
+                      <input type="text" class="form-control" id="root-folder-input" placeholder="Ex: testboitepartagee\\Boîte de réception" autocomplete="off" />
+                      <button class="btn btn-outline-primary" type="button" id="load-root-tree">
+                        <span class="load-text">Explorer</span>
+                        <span class="spinner-border spinner-border-sm d-none ms-2" role="status" aria-hidden="true"></span>
+                      </button>
+                    </div>
+                    <div class="form-text" id="root-folder-hint">Indiquez le chemin complet tel qu'affiché dans Outlook (nom de la boîte partagée inclus).</div>
                   </div>
                   <div class="mb-3">
                     <label class="form-label">Dossier</label>
                     <div class="border rounded p-3 bg-surface" style="max-height: 300px; overflow-y: auto;">
                       <div id="folder-tree" class="folder-tree">
-                        <div class="text-muted"><i class="bi bi-hourglass-split me-2"></i>Chargement…</div>
+                        <div class="text-muted"><i class="bi bi-info-circle me-2"></i>Saisissez un chemin et cliquez sur « Explorer »</div>
                       </div>
                     </div>
                     <input type="hidden" id="selected-folder-path" required>
@@ -1448,163 +1453,121 @@ class MailMonitor {
         catEl?.classList.remove('is-invalid');
       } catch(_) {}
 
-      // Charger toutes les boîtes (COM rapide d'abord, fallback COM existant)
       const folderTree = document.getElementById('folder-tree');
-      const mailboxSelect = document.getElementById('mailbox-select');
-      let allMailboxes = [];
-      // Visuel de récupération et désactivation du select
-      try {
-        if (mailboxSelect) {
-          mailboxSelect.innerHTML = '<option value="">Récupération des boîtes mail…</option>';
-          mailboxSelect.disabled = true;
-        }
-      } catch(_) {}
-  try {
-        let storesRes = null;
-        try { storesRes = await window.electronAPI.olStores(); } catch {}
-        if (storesRes && storesRes.ok && Array.isArray(storesRes.data) && storesRes.data.length > 0) {
-          // Mapper pour compatibilité avec code existant
-          allMailboxes = storesRes.data.map(s => ({
-            Name: s.DisplayName,
-            StoreID: s.StoreId,
-            SmtpAddress: s.SmtpAddress
-          }));
-        } else {
-          const result = await window.electronAPI.getFolderStructure('');
-          if (result?.success && Array.isArray(result.folders) && result.folders.length > 0) {
-            allMailboxes = result.folders;
-          }
-        }
-        if (Array.isArray(allMailboxes) && allMailboxes.length > 0) {
-          // Alimenter la liste des boîtes
-          mailboxSelect.innerHTML = '<option value="">Sélectionnez une boîte mail</option>' +
-            allMailboxes.map(mb => {
-              const label = mb.SmtpAddress ? `${mb.Name} (${mb.SmtpAddress})` : mb.Name;
-              return `<option value="${this.escapeHtml(mb.StoreID || mb.Name)}">${this.escapeHtml(label)}</option>`;
-            }).join('');
-          try { mailboxSelect.disabled = false; } catch(_) {}
+      const rootInput = document.getElementById('root-folder-input');
+      const loadButton = document.getElementById('load-root-tree');
+      const alertBox = document.getElementById('folder-modal-alert');
 
-          // Si une seule, sélectionner automatiquement
-          if (allMailboxes.length === 1) {
-            mailboxSelect.value = this.escapeHtml(allMailboxes[0].StoreID || allMailboxes[0].Name);
-          }
+      if (rootInput && this.state?.lastRootFolderPath) {
+        rootInput.value = this.state.lastRootFolderPath;
+      }
 
-          const renderTreeFor = async (storeIdOrName) => {
-            const selected = allMailboxes.find(mb => mb.StoreID === storeIdOrName || mb.Name === storeIdOrName);
-            const mb = selected || allMailboxes[0];
-            const mailboxDisplay = mb?.Name || '';
-            const smtpAddr = mb?.SmtpAddress || '';
-            // Store both display and smtp separately
-            folderTree.dataset.mailboxDisplay = mailboxDisplay;
-            folderTree.dataset.mailbox = mailboxDisplay; // backward compat
-            folderTree.dataset.smtp = smtpAddr;
-            folderTree.dataset.storeId = mb?.StoreID || '';
-            folderTree.innerHTML = '<div class="text-muted"><i class="bi bi-hourglass-split me-2"></i>Chargement…</div>';
-            try {
-              // 1) COM structure complète (préserve boîtes partagées, Inbox localisée, et chemins d'affichage)
-              let nodes = [];
-              let diagMsg = '';
-              try {
-                const struct = await window.electronAPI.getFolderStructure(mb?.StoreID || '');
-                if (struct && struct.success && Array.isArray(struct.folders) && struct.folders.length > 0) {
-                  const mailbox = struct.folders[0];
-                  const sub = Array.isArray(mailbox.SubFolders) ? mailbox.SubFolders : [];
-                  // Conserver la structure complète pour pouvoir rendre les sous-dossiers immédiatement
-                  nodes = sub;
-                }
-              } catch(e){ diagMsg = e?.message || 'Erreur inconnue'; }
-              // 2) Fallback COM rapide (Inbox shallow)
-              if (!nodes.length) {
-                try {
-                  const res = await window.electronAPI.olFoldersShallow(mb?.StoreID || '', '');
-                  if (res && res.ok) {
-                    const payload = res.data;
-                    const arr = Array.isArray(payload) ? payload : (payload?.folders || []);
-                    if (Array.isArray(arr)) nodes = arr.map(n => ({ Name: n.Name, Id: n.EntryId, ChildCount: n.ChildCount }));
-                    // If COM shallow returned children of a known parent (e.g., Inbox), remember it
-                    var parentLabel = (payload && (payload.ParentName || payload.parentName)) ? String(payload.ParentName || payload.parentName) : '';
-                    if (!nodes.length && payload && payload.error) diagMsg = payload.error;
-                    if (payload && payload.storesDiag && payload.storesDiag.length) {
-                      diagMsg += ' | Stores:' + payload.storesDiag.map(s=>s.DisplayName).join(', ');
-                    }
-                    // Fallback: si store non trouvé et on a un displayName != StoreID, retenter avec displayName
-                    if (!nodes.length && payload && payload.error && mb?.Name && mb?.Name !== mb?.StoreID) {
-                      try {
-                        const retry = await window.electronAPI.olFoldersShallow(mb.Name, '');
-                        const arr2 = Array.isArray(retry?.data) ? retry.data : (retry?.data?.folders || []);
-                        if (Array.isArray(arr2) && arr2.length) {
-                          nodes = arr2.map(n => ({ Name: n.Name, Id: n.EntryId, ChildCount: n.ChildCount }));
-                          diagMsg = ''; // Réussi
-                        }
-                      } catch(_) {}
-                    }
-                  }
-                } catch(e){ diagMsg = e?.message || 'Erreur inconnue'; }
-              }
-              if (!nodes.length) {
-                // Fallback EWS
-                try {
-                  const ewsMailbox = smtpAddr && smtpAddr.includes('@') ? smtpAddr : mailboxDisplay;
-                  const top = await window.electronAPI.ewsTopLevel(ewsMailbox);
-                  nodes = Array.isArray(top) ? top : (top?.folders || []);
-                } catch (errEws) {
-                  console.error('EWS top-level aussi indisponible:', errEws);
-                }
-              }
-              if (!nodes.length) {
-                const safeDiag = diagMsg ? `<br/><small class="text-muted">${this.escapeHtml(diagMsg)}</small>` : '';
-                folderTree.innerHTML = `<div class="text-warning"><i class="bi bi-info-circle me-2"></i>Aucun dossier trouvé${safeDiag}</div>`;
-                return;
-              }
-              // Adapter data pour createFolderTree en préservant les sous-dossiers (COM)
-              const buildTreeItem = (node, parentDisplayPath) => {
-                const name = node.Name;
-                const entryId = node.Id || node.EntryID || node.EntryId || '';
-                const childCount = node.ChildCount || (Array.isArray(node.SubFolders) ? node.SubFolders.length : 0);
-                const rawPath = node.FolderPath || node.Path || '';
-                const folderPath = (rawPath && rawPath.startsWith(mailboxDisplay)) ? rawPath : `${parentDisplayPath}\\${name}`;
-                const children = Array.isArray(node.SubFolders) ? node.SubFolders.map(sf => buildTreeItem(sf, folderPath)) : [];
-                return { Name: name, FolderPath: folderPath, EntryID: entryId, ChildCount: childCount, SubFolders: children };
-              };
-              let treeItems = nodes.map(n => buildTreeItem(n, mailboxDisplay));
-              // If we know these nodes are direct children of the Inbox, wrap them under the Inbox parent
-              if (typeof parentLabel === 'string' && parentLabel.trim() && treeItems.length) {
-                const p = parentLabel.trim();
-                const children = treeItems;
-                treeItems = [{
-                  Name: p,
-                  FolderPath: `${mailboxDisplay}\\${p}`,
-                  EntryID: '',
-                  ChildCount: children.length,
-                  SubFolders: children
-                }];
-              }
-              let html = '';
-              for (const it of treeItems) html += this.createFolderTree(it, 0);
-              folderTree.innerHTML = html;
-              this.initializeFolderTreeEvents();
-            } catch (err) {
-              console.error('Erreur chargement top-level:', err);
-              folderTree.innerHTML = '<div class="text-danger"><i class="bi bi-exclamation-triangle me-2"></i>Erreur de chargement</div>';
+      const setLoadingState = (loading) => {
+        try {
+          const spinner = loadButton?.querySelector('.spinner-border');
+          const label = loadButton?.querySelector('.load-text');
+          if (loading) {
+            spinner?.classList.remove('d-none');
+            if (label) label.textContent = 'Chargement';
+            if (loadButton) loadButton.disabled = true;
+          } else {
+            spinner?.classList.add('d-none');
+            if (label) label.textContent = 'Explorer';
+            if (loadButton) loadButton.disabled = false;
+          }
+        } catch (_) {}
+      };
+
+      const resetSelection = () => {
+        document.getElementById('selected-folder-path').value = '';
+      };
+
+      const renderTree = (rootNode, meta) => {
+        if (!rootNode) {
+          folderTree.innerHTML = '<div class="text-warning"><i class="bi bi-info-circle me-2"></i>Aucun dossier trouvé pour ce chemin</div>';
+          return;
+        }
+        folderTree.dataset.mailbox = meta?.storeName || '';
+        folderTree.dataset.mailboxDisplay = meta?.storeName || '';
+        folderTree.dataset.smtp = meta?.smtp || '';
+        folderTree.dataset.storeId = meta?.storeId || '';
+        folderTree.dataset.mode = 'root-path';
+        const html = this.createFolderTree(rootNode, 0);
+        folderTree.innerHTML = html;
+        this.initializeFolderTreeEvents();
+      };
+
+      const loadTreeFromRoot = async () => {
+        const rootPath = rootInput?.value?.trim() || '';
+        if (alertBox) {
+          alertBox.classList.add('d-none');
+          alertBox.textContent = '';
+        }
+        rootInput?.classList.remove('is-invalid');
+        resetSelection();
+
+        if (!rootPath) {
+          rootInput?.classList.add('is-invalid');
+          return;
+        }
+
+        folderTree.innerHTML = '<div class="text-muted"><i class="bi bi-hourglass-split me-2"></i>Chargement de l\'arborescence…</div>';
+        setLoadingState(true);
+
+        try {
+          const result = await window.electronAPI.getFolderTreeFromRoot(rootPath);
+          if (!result || result.success === false || !result.root) {
+            const message = (result && result.error) ? result.error : 'Impossible de récupérer cette arborescence';
+            folderTree.innerHTML = `<div class="text-danger"><i class="bi bi-exclamation-triangle me-2"></i>${this.escapeHtml(message)}</div>`;
+            if (alertBox) {
+              alertBox.textContent = message;
+              alertBox.classList.remove('d-none');
             }
-          };
+            return;
+          }
 
-          // Premier rendu
-          renderTreeFor(mailboxSelect.value || (allMailboxes[0]?.StoreID || allMailboxes[0]?.Name));
+          this.state = this.state || {};
+          this.state.lastRootFolderPath = rootPath;
 
-          // Sur changement de boîte, re-rendre l'arbo
-          mailboxSelect.addEventListener('change', (e) => { renderTreeFor(e.target.value); });
-        } else {
-          const errMsg = this.escapeHtml(result?.error || 'Erreur de chargement');
-          folderTree.innerHTML = `<div class="text-danger"><i class="bi bi-exclamation-triangle me-2"></i>${errMsg}<br/><small>Conseils: assurez-vous qu\'Outlook est démarré, que l\'exécution PowerShell est autorisée (ExecutionPolicy: Bypass autorisé), et que Outlook n\'est pas 32-bit sans PowerShell 32-bit.</small></div>`;
-          try { if (mailboxSelect) { mailboxSelect.innerHTML = '<option value="">Aucune boîte détectée</option>'; mailboxSelect.disabled = true; } } catch(_) {}
-          return false;
+          renderTree(result.root, {
+            storeName: result.store?.name || '',
+            storeId: result.store?.id || '',
+            smtp: result.store?.smtp || ''
+          });
+
+          // Par défaut, sélectionner le dossier racine pour guider l'utilisateur
+          try {
+            const rootSelectable = document.querySelector('#folder-tree .folder-selectable');
+            if (rootSelectable) {
+              rootSelectable.click();
+            }
+          } catch (_) {}
+        } catch (error) {
+          console.error('❌ Erreur chargement arbo racine:', error);
+          const message = error?.message || 'Erreur de chargement';
+          folderTree.innerHTML = `<div class="text-danger"><i class="bi bi-exclamation-triangle me-2"></i>${this.escapeHtml(message)}</div>`;
+          if (alertBox) {
+            alertBox.textContent = message;
+            alertBox.classList.remove('d-none');
+          }
+        } finally {
+          setLoadingState(false);
         }
-      } catch (e) {
-        console.error('❌ Chargement boîtes/arbo:', e);
-        folderTree.innerHTML = `<div class="text-danger"><i class="bi bi-exclamation-triangle me-2"></i>${this.escapeHtml(e.message || 'Erreur de chargement')}<br/><small>Conseils: démarrez Outlook et réessayez.</small></div>`;
-        try { if (mailboxSelect) { mailboxSelect.innerHTML = '<option value="">Erreur de chargement</option>'; mailboxSelect.disabled = true; } } catch(_) {}
-        return false;
+      };
+
+      loadButton?.addEventListener('click', loadTreeFromRoot);
+      rootInput?.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter') {
+          event.preventDefault();
+          loadTreeFromRoot();
+        }
+      });
+
+      // Focus sur le champ à l'ouverture
+      setTimeout(() => rootInput?.focus(), 150);
+
+      if (rootInput?.value) {
+        loadTreeFromRoot();
       }
 
       // Sauvegarde
@@ -1936,21 +1899,23 @@ class MailMonitor {
       const indent = '  '.repeat(level);
       const folderId = `folder_${Math.random().toString(36).substr(2, 9)}`;
       
+      const safeName = this.escapeHtml(folderName);
+      const safePath = this.escapeHtml(folderPath);
       html += `
-        <div class="folder-item" data-level="${level}" style="margin-left: ${level * 20}px;">
-          <div class="folder-line d-flex align-items-center py-1 folder-selectable" 
-               data-path="${folderPath}" 
-               data-name="${folderName}"
+        <div class="folder-item" data-level="${level}">
+          <div class="folder-line folder-selectable" 
+               data-path="${safePath}" 
+               data-name="${safeName}"
                data-entry-id="${entryId}"
                data-has-children="${hasChildren ? '1' : '0'}"
-               style="cursor: pointer; border-radius: 4px; padding: 4px 8px;">
+               style="--depth:${level};">
             ${hasChildren ? 
-              `<i class="bi bi-chevron-right folder-toggle me-2" data-target="${folderId}" style="cursor: pointer; width: 12px;"></i>` : 
-              `<span style="width: 12px; margin-right: 8px;"></span>`
+              `<i class="bi bi-chevron-right folder-toggle" data-target="${folderId}" role="button" aria-label="Afficher les sous-dossiers"></i>` : 
+              `<span class="folder-toggle-placeholder"></span>`
             }
-            <i class="bi bi-folder me-2 text-warning"></i>
-            <span class="folder-name">${folderName}</span>
-            ${unreadCount > 0 ? `<span class="badge bg-primary ms-2">${unreadCount}</span>` : ''}
+            <i class="bi bi-folder text-warning folder-glyph"></i>
+            <span class="folder-name" title="${safePath}">${safeName}</span>
+            ${unreadCount > 0 ? `<span class="badge bg-light text-dark ms-1">${unreadCount}</span>` : ''}
           </div>
           ${hasChildren ? `<div class="folder-children" id="${folderId}" style="display: none;"></div>` : ''}
       `;

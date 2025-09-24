@@ -372,61 +372,68 @@ class FoldersTreeManager {
       const isExpanded = node.isExpanded;
       const isLeafNode = !hasChildren; // Seuls les nœuds feuilles peuvent être configurés
 
-      // Infos additionnelles (exemple: chemin complet, date dernier email, non lus)
-      let extraInfo = '';
-      if (node.fullPath) {
-        extraInfo += `<div class='folder-extra'><span class='text-muted'>Chemin:</span> <span class='folder-path'>${node.fullPath}</span></div>`;
+      const badges = [];
+      if (node.category) {
+        badges.push(`<span class="category-badge category-${node.category.toLowerCase().replace(/\s+/g, '-')}">${node.category}</span>`);
       }
-      if (node.lastEmailDate) {
-        extraInfo += `<div class='folder-extra'><span class='text-muted'>Dernier email:</span> <span>${node.lastEmailDate}</span></div>`;
+      if (typeof node.emailCount === 'number') {
+        badges.push(`<span class="badge bg-light text-dark">${node.emailCount}</span>`);
       }
-      if (typeof node.unreadCount === 'number') {
-        extraInfo += `<div class='folder-extra'><span class='text-muted'>Non lus:</span> <span>${node.unreadCount}</span></div>`;
+      if (node.isMonitored) {
+        badges.push('<span class="monitoring-indicator" title="Dossier surveillé"></span>');
       }
 
+      const metaParts = [];
+      if (node.fullPath) {
+        metaParts.push(`<span class="meta-path" title="${this.escapeHtml(node.fullPath)}">${this.escapeHtml(node.fullPath)}</span>`);
+      }
+      if (node.lastEmailDate) {
+        metaParts.push(`<span class="meta-info">Dernier: ${this.escapeHtml(node.lastEmailDate)}</span>`);
+      }
+      if (typeof node.unreadCount === 'number') {
+        metaParts.push(`<span class="meta-info">Non lus: ${node.unreadCount}</span>`);
+      }
+
+      const metaHtml = metaParts.length ? `<div class="folder-meta">${metaParts.join('<span class="meta-sep">•</span>')}</div>` : '';
+      const badgesHtml = badges.length ? `<div class="folder-badges">${badges.join('')}</div>` : '';
+
       nodeElement.innerHTML = `
-        <div class="folder-item modern-card ${node.isMonitored ? 'monitored' : ''}" data-path="${node.fullPath}" style="padding-left: ${level * 18}px;">
-          <div class="folder-connector"></div>
+        <div class="folder-item ${node.isMonitored ? 'monitored' : ''}" data-path="${node.fullPath}">
           <div class="folder-icon ${hasChildren ? 'expandable' : ''}">
-            ${hasChildren ? 
+            ${hasChildren ?
               `<i class="bi bi-chevron-right ${isExpanded ? 'expanded' : ''}"></i>` :
               `<i class="bi bi-folder${node.isMonitored ? '-check' : ''}"></i>`
             }
           </div>
-          <div class="folder-name ${level === 0 ? 'root' : ''}" title="${node.fullPath}">
-            ${this.highlightSearchTerm(node.name)}
+          <div class="folder-name" title="${this.escapeHtml(node.fullPath)}">
+            <span class="folder-label">${this.highlightSearchTerm(node.name)}</span>
+            ${badgesHtml}
           </div>
-          ${extraInfo}
-          ${node.category ? `
-            <span class="category-badge category-${node.category.toLowerCase().replace(/\s+/g, '-')}">
-              ${node.category}
-            </span>
-          ` : ''}
-          ${node.emailCount > 0 ? `
-            <span class="badge bg-gradient-modern ms-1">${node.emailCount}</span>
-          ` : ''}
-          ${node.isMonitored ? `
-            <div class="monitoring-indicator active" title="Dossier surveillé"></div>
-          ` : ''}
-          <div class="folder-actions modern-actions">
+          <div class="folder-actions">
             ${node.isMonitored ? `
-              <button class="btn btn-modern edit-folder" title="Modifier">
+              <button class="btn edit-folder" title="Modifier">
                 <i class="bi bi-pencil"></i>
               </button>
-              <button class="btn btn-modern remove-folder" title="Supprimer du monitoring">
+              <button class="btn remove-folder" title="Supprimer du monitoring">
                 <i class="bi bi-trash"></i>
               </button>
             ` : `
-              <button class="btn btn-modern add-to-monitoring" title="Ajouter au monitoring">
+              <button class="btn add-to-monitoring" title="Ajouter au monitoring">
                 <i class="bi bi-plus"></i>
               </button>
             `}
           </div>
+          ${metaHtml}
         </div>
       `;
 
       // Gestionnaires d'événements pour ce nœud
       this.setupNodeEventListeners(nodeElement, node);
+
+      const folderItem = nodeElement.querySelector('.folder-item');
+      if (folderItem) {
+        folderItem.style.setProperty('--depth', level);
+      }
 
       parentElement.appendChild(nodeElement);
 
