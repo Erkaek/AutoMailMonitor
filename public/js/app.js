@@ -1546,7 +1546,8 @@ class MailMonitor {
         setLoadingState(true);
 
         try {
-          const result = await window.electronAPI.getFolderTreeFromRoot(rootPath);
+          // Limiter la profondeur pour éviter les gels Outlook sur les grandes boîtes
+          const result = await window.electronAPI.getFolderTreeFromRoot(rootPath, 4);
           if (!result || result.success === false || !result.root) {
             const message = (result && result.error) ? result.error : 'Impossible de récupérer cette arborescence';
             folderTree.innerHTML = `<div class="text-danger"><i class="bi bi-exclamation-triangle me-2"></i>${this.escapeHtml(message)}</div>`;

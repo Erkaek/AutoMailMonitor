@@ -44,7 +44,8 @@ class OutlookConnector extends EventEmitter {
 
     // Paramètres par défaut (peuvent être écrasés par ailleurs)
     this.settings = this.settings || {};
-    this.settings.outlook = Object.assign({ maxEnumerationDepth: 6 }, this.settings.outlook || {});
+    // Limiter la profondeur par défaut pour éviter les blocages UI Outlook pendant l'exploration
+    this.settings.outlook = Object.assign({ maxEnumerationDepth: 3 }, this.settings.outlook || {});
     this.settings.exchange = Object.assign({ timeoutMs: 180000, retry: { maxAttempts: 3, backoff: 'exponential' }, ewsUrlOverride: '' }, this.settings.exchange || {});
 
     // Cache COM complet + suivi EWS
