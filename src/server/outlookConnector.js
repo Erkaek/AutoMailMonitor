@@ -1595,265 +1595,53 @@ class OutlookConnector extends EventEmitter {
   /**
    * EMAILS: Récupération des emails d'un dossier
    */
-  async getFolderEmails(folderPath, limit = 50) {
+  async getFolderEmails(folderPath, options = {}) {
     try {
       console.log(`📧 Récupération emails du dossier: ${folderPath}`);
-      
-      // Vérifier que folderPath est valide
+
       if (!folderPath || typeof folderPath !== 'string') {
         throw new Error('Chemin de dossier invalide');
       }
-      
-      console.log(`� [OUTLOOK] Navigation vers dossier spécifique: ${folderPath}`);
-      
-      const script = `
-        # Force UTF-8 output to preserve accents/diacritics
-        $enc = New-Object System.Text.UTF8Encoding $false
-        [Console]::OutputEncoding = $enc
-        $OutputEncoding = $enc
 
-        try {
-          $outlook = New-Object -ComObject Outlook.Application
-          $namespace = $outlook.GetNamespace("MAPI")
-          $emails = @()
-          $max = ${Number.isFinite(limit) ? Math.max(1, Number(limit)) : 50}
-          
-          # Helpers available in script scope (used by all fallbacks)
-          function Normalize-Name([string]$s) {
-            if ([string]::IsNullOrEmpty($s)) { return "" }
-            # Trim whitespace and trailing dots to tolerate minor path differences
-            $s2 = $s.Trim().TrimEnd('.')
-            $n = $s2.Normalize([Text.NormalizationForm]::FormD)
-            $sb = New-Object System.Text.StringBuilder
-            foreach ($c in $n.ToCharArray()) {
-              if ([Globalization.CharUnicodeInfo]::GetUnicodeCategory($c) -ne [Globalization.UnicodeCategory]::NonSpacingMark) {
-                [void]$sb.Append($c)
-              }
-            }
-            return $sb.ToString().Normalize([Text.NormalizationForm]::FormC).ToLowerInvariant().Trim()
-          }
+      const opts = (typeof options === 'object' && !Array.isArray(options)) ? options : { limit: options };
+      const limit = Number.isFinite(opts.limit) ? Math.max(1, Number(opts.limit)) : (Number.isFinite(options) ? Math.max(1, Number(options)) : 200);
 
-          function Find-ChildByName($parentFolder, [string]$targetName) {
-            $normTarget = Normalize-Name $targetName
-            foreach ($f in $parentFolder.Folders) { if ((Normalize-Name $f.Name) -eq $normTarget) { return $f } }
-            return $null
-          }
-          
-          # Fonction pour naviguer vers un dossier specifique
-          function Find-OutlookFolder {
-            param([string]$FolderPath, [object]$Namespace)
-
-            # Extraire compte et chemin
-            if ($FolderPath -match '^([^\\\\]+)\\\\(.+)$') {
-              $accountName = $matches[1]
-              $folderPath = $matches[2]
-              
-              # Chercher le store/compte
-              $targetStore = $null
-              foreach ($store in $Namespace.Stores) {
-                if ((Normalize-Name $store.DisplayName) -eq (Normalize-Name $accountName)) {
-                  $targetStore = $store
-                  break
-                }
-              }
-              
-              if (-not $targetStore) {
-                $targetStore = $Namespace.DefaultStore
-              }
-              
-              # Naviguer dans l'arborescence
-              $currentFolder = $targetStore.GetRootFolder()
-              $pathParts = $folderPath -split '\\\\'
-              
-              foreach ($part in $pathParts) {
-                if ($part -and $part.Trim() -ne "") {
-                  $next = Find-ChildByName -parentFolder $currentFolder -targetName $part
-                  if ($next -eq $null) { return $null }
-                  $currentFolder = $next
-                }
-              }
-              
-              return $currentFolder
-            } else {
-              return $null
-            }
-          }
-          
-          # Trouver le dossier cible
-          $targetFolder = Find-OutlookFolder -FolderPath "${folderPath}" -Namespace $namespace
-          
-          # Fallback: si non trouvé, tenter depuis la Boîte de réception (olFolderInbox)
-          if (-not $targetFolder) {
-            try {
-              $parts = "${folderPath}" -split "\\"
-              if ($parts.Length -gt 1) {
-                $accountName = $parts[0]
-                $targetStore = $null
-                foreach ($store in $namespace.Stores) { if ((Normalize-Name $store.DisplayName) -eq (Normalize-Name $accountName)) { $targetStore = $store; break } }
-                if ($targetStore -eq $null) { $targetStore = $namespace.DefaultStore }
-                $inbox = $targetStore.GetDefaultFolder(6)
-                if ($inbox -ne $null) {
-                  $cursor = $inbox
-                  for ($i = 1; $i -lt $parts.Length; $i++) {
-                    $name = $parts[$i]
-                    $next = Find-ChildByName -parentFolder $cursor -targetName $name
-                    if ($next -eq $null) { break }
-                    $cursor = $next
-                  }
-                  if ($cursor -ne $null) { $targetFolder = $cursor }
-                }
-              }
-            } catch {}
-          }
-
-      # Fallback 2: recherche profonde depuis Inbox ou racine par nom du dernier segment
-          if (-not $targetFolder) {
-            try {
-              $parts2 = "${folderPath}" -split "\\"
-              if ($parts2.Length -gt 1) {
-                $account2 = $parts2[0]
-                $store2 = $null
-                foreach ($st in $namespace.Stores) { if ((Normalize-Name $st.DisplayName) -eq (Normalize-Name $account2)) { $store2 = $st; break } }
-                if ($store2 -eq $null) { $store2 = $namespace.DefaultStore }
-                $root2 = $store2.GetRootFolder()
-                $leaf = $parts2[$parts2.Length - 1]
-                function Find-FolderByNameDeep([object]$start, [string]$tname) {
-                  $norm = Normalize-Name $tname
-                  foreach ($f in $start.Folders) { if ((Normalize-Name $f.Name) -eq $norm) { return $f } }
-                  foreach ($f in $start.Folders) {
-                    $found = Find-FolderByNameDeep -start $f -tname $tname
-                    if ($found -ne $null) { return $found }
-                  }
-                  return $null
-                }
-        $cand = $null
-        try { $inbox3 = $store2.GetDefaultFolder(6); if ($inbox3 -ne $null) { $cand = Find-FolderByNameDeep -start $inbox3 -tname $leaf } } catch {}
-        if ($cand -eq $null) { $cand = Find-FolderByNameDeep -start $root2 -tname $leaf }
-                if ($cand -ne $null) { $targetFolder = $cand }
-              }
-            } catch {}
-          }
-          
-          if ($targetFolder) {
-            # Récupérer TOUS les emails du dossier
-            $items = $targetFolder.Items
-            if ($items.Count -gt 0) {
-              $items.Sort("[ReceivedTime]", $true)
-              
-              # Traiter les emails (jusqu'à $max)
-              $upper = [Math]::Min($items.Count, [int]$max)
-              for ($i = 1; $i -le $upper; $i++) {
-                try {
-                  $mail = $items.Item($i)
-                  if ($mail.Class -eq 43) {
-                    $subject = if($mail.Subject) { $mail.Subject } else { "" }
-                    $senderName = if($mail.SenderName) { $mail.SenderName } else { "" }
-                    $senderEmail = if($mail.SenderEmailAddress) { $mail.SenderEmailAddress } else { "" }
-                    $receivedTime = $mail.ReceivedTime.ToString("yyyy-MM-ddTHH:mm:ssZ")
-                    $entryId = $mail.EntryID
-                    $unread = $mail.UnRead
-                    $importance = $mail.Importance
-                    $categories = if($mail.Categories) { $mail.Categories } else { "" }
-                    $flagStatus = $mail.FlagStatus
-                    $size = $mail.Size
-                    $conversationTopic = if($mail.ConversationTopic) { $mail.ConversationTopic } else { "" }
-                    $hasAttachments = $mail.Attachments.Count -gt 0
-                    $attachmentCount = $mail.Attachments.Count
-                    
-                    $emailObj = @{
-                      Subject = $subject
-                      SenderName = $senderName
-                      SenderEmailAddress = $senderEmail
-                      ReceivedTime = $receivedTime
-                      Importance = $importance
-                      UnRead = $unread
-                      Categories = $categories
-                      FlagStatus = $flagStatus
-                      Size = $size
-                      EntryID = $entryId
-                      ConversationTopic = $conversationTopic
-                      HasAttachments = $hasAttachments
-                      AttachmentCount = $attachmentCount
-                    }
-                    $emails += $emailObj
-                  }
-                } catch {
-                  # Ignorer les erreurs sur emails individuels
-                }
-              }
-            }
-            
-            $count = $emails.Count
-            $totalCount = $items.Count
-            $folderName = $targetFolder.Name
-            $timestamp = (Get-Date).ToString("yyyy-MM-ddTHH:mm:ssZ")
-            
-            $result = @{
-              success = $true
-              folderPath = "${folderPath}"
-              emails = $emails
-              count = $count
-              totalInFolder = $totalCount
-              message = "Dossier specifique: emails recuperes ($count/$totalCount)"
-              timestamp = $timestamp
-              folderName = $folderName
-            }
-          } else {
-            $timestamp = (Get-Date).ToString("yyyy-MM-ddTHH:mm:ssZ")
-            $result = @{
-              success = $false
-              folderPath = "${folderPath}"
-              emails = @()
-              count = 0
-              error = "Dossier non trouve dans l'arborescence Outlook"
-              message = "Navigation impossible vers le dossier"
-              timestamp = $timestamp
-            }
-          }
-          
-          $json = $result | ConvertTo-Json -Depth 10 -Compress
-          Write-Output $json
-          
-        } catch {
-          $errorMsg = $_.Exception.Message
-          $timestamp = (Get-Date).ToString("yyyy-MM-ddTHH:mm:ssZ")
-          $errorResult = @{
-            success = $false
-            folderPath = "${folderPath}"
-            emails = @()
-            count = 0
-            error = $errorMsg
-            message = "Erreur navigation vers dossier specifique"
-            timestamp = $timestamp
-          }
-          $errorJson = $errorResult | ConvertTo-Json -Depth 5 -Compress
-          Write-Output $errorJson
-        }
-      `;
-      
-      const result = await this.executePowerShellScript(script);
-      
-      if (result.success && result.output) {
-        try {
-          const emailData = JSON.parse(result.output);
-          console.log(`✅ [OUTLOOK] ${emailData.count} emails récupérés pour: ${folderPath}`);
-          return emailData;
-        } catch (parseError) {
-          console.error('❌ Erreur parsing JSON:', parseError.message);
-          console.log('Output brut:', result.output);
-          throw new Error(`Erreur parsing données: ${parseError.message}`);
-        }
-      } else {
-        throw new Error(result.error || 'Échec exécution PowerShell');
+      let hoursBack = 72;
+      if (opts.since instanceof Date && !Number.isNaN(opts.since.getTime())) {
+        hoursBack = Math.max(1, Math.ceil((Date.now() - opts.since.getTime()) / 3600000));
+      } else if (opts.expressMode) {
+        hoursBack = 48;
       }
-      
+
+      const unreadOnly = Boolean(opts.unreadOnly || opts.onlyUnread);
+
+      const { resolveResource } = require('./scriptPathResolver');
+      const psRes = resolveResource(['powershell'], 'get-folder-emails-by-id.ps1');
+      const psPath = psRes.path || path.join(__dirname, '../../powershell/get-folder-emails-by-id.ps1');
+
+      const args = ['-FolderPath', folderPath, '-MaxItems', String(limit), '-HoursBack', String(hoursBack)];
+      if (unreadOnly) { args.push('-UnreadOnly'); }
+      if (opts.storeId) { args.push('-StoreId', String(opts.storeId)); }
+      if (opts.storeName) { args.push('-StoreName', String(opts.storeName)); }
+      if (opts.folderEntryId) { args.push('-FolderEntryId', String(opts.folderEntryId)); }
+
+      const raw = await this.execPowerShellFile(psPath, args, 120000);
+      const parsed = OutlookConnector.parseJsonOutput(raw) || {};
+
+      if (!parsed.success) {
+        throw new Error(parsed.error || 'Échec récupération emails');
+      }
+
+      const emails = Array.isArray(parsed.emails) ? parsed.emails : (Array.isArray(parsed.Emails) ? parsed.Emails : []);
+      const count = emails.length;
+      try { console.log(`✅ [OUTLOOK] ${count} emails récupérés pour ${folderPath} (limit=${limit}, hoursBack=${hoursBack}${unreadOnly ? ', unreadOnly' : ''})`); } catch {}
+      return Object.assign({ emails, count }, parsed);
+
     } catch (error) {
       console.error(`❌ Erreur récupération emails ${folderPath}:`, error.message);
-      
-      // Retourner un résultat d'erreur structuré
       return {
         success: false,
-        folderPath: folderPath,
+        folderPath,
         emails: [],
         count: 0,
         error: error.message,
@@ -2251,12 +2039,15 @@ class OutlookConnector extends EventEmitter {
    * Options: { maxDepth?: number }
    */
   async listFoldersRecursive(targetStoreId, opts = {}) {
-    const maxDepthOpt = Number(opts.maxDepth || process.env.FOLDER_ENUM_MAX_DEPTH || -1);
+    const rawMaxDepth = Number(opts.maxDepth ?? process.env.FOLDER_ENUM_MAX_DEPTH ?? -1);
+    const maxDepthOpt = Number.isFinite(rawMaxDepth) ? rawMaxDepth : -1;
     const prefixRaw = String(opts.pathPrefix || '').replace(/\//g, '\\');
     const prefixLower = prefixRaw.toLowerCase();
     const prefixLowerWithSep = prefixLower ? `${prefixLower}\\` : '';
     const prefixSegments = prefixRaw.split('\\').filter(Boolean);
     const prefixStoreSegment = prefixSegments[0] || '';
+    const depthFromPrefix = prefixSegments.length ? prefixSegments.length + 3 : null;
+    const effectiveMaxDepth = maxDepthOpt >= 0 ? maxDepthOpt : (depthFromPrefix ?? -1);
 
     const sanitizeToken = (value) => {
       if (!value) return '';
@@ -2288,7 +2079,7 @@ ${safeTarget}
             foreach ($s in $stores) { if ($s.StoreID -eq $filter -or $s.DisplayName -eq $filter -or $s.DisplayName -like ("*" + $filter + "*")) { $tmp += $s } }
             $stores = $tmp
           }
-          $maxDepth = ${maxDepthOpt}
+          $maxDepth = ${effectiveMaxDepth}
           function Get-FolderFlat([object]$folder, [string]$parentPath, [int]$depth, [string]$storeName, [string]$storeId) {
             $items = @()
             try {
@@ -2337,7 +2128,7 @@ ${safeTarget}
   const psPath = res.path || path.join(__dirname, '../../powershell/get-all-folders.ps1');
   const psArgs = [];
   if (targetStoreId) { psArgs.push('-StoreId', String(targetStoreId)); }
-  if (Number.isFinite(maxDepthOpt) && maxDepthOpt >= 0) { psArgs.push('-MaxDepth', String(maxDepthOpt)); }
+  if (Number.isFinite(effectiveMaxDepth) && effectiveMaxDepth >= 0) { psArgs.push('-MaxDepth', String(effectiveMaxDepth)); }
       let lst = [];
       try {
         const raw = await this.execPowerShellFile(psPath, psArgs, 180000);
@@ -2358,7 +2149,7 @@ ${safeTarget}
       if (!flat.length) {
         // Fallback A: BFS using getFolderStructure + getSubFolders (multiple lightweight COM calls)
         try {
-          const maxDepth = Number.isFinite(maxDepthOpt) && maxDepthOpt >= 0 ? maxDepthOpt : 20;
+          const maxDepth = Number.isFinite(effectiveMaxDepth) && effectiveMaxDepth >= 0 ? effectiveMaxDepth : 20;
           // Resolve the real MAPI StoreID first
           let storeName = '';
           let mapiStoreId = '';
@@ -2479,7 +2270,7 @@ ${safeTarget}
           try {
             const jsPath = path.join(__dirname, '../../scripts/enum-outlook-folders.js');
             const { spawnSync } = require('child_process');
-            const run = spawnSync('cscript.exe', ['//nologo', jsPath, String(targetStoreId || ''), String(maxDepthOpt)], { encoding: 'utf8', windowsHide: true });
+            const run = spawnSync('cscript.exe', ['//nologo', jsPath, String(targetStoreId || ''), String(effectiveMaxDepth)], { encoding: 'utf8', windowsHide: true });
             if (run && run.status === 0 && run.stdout) {
               const j = OutlookConnector.parseJsonOutput(run.stdout) || {};
               const ws = Array.isArray(j.folders) ? j.folders : [];

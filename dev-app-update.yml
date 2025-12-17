@@ -1,0 +1,6 @@
+provider: github
+owner: Erkaek
+repo: AutoMailMonitor
+releaseType: release
+channel: latest
+private: false
