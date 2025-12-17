@@ -19,6 +19,9 @@ function buildCandidates(subDirs, fileName) {
   if (process.resourcesPath) {
     list.push(joinAll(process.resourcesPath));
     list.push(joinAll(process.resourcesPath, 'powershell'));
+    // Francophone installers may create 'ressources' folders; include as fallback
+    list.push(joinAll(process.resourcesPath, 'ressources'));
+    list.push(joinAll(process.resourcesPath, 'ressources', 'powershell'));
     // asar unpack layout (electron-builder may place extracted assets under app.asar.unpacked)
     list.push(joinAll(process.resourcesPath, 'app.asar.unpacked'));
     list.push(joinAll(process.resourcesPath, 'app.asar.unpacked', 'resources'));
@@ -26,16 +29,22 @@ function buildCandidates(subDirs, fileName) {
     // Fallback pour configuration actuelle (doublon 'resources/resources/...')
     list.push(joinAll(process.resourcesPath, 'resources'));
     list.push(joinAll(process.resourcesPath, 'resources', 'powershell'));
+    list.push(joinAll(process.resourcesPath, 'ressources', 'resources'));
+    list.push(joinAll(process.resourcesPath, 'ressources', 'resources', 'powershell'));
   }
   // execPath related
   try {
     const execDir = path.dirname(process.execPath || '');
     list.push(joinAll(execDir, 'resources'));
     list.push(joinAll(execDir, 'resources', 'powershell'));
+    list.push(joinAll(execDir, 'ressources'));
+    list.push(joinAll(execDir, 'ressources', 'powershell'));
     list.push(joinAll(execDir, 'app.asar.unpacked'));
     list.push(joinAll(execDir, 'app.asar.unpacked', 'resources'));
     list.push(joinAll(execDir, 'app.asar.unpacked', 'powershell'));
     list.push(joinAll(execDir, 'resources', 'resources'));
+    list.push(joinAll(execDir, 'ressources', 'resources'));
+    list.push(joinAll(execDir, 'ressources', 'resources', 'powershell'));
   } catch {}
   // app path (dev)
   try {

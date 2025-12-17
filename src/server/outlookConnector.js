@@ -2125,6 +2125,7 @@ ${safeTarget}
       `;
   // Use external script to avoid complex quoting issues
   const { resolveResource } = require('./scriptPathResolver');
+  const fs = require('fs');
   const res = resolveResource(['powershell'], 'get-all-folders.ps1');
   const psPath = res.path || path.join(__dirname, '../../powershell/get-all-folders.ps1');
   const psArgs = [];
@@ -2132,13 +2133,17 @@ ${safeTarget}
   if (Number.isFinite(effectiveMaxDepth) && effectiveMaxDepth >= 0) { psArgs.push('-MaxDepth', String(effectiveMaxDepth)); }
       let lst = [];
       try {
+        const psExists = psPath && fs.existsSync(psPath);
+        if (!psExists) {
+          throw new Error(`PS script missing at ${psPath}`);
+        }
         const raw = await this.execPowerShellFile(psPath, psArgs, 180000);
         const json = OutlookConnector.parseJsonOutput(raw) || {};
         lst = Array.isArray(json.folders) ? json.folders : [];
       } catch (eps) {
         console.warn('[COM-REC] PS external failed, will try inline script fallback:', eps.message, 'psPath=', psPath);
         try {
-          const inline = await this.executePowerShellScript(psScript, 180000);
+          const inline = await this.executePowerShellScript(script, 180000);
           if (inline && inline.success) {
             const json2 = OutlookConnector.parseJsonOutput(inline.output) || {};
             lst = Array.isArray(json2.folders) ? json2.folders : [];

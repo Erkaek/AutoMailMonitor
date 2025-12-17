@@ -1485,6 +1485,8 @@ class MailMonitor {
           const lvl = (entry?.level || 'info').toString().toUpperCase();
           const txt = (entry && (entry.text || entry.message || entry.msg || entry.error || entry)) ? String(entry.text || entry.message || entry.msg || entry.error || entry) : '';
           if (!txt) return;
+          // Filtrer les logs trop verbeux non liés à l'exploration
+          if (/\[INFO\]\s*\[(CONFIG|WEEKLY)\]/i.test(txt)) return;
           pushLog(`[${ts}] [${lvl}] ${txt}`);
         });
       }
