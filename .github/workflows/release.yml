@@ -12,6 +12,9 @@ jobs:
     env:
       ELECTRON_BUILDER_DEBUG: true
       NPM_CONFIG_LOGLEVEL: info
+      CODE_SIGNING_CERT_BASE64: ${{ secrets.CODE_SIGNING_CERT_BASE64 }}
+      CODE_SIGNING_CERT_PASSWORD: ${{ secrets.CODE_SIGNING_CERT_PASSWORD }}
+      PRIVATE_UPDATER_TOKEN: ${{ secrets.PRIVATE_UPDATER_TOKEN }}
     permissions:
       contents: write   # allow creating releases and uploading assets
     steps:
