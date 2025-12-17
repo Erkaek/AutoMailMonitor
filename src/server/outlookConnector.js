@@ -2135,8 +2135,17 @@ ${safeTarget}
         const json = OutlookConnector.parseJsonOutput(raw) || {};
         lst = Array.isArray(json.folders) ? json.folders : [];
       } catch (eps) {
-        console.warn('[COM-REC] PS external failed, will try fallbacks:', eps.message);
-        lst = [];
+        console.warn('[COM-REC] PS external failed, will try inline script fallback:', eps.message, 'psPath=', psPath);
+        try {
+          const inline = await this.executePowerShellScript(psScript, 180000);
+          if (inline && inline.success) {
+            const json2 = OutlookConnector.parseJsonOutput(inline.output) || {};
+            lst = Array.isArray(json2.folders) ? json2.folders : [];
+          }
+        } catch (eps2) {
+          console.warn('[COM-REC] Inline PS fallback failed:', eps2.message);
+          lst = [];
+        }
       }
       let flat = lst.map(f => ({
         storeId: f.StoreEntryID,
