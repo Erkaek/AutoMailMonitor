@@ -3,6 +3,7 @@ name: Release on Push (Windows)
 on:
   push:
     branches: [ main ]
+    tags: [ 'v*' ]
   workflow_dispatch: {}
 
 jobs:
@@ -67,6 +68,25 @@ jobs:
             echo "WIN_CSC_KEY_PASSWORD=$pwdPlain" | Out-File -FilePath $env:GITHUB_ENV -Append
             Write-Host "Self-signed cert generated and exported for build signing."
           }
+
+      - name: Ensure git tags are available
+        shell: bash
+        run: git fetch --tags --force
+
+      - name: Create tag if missing (v<package.json>)
+        shell: bash
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          TAG="v$VERSION"
+          if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+            echo "Tag already exists: $TAG"
+          else
+            echo "Creating tag $TAG"
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git tag -a "$TAG" -m "Release $TAG"
+            git push origin "$TAG"
+          fi
 
       - name: Build and publish (electron-builder)
         env:
