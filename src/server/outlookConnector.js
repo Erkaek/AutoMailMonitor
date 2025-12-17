@@ -2124,7 +2124,7 @@ ${safeTarget}
       `;
   // Use external script to avoid complex quoting issues
   const { resolveResource } = require('./scriptPathResolver');
-  const res = resolveResource(['powershell','scripts'], 'get-all-folders.ps1');
+  const res = resolveResource(['powershell'], 'get-all-folders.ps1');
   const psPath = res.path || path.join(__dirname, '../../powershell/get-all-folders.ps1');
   const psArgs = [];
   if (targetStoreId) { psArgs.push('-StoreId', String(targetStoreId)); }
@@ -2379,7 +2379,7 @@ ${safeTarget}
       res.stores = stores;
       // For each store, enumerate tree using external script with parameters (avoids inline binary StoreID issues)
       const { resolveResource } = require('./scriptPathResolver');
-      const resPS = resolveResource(['powershell','scripts'], 'get-all-folders.ps1');
+      const resPS = resolveResource(['powershell'], 'get-all-folders.ps1');
       const psPath = resPS.path || path.join(__dirname, '../../powershell/get-all-folders.ps1');
     // Process stores sequentially to avoid COM conflicts
     for (const st of stores) {

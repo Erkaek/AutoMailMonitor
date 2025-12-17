@@ -1424,9 +1424,9 @@ class MailMonitor {
                     </div>
                   </div>
                   <div class="mb-3">
-                    <label class="form-label">Logs d'exploration (filtrés)</label>
-                    <div id="folder-log-box" class="border rounded p-2 bg-light" style="max-height: 160px; overflow-y: auto; font-family: monospace; font-size: 12px;"></div>
-                    <div class="form-text">Affiche uniquement les étapes d'exploration Outlook (getSubFolders, COM-REC, getFolderTree...).</div>
+                    <label class="form-label">Logs (complets pour debug)</label>
+                    <div id="folder-log-box" class="border rounded p-2 bg-light" style="max-height: 200px; overflow-y: auto; font-family: monospace; font-size: 12px;"></div>
+                    <div class="form-text">Flux complet des logs temps réel pendant l'exploration (limité à 200 lignes).</div>
                   </div>
                   <div class="mb-3">
                     <label class="form-label">Catégorie</label>
@@ -1470,24 +1470,22 @@ class MailMonitor {
         line.textContent = msg;
         logBox.appendChild(line);
         // limiter le nombre de lignes
-        while (logBox.children.length > 80) {
+        while (logBox.children.length > 200) {
           logBox.removeChild(logBox.firstChild);
         }
         logBox.scrollTop = logBox.scrollHeight;
       };
 
-      // Abonnement aux logs du main process (filtrés)
+      // Abonnement aux logs du main process (flux complet, limité à 200 lignes pour le modal)
       if (!window.__folderLogHandlerAttached && window.electronAPI?.onLogEntry) {
         window.__folderLogHandlerAttached = true;
         window.electronAPI.onLogEntry((entry) => {
-          // extraire texte
-          const txt = (entry && (entry.text || entry.message || entry.msg || entry.level || entry)) ? String(entry.text || entry.message || entry.msg || entry) : '';
-          if (!txt) return;
           if (!document.getElementById('folderModal')) return; // modal fermé => ignore
-          // filtrage léger sur les logs d'exploration
-          const re = /(getSubFolders|getFolderTreeFromRootPath|COM-REC|PS\] Attempt|Folders for store)/i;
-          if (!re.test(txt)) return;
-          pushLog(txt);
+          const ts = entry?.ts || entry?.timestamp || entry?.time || new Date().toLocaleTimeString();
+          const lvl = (entry?.level || 'info').toString().toUpperCase();
+          const txt = (entry && (entry.text || entry.message || entry.msg || entry.error || entry)) ? String(entry.text || entry.message || entry.msg || entry.error || entry) : '';
+          if (!txt) return;
+          pushLog(`[${ts}] [${lvl}] ${txt}`);
         });
       }
 
