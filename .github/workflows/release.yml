@@ -9,6 +9,9 @@ on:
 jobs:
   build-and-publish:
     runs-on: windows-latest
+    env:
+      ELECTRON_BUILDER_DEBUG: true
+      NPM_CONFIG_LOGLEVEL: info
     permissions:
       contents: write   # allow creating releases and uploading assets
     steps:
