@@ -1424,6 +1424,11 @@ class MailMonitor {
                     </div>
                   </div>
                   <div class="mb-3">
+                    <label class="form-label">Logs d'exploration (filtrés)</label>
+                    <div id="folder-log-box" class="border rounded p-2 bg-light" style="max-height: 160px; overflow-y: auto; font-family: monospace; font-size: 12px;"></div>
+                    <div class="form-text">Affiche uniquement les étapes d'exploration Outlook (getSubFolders, COM-REC, getFolderTree...).</div>
+                  </div>
+                  <div class="mb-3">
                     <label class="form-label">Catégorie</label>
                     <select class="form-control" id="category-input" required>
                       <option value="">-- Sélectionner une catégorie --</option>
@@ -1457,6 +1462,34 @@ class MailMonitor {
       const rootInput = document.getElementById('root-folder-input');
       const loadButton = document.getElementById('load-root-tree');
       const alertBox = document.getElementById('folder-modal-alert');
+      const logBox = document.getElementById('folder-log-box');
+
+      const pushLog = (msg) => {
+        if (!logBox) return;
+        const line = document.createElement('div');
+        line.textContent = msg;
+        logBox.appendChild(line);
+        // limiter le nombre de lignes
+        while (logBox.children.length > 80) {
+          logBox.removeChild(logBox.firstChild);
+        }
+        logBox.scrollTop = logBox.scrollHeight;
+      };
+
+      // Abonnement aux logs du main process (filtrés)
+      if (!window.__folderLogHandlerAttached && window.electronAPI?.onLogEntry) {
+        window.__folderLogHandlerAttached = true;
+        window.electronAPI.onLogEntry((entry) => {
+          // extraire texte
+          const txt = (entry && (entry.text || entry.message || entry.msg || entry.level || entry)) ? String(entry.text || entry.message || entry.msg || entry) : '';
+          if (!txt) return;
+          if (!document.getElementById('folderModal')) return; // modal fermé => ignore
+          // filtrage léger sur les logs d'exploration
+          const re = /(getSubFolders|getFolderTreeFromRootPath|COM-REC|PS\] Attempt|Folders for store)/i;
+          if (!re.test(txt)) return;
+          pushLog(txt);
+        });
+      }
 
       if (rootInput && this.state?.lastRootFolderPath) {
         rootInput.value = this.state.lastRootFolderPath;
@@ -1573,6 +1606,11 @@ class MailMonitor {
       // Sauvegarde
       document.getElementById('save-folder-config').addEventListener('click', () => {
         this.saveFolderConfiguration(modal);
+      });
+
+      // Nettoyage du buffer de logs à la fermeture du modal
+      document.getElementById('folderModal')?.addEventListener('hidden.bs.modal', () => {
+        if (logBox) logBox.innerHTML = '';
       });
 
       return true;

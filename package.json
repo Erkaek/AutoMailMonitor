@@ -1,6 +1,6 @@
 {
   "name": "mailmonitor",
-  "version": "0.9.51",
+  "version": "0.9.52",
   "description": "Application de monitoring des emails Outlook avec interface moderne",
   "main": "src/main/index.js",
   "scripts": { 
@@ -79,6 +79,12 @@
   "to": "scripts/",
   "filter": ["**/*"]
       }
+        ,
+        {
+      "from": "powershell/",
+      "to": "powershell/",
+      "filter": ["**/*"]
+        }
     ],
     "win": {
       "target": "nsis",
