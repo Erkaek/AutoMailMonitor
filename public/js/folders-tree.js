@@ -76,24 +76,19 @@ class FoldersTreeManager {
 
   async loadFolders(forceRefresh = false) {
     try {
-      console.log('📁 Chargement des dossiers monitorés...');
       this.showLoading();
       
   // Utiliser l'API IPC d'Electron
   const data = await window.electronAPI.invoke('api-folders-tree', { force: !!forceRefresh });
-      console.log('📁 Données reçues de api-folders-tree:', data);
 
       if (!data || !data.folders) {
         console.warn('⚠️ Réponse invalide du serveur:', data);
         throw new Error('Réponse invalide du serveur');
       }
 
-      console.log(`📁 ${data.folders.length} dossiers trouvés dans la réponse`);
-      
   this.folders = this.buildFolderTree(data.folders || []);
   // Déplier tout par défaut
   this.expandAllNodes(this.folders);
-  console.log('📁 Arbre construit, taille:', this.folders.size);
   this.renderCurrentView();
       this.updateStats(data.stats || {});
 
@@ -104,7 +99,6 @@ class FoldersTreeManager {
   }
 
   buildFolderTree(folders) {
-    console.log('🏗️ Construction arbre, données reçues:', folders);
     const tree = new Map();
     const pathMap = new Map();
 
@@ -153,8 +147,6 @@ class FoldersTreeManager {
       });
     });
 
-    console.log('🏗️ Arbre final construit, taille:', tree.size);
-    console.log('🏗️ Contenu arbre:', Array.from(tree.keys()));
     return tree;
   }
 
@@ -164,10 +156,7 @@ class FoldersTreeManager {
   const boardEl = document.getElementById('folders-board');
   const treeEl = document.getElementById('folders-tree');
   if (boardEl && treeEl) { boardEl.classList.add('d-none'); treeEl.classList.remove('d-none'); }
-
-    console.log('🎨 renderTree appelé, this.folders.size:', this.folders.size);
-    console.log('🎨 Contenu de this.folders:', this.folders);
-    // Préserver la position de scroll avant re-render
+  // Préserver la position de scroll avant re-render
     let prevScrollTop = 0;
     const existingScrollEl = this.container.querySelector('.folders-tree');
     if (existingScrollEl) {
@@ -178,7 +167,6 @@ class FoldersTreeManager {
     this.container.innerHTML = '';
     
     if (this.folders.size === 0) {
-      console.log('🎨 Aucun dossier à afficher - message vide');
   this.container.innerHTML = `
         <div class="text-center text-muted py-4">
           <i class="bi bi-folder-x display-6 mb-3"></i>
@@ -191,7 +179,6 @@ class FoldersTreeManager {
       return;
     }
 
-    console.log('🎨 Affichage de l\'arbre avec', this.folders.size, 'nœuds racine');
     const treeElement = document.createElement('div');
     treeElement.className = 'folders-tree';
     

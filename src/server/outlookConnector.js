@@ -1069,15 +1069,25 @@ class OutlookConnector extends EventEmitter {
       }
 
       if (!nodesByPath.has(normalizedLower)) {
+        // Try exact canonical match first
         const rootItem = flat.find(item => {
           const rootRaw = String(item.fullPath || item.FullPath || '').replace(/\//g, '\\');
           const rootCanonical = canonicalizePath(rootRaw);
           return rootCanonical && rootCanonical.toLowerCase() === normalizedLower;
         });
+
+        // Fallback: look for an item whose path ends with the requested path (handles duplicated store segments like "Store\\Store\\Inbox")
+        const suffixCandidate = rootItem ? null : flat.find(item => {
+          const rawLower = String(item.fullPath || item.FullPath || '').replace(/\//g, '\\').toLowerCase();
+          return rawLower.endsWith(normalizedLower);
+        });
+
+        const chosen = rootItem || suffixCandidate;
+
         registerNode(normalizedPath, {
           name: parts[parts.length - 1] || storeName,
-          entryId: rootItem?.entryId || rootItem?.FolderEntryID || '',
-          childCount: parseChildCount(rootItem?.childCount ?? rootItem?.ChildCount)
+          entryId: chosen?.entryId || chosen?.FolderEntryID || '',
+          childCount: parseChildCount(chosen?.childCount ?? chosen?.ChildCount)
         });
       }
 
