@@ -55,9 +55,13 @@ function Get-StoreRoot {
 }
 
 try {
-	try { Add-Type -AssemblyName Microsoft.Office.Interop.Outlook | Out-Null } catch {}
+	# Ne pas charger Microsoft.Office.Interop.Outlook pour éviter les problèmes de cast (32/64 bits)
 	$ol = New-Object -ComObject Outlook.Application
-	$ns = $ol.GetNamespace('MAPI')
+	# Préférer Session pour éviter le cast COM Interop
+	$ns = $null
+	try { $ns = $ol.Session } catch {}
+	if (-not $ns) { try { $ns = $ol.GetNamespace('MAPI') } catch {} }
+	if (-not $ns) { throw "Namespace MAPI introuvable" }
 	try { $null = $ns.Logon() } catch {}
 
 	$stores = @()

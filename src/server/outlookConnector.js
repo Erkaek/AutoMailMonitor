@@ -653,8 +653,26 @@ class OutlookConnector extends EventEmitter {
         [Console]::OutputEncoding = $enc
         $OutputEncoding = $enc
         try {
-          $outlook = New-Object -ComObject Outlook.Application
-          $ns = $outlook.GetNamespace("MAPI")
+          # Création COM sans Add-Type pour éviter les cast 32/64 bits
+          $outlook = $null
+          try { $outlook = [System.Runtime.Interopservices.Marshal]::GetActiveObject('Outlook.Application') } catch {}
+          if (-not $outlook) { $outlook = New-Object -ComObject Outlook.Application }
+
+          $ns = $null
+          # Préférer Session pour éviter les casts interop
+          try { $ns = $outlook.Session } catch {}
+          if (-not $ns) {
+            try { $ns = $outlook.GetNamespace("MAPI") } catch {}
+          }
+          if (-not $ns) {
+            # Retenter en recréant l'objet COM une fois
+            try {
+              $outlook = New-Object -ComObject Outlook.Application
+              try { $ns = $outlook.Session } catch {}
+              if (-not $ns) { try { $ns = $outlook.GetNamespace("MAPI") } catch {} }
+            } catch {}
+          }
+          if (-not $ns) { throw "Namespace MAPI introuvable" }
 
           if ("${safeStoreId}" -eq "") {
             # Retourner uniquement la liste des boîtes (métadonnées), pas d'arborescence
@@ -788,6 +806,11 @@ class OutlookConnector extends EventEmitter {
         if (res32.success) {
           const j2 = OutlookConnector.parseJsonOutput(res32.output || '') || {};
           folders = Array.isArray(j2.folders) ? j2.folders : folders;
+          if (!folders.length && res32.output) {
+            console.warn('[OUTLOOK] getFolderStructure empty (32-bit) output head=', String(res32.output).slice(0, 300));
+          }
+        } else {
+          console.warn('[OUTLOOK] getFolderStructure 32-bit attempt failed:', res32.error || res32.code || 'unknown');
         }
       }
 
