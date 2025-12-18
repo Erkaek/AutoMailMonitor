@@ -192,6 +192,7 @@ class OptimizedDatabaseService {
             
             // Créer les tables si nécessaire
             this.createTables();
+            this.ensureFolderIdColumns();
             
             // S'assurer que les colonnes de suppression existent
                 // this.ensureDeletedColumn(); // supprimé, colonne gérée dans la migration
@@ -273,12 +274,15 @@ class OptimizedDatabaseService {
 
         // (activity_weekly supprimé)
 
-        // Table des configurations de dossiers surveillés
+        // Table des configurations de dossiers surveillés (chemin + IDs)
         this.db.exec(`
             CREATE TABLE IF NOT EXISTS folder_configurations (
                 folder_path TEXT PRIMARY KEY,
                 folder_name TEXT NOT NULL,
                 category TEXT NOT NULL,
+                store_id TEXT NULL,
+                entry_id TEXT NULL,
+                store_name TEXT NULL,
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
             )
@@ -304,6 +308,28 @@ class OptimizedDatabaseService {
             CREATE INDEX IF NOT EXISTS idx_emails_deleted_at ON emails(deleted_at);
             CREATE INDEX IF NOT EXISTS idx_emails_is_treated ON emails(is_treated);
         `);
+    }
+
+    /**
+     * Migration: ajoute store_id/entry_id/store_name aux folder_configurations si absents
+     */
+    ensureFolderIdColumns() {
+        try {
+            const cols = this.db.prepare(`PRAGMA table_info(folder_configurations)`).all();
+            const have = (name) => cols.some(c => String(c.name).toLowerCase() === name);
+            if (!have('store_id')) {
+                this.db.exec(`ALTER TABLE folder_configurations ADD COLUMN store_id TEXT NULL`);
+            }
+            if (!have('entry_id')) {
+                this.db.exec(`ALTER TABLE folder_configurations ADD COLUMN entry_id TEXT NULL`);
+            }
+            if (!have('store_name')) {
+                this.db.exec(`ALTER TABLE folder_configurations ADD COLUMN store_name TEXT NULL`);
+            }
+            this.db.exec(`CREATE INDEX IF NOT EXISTS idx_folder_cfg_store_entry ON folder_configurations(store_id, entry_id)`);
+        } catch (e) {
+            console.warn('⚠️ Migration folder_configurations (store/entry) ignorée:', e.message);
+        }
     }
 
     /**
@@ -384,12 +410,12 @@ class OptimizedDatabaseService {
             
             // Folders
             getFoldersConfig: this.db.prepare(`
-                SELECT folder_path, category, folder_name FROM folder_configurations
+                SELECT folder_path, category, folder_name, store_id, entry_id, store_name FROM folder_configurations
             `),
             
             insertFolderConfig: this.db.prepare(`
-                INSERT OR REPLACE INTO folder_configurations (folder_path, category, folder_name, updated_at)
-                VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+                INSERT OR REPLACE INTO folder_configurations (folder_path, category, folder_name, store_id, entry_id, store_name, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
             `),
             
             deleteFolderConfig: this.db.prepare(`
@@ -673,10 +699,10 @@ class OptimizedDatabaseService {
     /**
      * Sauvegarde configuration dossier
      */
-    addFolderConfiguration(folderPath, category, folderName) {
+    addFolderConfiguration(folderPath, category, folderName, storeId = null, entryId = null, storeName = null) {
         this.cache.del('folders_config'); // Invalider cache
-    const cat = this.normalizeCategory(category);
-    return this.statements.insertFolderConfig.run(folderPath, cat, folderName);
+        const cat = this.normalizeCategory(category);
+        return this.statements.insertFolderConfig.run(folderPath, cat, folderName, storeId || null, entryId || null, storeName || null);
     }
 
     /**
@@ -694,7 +720,10 @@ class OptimizedDatabaseService {
                 if (!folder_path) continue;
                 const category = this.normalizeCategory(r.category || 'Mails simples') || 'Mails simples';
                 const folder_name = r.folder_name || r.name || String(folder_path).split('\\').pop();
-                map.set(folder_path, { folder_path, category, folder_name });
+                const store_id = r.store_id || r.storeId;
+                const entry_id = r.entry_id || r.entryId;
+                const store_name = r.store_name || r.storeName;
+                map.set(folder_path, { folder_path, category, folder_name, store_id, entry_id, store_name });
             }
 
             const uniqueRows = Array.from(map.values());
@@ -705,7 +734,7 @@ class OptimizedDatabaseService {
             const insert = this.statements.insertFolderConfig;
             const tx = this.db.transaction((items) => {
                 for (const it of items) {
-                    insert.run(it.folder_path, it.category, it.folder_name);
+                    insert.run(it.folder_path, it.category, it.folder_name, it.store_id || null, it.entry_id || null, it.store_name || null);
                 }
             });
             tx(uniqueRows);
@@ -736,7 +765,7 @@ class OptimizedDatabaseService {
         // Si aucune ligne affectée, faire un upsert minimal avec folderName dérivé du path
         if (info.changes === 0) {
             const name = String(folderPath || '').split('\\').pop() || folderPath;
-            this.statements.insertFolderConfig.run(folderPath, cat, name);
+            this.statements.insertFolderConfig.run(folderPath, cat, name, null, null, null);
             return 1;
         }
         return info.changes;
@@ -762,11 +791,14 @@ class OptimizedDatabaseService {
                 const categoryRaw = r.category || '';
                 const category = this.normalizeCategory(categoryRaw || 'Mails simples') || 'Mails simples';
                 const name = r.folder_name || r.name || String(folderPath).split('\\').pop();
+                const storeId = r.store_id || r.storeId || null;
+                const entryId = r.entry_id || r.entryId || null;
+                const storeName = r.store_name || r.storeName || null;
                 if (!category) {
                     // Cela ne devrait plus arriver, mais log si vide
                     console.warn('⚠️ [FOLDERS-CONFIG] Catégorie vide après normalisation, fallback Mails simples', folderPath);
                 }
-                insert.run(folderPath, category, name);
+                insert.run(folderPath, category, name, storeId, entryId, storeName);
             }
         });
 
@@ -776,7 +808,10 @@ class OptimizedDatabaseService {
             rows = Object.entries(payload.folderCategories).map(([folder_path, cfg]) => ({
                 folder_path,
                 category: this.normalizeCategory(cfg?.category || 'Mails simples') || 'Mails simples',
-                folder_name: cfg?.name || String(folder_path).split('\\').pop()
+                folder_name: cfg?.name || String(folder_path).split('\\').pop(),
+                store_id: cfg?.store_id || cfg?.storeId || null,
+                entry_id: cfg?.entry_id || cfg?.entryId || null,
+                store_name: cfg?.store_name || cfg?.storeName || null
             }));
         } else if (Array.isArray(payload)) {
             rows = payload;
@@ -799,7 +834,7 @@ class OptimizedDatabaseService {
      */
     debugDumpFolderConfigurations() {
         try {
-            const rows = this.db.prepare('SELECT folder_path, category, folder_name, created_at, updated_at FROM folder_configurations').all();
+            const rows = this.db.prepare('SELECT folder_path, category, folder_name, store_id, entry_id, store_name, created_at, updated_at FROM folder_configurations').all();
             console.log('🧪 [FOLDERS-CONFIG][DUMP]', rows);
             return rows;
         } catch (e) {

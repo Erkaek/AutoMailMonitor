@@ -2114,6 +2114,9 @@ class MailMonitor {
       // Récupérer le nom du dossier depuis l'élément sélectionné
       const selectedFolder = document.querySelector('.folder-selectable.bg-primary');
       const folderName = selectedFolder ? selectedFolder.getAttribute('data-name') : 'Dossier';
+      const entryId = selectedFolder ? (selectedFolder.getAttribute('data-entry-id') || '') : '';
+      const storeId = document.getElementById('folder-tree')?.dataset.storeId || '';
+      const storeName = document.getElementById('folder-tree')?.dataset.mailboxDisplay || document.getElementById('folder-tree')?.dataset.mailbox || '';
 
       // Validation inline visible (les notifications sont no-op)
   const catEl = document.getElementById('category-input');
@@ -2140,7 +2143,7 @@ class MailMonitor {
       try { spinner?.classList.remove('d-none'); if (text) text.textContent = 'Ajout...'; if (btn) btn.disabled = true; } catch(_) {}
 
       // Demander au processus principal d'ajouter le dossier et tous ses sous-dossiers
-      const result = await window.electronAPI.addFolderToMonitoring({ folderPath, category });
+      const result = await window.electronAPI.addFolderToMonitoring({ folderPath, category, entryId, storeId, storeName });
 
       if (result.success) {
         await this.loadFoldersConfiguration();

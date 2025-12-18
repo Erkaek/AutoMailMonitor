@@ -220,6 +220,9 @@ class UnifiedMonitoringService extends EventEmitter {
                         path: resolvedPath,
                         category: folder.category,
                         name: folder.folder_name || folder.name || resolvedPath.split('\\').pop() || '',
+                        storeId: folder.store_id || folder.storeId || null,
+                        entryId: folder.entry_id || folder.entryId || null,
+                        storeName: folder.store_name || folder.storeName || null,
                         enabled: true
                     };
                     // Debug réduit
@@ -487,16 +490,21 @@ class UnifiedMonitoringService extends EventEmitter {
                 throw new Error('Service d\'écoute COM non initialisé');
             }
 
-            // Récupérer les chemins des dossiers à surveiller
-            const folderPaths = this.monitoredFolders.map(folder => folder.path);
+            // Récupérer les dossiers à surveiller (chemin + IDs si dispo)
+            const folderTargets = this.monitoredFolders.map(folder => ({
+                path: folder.path,
+                storeId: folder.storeId || null,
+                entryId: folder.entryId || null,
+                storeName: folder.storeName || null
+            }));
             
             // Démarrer l'écoute COM
-            const result = await this.outlookEventsService.startListening(folderPaths);
+            const result = await this.outlookEventsService.startListening(folderTargets);
 
             if (result.success) {
                 this.isUsingCOMEvents = true;
-                this.log(`✅ Écoute COM activée pour ${folderPaths.length} dossiers`, 'COM');
-                this.emit('com-listening-started', { folders: folderPaths.length });
+                this.log(`✅ Écoute COM activée pour ${folderTargets.length} dossiers`, 'COM');
+                this.emit('com-listening-started', { folders: folderTargets.length });
             } else {
                 throw new Error(result.message);
             }

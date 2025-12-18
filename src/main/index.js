@@ -1135,7 +1135,7 @@ ipcMain.handle('api-database-folder-stats', async () => {
 });
 
 // Ajouter un dossier au monitoring
-ipcMain.handle('api-folders-add', async (event, { folderPath, category }) => {
+ipcMain.handle('api-folders-add', async (event, { folderPath, category, storeId: payloadStoreId, entryId: payloadEntryId, storeName: payloadStoreName }) => {
   const startedAt = Date.now();
   let debugPhases = [];
   let toInsertDebugSample = [];
@@ -1164,7 +1164,7 @@ ipcMain.handle('api-folders-add', async (event, { folderPath, category }) => {
       const mailboxName = parts[0];
 
       // 1) Trouver le StoreID de la boîte aux lettres
-      let storeId = '';
+      let storeId = payloadStoreId || '';
       try {
         const mbs = await outlookConnector.getMailboxes?.();
         if (Array.isArray(mbs)) {
@@ -1494,7 +1494,7 @@ ipcMain.handle('api-folders-add', async (event, { folderPath, category }) => {
         const normalized = normalizePath(original);
         if (!seen.has(normalized)) {
           seen.add(normalized);
-          toInsert.push({ path: normalized, name: extractFolderName(original) });
+          toInsert.push({ path: normalized, name: extractFolderName(original), entryId: payloadEntryId || '', storeId, storeName: payloadStoreName || mailboxDisplay || mailboxName });
         }
   } else {
     // Chemin "affichage" pour naviguer côté COM et chemin normalisé (SMTP) pour la BDD
@@ -1504,7 +1504,7 @@ ipcMain.handle('api-folders-add', async (event, { folderPath, category }) => {
     try { console.log(`[ADD] Normalized DB path: ${normalizedBasePath}`); } catch {}
         if (!seen.has(normalizedBasePath)) {
           seen.add(normalizedBasePath);
-          toInsert.push({ path: normalizedBasePath, name: extractFolderName(original) });
+          toInsert.push({ path: normalizedBasePath, name: extractFolderName(original), entryId: payloadEntryId || '', storeId, storeName: payloadStoreName || mailboxDisplay || mailboxName });
         }
         // DFS: essayer COM, sinon retomber sur EWS pour la descente complète
         const runDfsCom = async (rootDisplayPath) => {
@@ -1557,7 +1557,7 @@ ipcMain.handle('api-folders-add', async (event, { folderPath, category }) => {
               const normalized = normalizePath(childDisplayPath);
               if (!seen.has(normalized)) {
                 seen.add(normalized);
-                toInsert.push({ path: normalized, name: childName });
+                toInsert.push({ path: normalized, name: childName, entryId: k?.EntryID || k?.EntryId || '', storeId, storeName: payloadStoreName || mailboxDisplay || mailboxName });
                 stack.push(childDisplayPath);
               }
             }
@@ -1603,7 +1603,7 @@ ipcMain.handle('api-folders-add', async (event, { folderPath, category }) => {
                     const norm = normalizePath(disp);
                     if (!seen.has(norm)) {
                       seen.add(norm);
-                      toInsert.push({ path: norm, name: k.Name });
+                      toInsert.push({ path: norm, name: f.Name, entryId: f.Id || '', storeId, storeName: payloadStoreName || mailboxDisplay || mailboxName });
                     }
                     stack.push({ id: k.Id, chain: childChain });
                   }
@@ -1672,7 +1672,7 @@ ipcMain.handle('api-folders-add', async (event, { folderPath, category }) => {
                 const norm = normalizePath(disp);
                 if (!seen.has(norm)) {
                   seen.add(norm);
-                  toInsert.push({ path: norm, name: k.Name });
+                  toInsert.push({ path: norm, name: k.Name, entryId: k.Id || '', storeId, storeName: payloadStoreName || mailboxDisplay || mailboxName });
                 }
                 stack.push({ id: k.Id, chain: childChain });
         safetyCounter++;
@@ -1708,7 +1708,7 @@ ipcMain.handle('api-folders-add', async (event, { folderPath, category }) => {
                 const normalized = normalizePath(childDisplayPath);
                 if (!seen.has(normalized)) {
                   seen.add(normalized);
-                  toInsert.push({ path: normalized, name: childName });
+                  toInsert.push({ path: normalized, name: childName, entryId: k?.EntryID || k?.EntryId || '', storeId, storeName: payloadStoreName || mailboxDisplay || mailboxName });
                 }
                 stack.push(childDisplayPath);
               }
@@ -1847,10 +1847,16 @@ ipcMain.handle('api-folders-add', async (event, { folderPath, category }) => {
     debugPhases.push('insert-start');
     let inserted = 0;
     try {
+      const resolvedStoreId = storeId || payloadStoreId || '';
+      const resolvedStoreName = payloadStoreName || mailboxDisplay || mailboxName || '';
+      const resolvedEntryId = payloadEntryId || '';
       const batchRows = toInsert.map(it => ({
         folder_path: it.path,
         category,
-        folder_name: it.name
+        folder_name: it.name,
+        store_id: it.storeId || resolvedStoreId,
+        entry_id: it.entryId || resolvedEntryId,
+        store_name: it.storeName || resolvedStoreName
       }));
       const resBatch = (typeof dbRef.addFolderConfigurationsBatch === 'function')
         ? dbRef.addFolderConfigurationsBatch(batchRows)

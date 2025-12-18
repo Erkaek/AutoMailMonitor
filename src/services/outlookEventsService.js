@@ -32,7 +32,7 @@ class OutlookEventsService extends EventEmitter {
   /**
    * Démarre l'écoute des événements COM Outlook avec polling intelligent
    */
-  async startListening(folderPaths = []) {
+  async startListening(folders = []) {
     try {
       if (this.isListening) {
         console.log('⚠️ [OutlookEvents] Écoute déjà active');
@@ -42,7 +42,7 @@ class OutlookEventsService extends EventEmitter {
       console.log('🔔 [OutlookEvents] Démarrage de l\'écoute des événements COM...');
       
       // Mettre à jour la liste des dossiers surveillés
-      this.updateMonitoredFolders(folderPaths);
+      this.updateMonitoredFolders(folders);
       
       // Démarrer le processus PowerShell d'écoute COM avec méthode hybride
       await this.startHybridListener();
@@ -99,13 +99,23 @@ class OutlookEventsService extends EventEmitter {
   /**
    * Met à jour la liste des dossiers surveillés
    */
-  updateMonitoredFolders(folderPaths) {
+  updateMonitoredFolders(folders) {
     this.monitoredFolders.clear();
     
-    if (Array.isArray(folderPaths)) {
-      folderPaths.forEach(folderPath => {
-        this.monitoredFolders.set(folderPath, {
-          path: folderPath,
+    if (Array.isArray(folders)) {
+      folders.forEach(item => {
+        const isObj = item && typeof item === 'object';
+        const path = isObj ? (item.path || item.folderPath || '') : item;
+        const entryId = isObj ? (item.entryId || item.EntryID || item.EntryId || '') : '';
+        const storeId = isObj ? (item.storeId || item.StoreID || item.StoreId || '') : '';
+        const storeName = isObj ? (item.storeName || item.StoreName || '') : '';
+        const key = entryId || path;
+        if (!key) return;
+        this.monitoredFolders.set(key, {
+          path,
+          entryId,
+          storeId,
+          storeName,
           lastEventTime: null,
           eventCount: 0
         });
@@ -232,7 +242,7 @@ class OutlookEventsService extends EventEmitter {
    */
   createCOMListenerScript() {
     // Récupérer la liste des dossiers surveillés
-    const monitoredFolderPaths = Array.from(this.monitoredFolders.keys());
+      const monitoredFolders = Array.from(this.monitoredFolders.values());
     
     const scriptContent = `
 # Script d'écoute des événements COM Outlook - SURVEILLANCE DES DOSSIERS SPÉCIFIQUES
@@ -250,91 +260,48 @@ try {
     Write-Host "[OK] [COM] Connexion Outlook etablie"
     
     # Liste des dossiers à surveiller - RÉCUPÉRÉS DEPUIS LA CONFIGURATION
-    $foldersToMonitor = @(
-      ${monitoredFolderPaths.map(path => `"${path}"`).join(',\n      ')}
-    )
+      $foldersToMonitor = @(
+        ${monitoredFolders.map(f => `@{ Path="${(f.path||'').replace(/"/g,'\"')}"; EntryId="${(f.entryId||'').replace(/"/g,'\"')}"; StoreId="${(f.storeId||'').replace(/"/g,'\"')}"; StoreName="${(f.storeName||'').replace(/"/g,'\"')}" }`).join(',\n      ')}
+      )
     
     Write-Host "[FOLDER] [COM] Configuration surveillance pour $($foldersToMonitor.Length) dossiers"
     
     # Configuration des événements pour chaque dossier spécifique
-    foreach ($folderPath in $foldersToMonitor) {
+    foreach ($folderInfo in $foldersToMonitor) {
       try {
-        Write-Host "[COM] Configuration evenements pour: $folderPath"
-        
-        # Navigation vers le dossier par son chemin - VERSION CORRIGEE
+        $folderPath = $folderInfo.Path
+        $entryId = $folderInfo.EntryId
+        $storeId = $folderInfo.StoreId
+        Write-Host "[COM] Configuration evenements pour: $($folderPath) (EntryId=$entryId)"
+
+        # Navigation prioritaire via EntryId + StoreId
         $folder = $null
-        $pathParts = $folderPath -split "\\\\"
-        
-        if ($pathParts.Length -ge 2) {
-          $storeName = $pathParts[0]
-          $folderNames = $pathParts[1..($pathParts.Length-1)]
-          
-          # Trouver le store
-          $targetStore = $null
-          foreach ($store in $namespace.Stores) {
-            if ($store.DisplayName -eq $storeName) {
-              $targetStore = $store
-              break
-            }
-          }
-          
-          if ($targetStore) {
-            # CORRECTION: Utiliser GetDefaultFolder pour eviter les problemes d'encodage
-            if ($folderNames[0] -like "*reception*" -or $folderNames[0] -like "*Inbox*" -or $folderNames[0] -eq "Boite de reception") {
-              # Acces direct a la boite de reception par defaut
-              $currentFolder = $namespace.GetDefaultFolder(6)  # olFolderInbox
-              
-              # Puis naviguer dans les sous-dossiers
-              $remainingFolders = $folderNames[1..($folderNames.Length-1)]
-              foreach ($folderName in $remainingFolders) {
-                $found = $false
-                foreach ($subfolder in $currentFolder.Folders) {
-                  if ($subfolder.Name -eq $folderName) {
-                    $currentFolder = $subfolder
-                    $found = $true
-                    break
-                  }
-                }
-                
-                if (-not $found) {
-                  throw "Dossier non trouve: $folderName"
-                }
-              }
+        if ($entryId -and $entryId -ne "") {
+          try {
+            if ($storeId -and $storeId -ne "") {
+              $folder = $namespace.GetFolderFromID($entryId, $storeId)
             } else {
-              # Navigation classique pour les autres dossiers
-              $currentFolder = $targetStore.GetRootFolder()
-              
-              foreach ($folderName in $folderNames) {
-                $found = $false
-                foreach ($subfolder in $currentFolder.Folders) {
-                  if ($subfolder.Name -eq $folderName) {
-                    $currentFolder = $subfolder
-                    $found = $true
-                    break
-                  }
-                }
-                
-                if (-not $found) {
-                  throw "Dossier non trouve: $folderName"
-                }
-              }
+              $folder = $namespace.GetFolderFromID($entryId)
             }
-            
-            $folder = $currentFolder
-          }
+          } catch {}
         }
-        
-        if ($folder) {
-          # Événements pour ce dossier spécifique
-          Register-ObjectEvent -InputObject $folder.Items -EventName "ItemAdd" -Action {
-            param($item)
-            if ($item.Class -eq 43) {  # olMail
-              $eventData = @{
-                Type = "ItemAdd"
-                EntryID = $item.EntryID
-                Subject = $item.Subject
-                SenderName = $item.SenderName
-                SenderEmailAddress = $item.SenderEmailAddress
+
+        # Fallback: navigation via chemin affiché
+        if (-not $folder -and $folderPath) {
+          $pathParts = $folderPath -split "\\"
+          
+          if ($pathParts.Length -ge 2) {
+            $storeName = $pathParts[0]
+            $folderNames = $pathParts[1..($pathParts.Length-1)]
+            
+            # Trouver le store
+            $targetStore = $null
+            foreach ($store in $namespace.Stores) {
+              if ($store.DisplayName -eq $storeName -or $store.StoreID -eq $storeId) {
+                /**
+                 * Traite les événements COM reçus
+                 */
+                handleCOMEvent(data) {
                 ReceivedTime = $item.ReceivedTime.ToString("yyyy-MM-dd HH:mm:ss")
                 FolderPath = $item.Parent.FolderPath
                 IsRead = $item.UnRead -eq $false
@@ -415,8 +382,67 @@ try {
   }
 
   /**
+    foreach ($folderInfo in $foldersToMonitor) {
    * Traite les événements COM reçus
-   */
+        $folderPath = $folderInfo.Path
+        $entryId = $folderInfo.EntryId
+        $storeId = $folderInfo.StoreId
+        Write-Host "[COM] Configuration evenements pour: $($folderPath) (EntryId=$entryId)"
+
+        # Navigation prioritaire via EntryId + StoreId
+        $folder = $null
+        if ($entryId -and $entryId -ne "") {
+          try {
+            if ($storeId -and $storeId -ne "") {
+              $folder = $namespace.GetFolderFromID($entryId, $storeId)
+            } else {
+              $folder = $namespace.GetFolderFromID($entryId)
+            }
+          } catch {}
+        }
+
+        # Fallback: navigation via chemin affiché
+        if (-not $folder -and $folderPath) {
+          $pathParts = $folderPath -split "\\\\"
+          if ($pathParts.Length -ge 2) {
+            $storeName = $pathParts[0]
+            $folderNames = $pathParts[1..($pathParts.Length-1)]
+            $targetStore = $null
+            foreach ($store in $namespace.Stores) {
+              if ($store.DisplayName -eq $storeName -or $store.StoreID -eq $storeId) {
+                $targetStore = $store
+                break
+              }
+            }
+            if ($targetStore) {
+              if ($folderNames[0] -like "*reception*" -or $folderNames[0] -like "*Inbox*" -or $folderNames[0] -eq "Boite de reception") {
+                $currentFolder = $namespace.GetDefaultFolder(6)
+                $remainingFolders = $folderNames[1..($folderNames.Length-1)]
+                foreach ($folderName in $remainingFolders) {
+                  $found = $false
+                  foreach ($subfolder in $currentFolder.Folders) {
+                    if ($subfolder.Name -eq $folderName) {
+                      $currentFolder = $subfolder
+                      $found = $true
+                      break
+                    }
+                  }
+                  if (-not $found) { throw "Dossier non trouve: $folderName" }
+                }
+              } else {
+                $currentFolder = $targetStore.GetRootFolder()
+                foreach ($folderName in $folderNames) {
+                  $found = $false
+                  foreach ($subfolder in $currentFolder.Folders) {
+                    if ($subfolder.Name -eq $folderName) { $currentFolder = $subfolder; $found = $true; break }
+                  }
+                  if (-not $found) { throw "Dossier non trouve: $folderName" }
+                }
+              }
+              $folder = $currentFolder
+            }
+          }
+        }
   handleCOMEvent(data) {
     try {
       const lines = data.split('\n').filter(line => line.trim());
@@ -572,7 +598,7 @@ try {
     const fs = require('fs');
     const scriptPath = path.join(__dirname, '../../temp/outlook-polling-listener.ps1');
     
-    const folders = Array.from(this.monitoredFolders.keys()).map(path => `"${path}"`).join(',\n      ');
+    const monitoredFolders = Array.from(this.monitoredFolders.values());
     
   const scriptContent = `
 # Script de polling intelligent Outlook - DÉTECTION CHANGEMENTS EN TEMPS RÉEL
@@ -601,7 +627,8 @@ try {
     
     # Liste des dossiers à surveiller
     $foldersToMonitor = @(
-      ${folders}
+      ${monitoredFolders.map(f => `@{ Path="${(f.path||'').replace(/"/g,'\"')}"; EntryId="${(f.entryId||'').replace(/"/g,'\"')}"; StoreId="${(f.storeId||'').replace(/"/g,'\"')}"; StoreName="${(f.storeName||'').replace(/"/g,'\"')}" }`).join(',
+      ')}
     )
     
     Write-Host "[FOLDER] [POLLING] Configuration surveillance pour $($foldersToMonitor.Length) dossiers"
@@ -626,67 +653,84 @@ try {
     }
     
     # Fonction pour traiter un dossier
-    function Process-Folder($folderPath) {
+    function Process-Folder($folderInfo) {
         try {
-            # Navigation vers le dossier (utilise la même logique que l'autre script)
-            $folder = $null
-            $pathParts = $folderPath -split "\\\\"
+        $folderPath = $folderInfo.Path
+        $entryId = $folderInfo.EntryId
+        $storeId = $folderInfo.StoreId
             
-            if ($pathParts.Length -ge 2) {
-                $storeName = $pathParts[0]
-                $folderNames = $pathParts[1..($pathParts.Length-1)]
-                
-                # Trouver le store
-                $targetStore = $null
-                foreach ($store in $namespace.Stores) {
-                    if ($store.DisplayName -eq $storeName) {
-                        $targetStore = $store
-                        break
-                    }
-                }
-                
-                if ($targetStore) {
-                    # Utiliser GetDefaultFolder pour éviter les problèmes d'encodage
-                    if ($folderNames[0] -like "*reception*" -or $folderNames[0] -like "*Inbox*" -or $folderNames[0] -eq "Boite de reception") {
-                        $currentFolder = $namespace.GetDefaultFolder(6)  # olFolderInbox
-                        $remainingFolders = $folderNames[1..($folderNames.Length-1)]
-                        foreach ($folderName in $remainingFolders) {
-                            $found = $false
-                            foreach ($subfolder in $currentFolder.Folders) {
-                                if ($subfolder.Name -eq $folderName) {
-                                    $currentFolder = $subfolder
-                                    $found = $true
-                                    break
-                                }
-                            }
-                            if (-not $found) {
-                                throw "Dossier non trouvé: $folderName"
-                            }
-                        }
-                    } else {
-                        $currentFolder = $targetStore.GetRootFolder()
-                        foreach ($folderName in $folderNames) {
-                            $found = $false
-                            foreach ($subfolder in $currentFolder.Folders) {
-                                if ($subfolder.Name -eq $folderName) {
-                                    $currentFolder = $subfolder
-                                    $found = $true
-                                    break
-                                }
-                            }
-                            if (-not $found) {
-                                throw "Dossier non trouvé: $folderName"
-                            }
-                        }
-                    }
-                    
-                    $folder = $currentFolder
-                }
+        # Navigation prioritaire via EntryId + StoreId
+        $folder = $null
+        if ($entryId -and $entryId -ne "") {
+          try {
+            if ($storeId -and $storeId -ne "") {
+              $folder = $namespace.GetFolderFromID($entryId, $storeId)
+            } else {
+              $folder = $namespace.GetFolderFromID($entryId)
             }
+          } catch {}
+        }
+            
+        # Fallback: navigation via chemin affiché
+        if (-not $folder -and $folderPath) {
+          $pathParts = $folderPath -split "\\"
+                
+          if ($pathParts.Length -ge 2) {
+            $storeName = $pathParts[0]
+            $folderNames = $pathParts[1..($pathParts.Length-1)]
+                    
+            # Trouver le store
+            $targetStore = $null
+            foreach ($store in $namespace.Stores) {
+              if ($store.DisplayName -eq $storeName -or $store.StoreID -eq $storeId) {
+                $targetStore = $store
+                break
+              }
+            }
+                    
+            if ($targetStore) {
+              # Utiliser GetDefaultFolder pour éviter les problèmes d'encodage
+              if ($folderNames[0] -like "*reception*" -or $folderNames[0] -like "*Inbox*" -or $folderNames[0] -eq "Boite de reception") {
+                $currentFolder = $namespace.GetDefaultFolder(6)  # olFolderInbox
+                $remainingFolders = $folderNames[1..($folderNames.Length-1)]
+                foreach ($folderName in $remainingFolders) {
+                  $found = $false
+                  foreach ($subfolder in $currentFolder.Folders) {
+                    if ($subfolder.Name -eq $folderName) {
+                      $currentFolder = $subfolder
+                      $found = $true
+                      break
+                    }
+                  }
+                  if (-not $found) {
+                    throw "Dossier non trouvé: $folderName"
+                  }
+                }
+              } else {
+                $currentFolder = $targetStore.GetRootFolder()
+                foreach ($folderName in $folderNames) {
+                  $found = $false
+                  foreach ($subfolder in $currentFolder.Folders) {
+                    if ($subfolder.Name -eq $folderName) {
+                      $currentFolder = $subfolder
+                      $found = $true
+                      break
+                    }
+                  }
+                  if (-not $found) {
+                    throw "Dossier non trouvé: $folderName"
+                  }
+                }
+              }
+                        
+              $folder = $currentFolder
+            }
+          }
+        }
             
             if ($folder) {
-                $folderName = $folder.Name
-                $currentTime = Get-Date
+              $folderName = $folder.Name
+              $currentTime = Get-Date
                 
                 # Vérifier chaque email dans le dossier
                 foreach ($item in $folder.Items) {
@@ -784,7 +828,7 @@ try {
                 [System.Runtime.Interopservices.Marshal]::ReleaseComObject($folder) | Out-Null
                 
             } else {
-                Write-Host "[ERROR] [POLLING] Impossible de trouver le dossier: $folderPath"
+              Write-Host "[ERROR] [POLLING] Impossible de trouver le dossier: $folderPath"
             }
             
         } catch {
@@ -796,8 +840,8 @@ try {
     
     # Premier scan pour initialiser le cache (sans émettre d'événements)
     Write-Host "[INIT] [POLLING] Initialisation du cache..."
-    foreach ($folderPath in $foldersToMonitor) {
-        Process-Folder $folderPath
+    foreach ($folderInfo in $foldersToMonitor) {
+      Process-Folder $folderInfo
     }
     Write-Host "[INIT] [POLLING] Cache initialisé avec $($emailCache.Count) emails"
     
@@ -809,8 +853,8 @@ try {
             $currentTime = Get-Date
             
             # Traiter chaque dossier surveillé
-            foreach ($folderPath in $foldersToMonitor) {
-                Process-Folder $folderPath
+            foreach ($folderInfo in $foldersToMonitor) {
+              Process-Folder $folderInfo
             }
             
             # Heartbeat périodique
