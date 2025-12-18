@@ -999,7 +999,39 @@ class OutlookConnector extends EventEmitter {
       const maxDepthOpt = opts?.maxDepth;
       const maxDepth = (Number.isFinite(maxDepthOpt) && maxDepthOpt >= 0) ? Number(maxDepthOpt) : Number(process.env.FOLDER_ENUM_MAX_DEPTH || -1);
 
-  const flat = await this.listFoldersRecursive(storeId, { maxDepth, pathPrefix: normalizedPath });
+  let flat = await this.listFoldersRecursive(storeId, { maxDepth, pathPrefix: normalizedPath });
+      if (!Array.isArray(flat) || flat.length === 0) {
+        // Fallback: rebuild flat list from getFolderStructure when listFoldersRecursive yields nothing (e.g. PS pipeline issues)
+        try {
+          const struct = await this.getFolderStructure(storeId);
+          const mailbox = Array.isArray(struct) ? struct[0] : null;
+          const rebuilt = [];
+          const walkStruct = (node, storeNameHint) => {
+            if (!node || !node.Name) return;
+            const fullPath = node.FolderPath || (storeNameHint ? `${storeNameHint}\\${node.Name}` : node.Name);
+            rebuilt.push({
+              storeId,
+              storeName: storeNameHint || node.StoreID || storeName,
+              fullPath,
+              entryId: node.EntryID || node.EntryId || '',
+              name: node.Name,
+              childCount: parseChildCount(node.ChildCount ?? (node.SubFolders ? node.SubFolders.length : 0))
+            });
+            if (Array.isArray(node.SubFolders)) {
+              for (const ch of node.SubFolders) {
+                walkStruct(ch, storeNameHint || node.Name);
+              }
+            }
+          };
+          if (mailbox) {
+            walkStruct(mailbox, mailbox.Name || storeName);
+            flat = rebuilt;
+            console.warn('[COM-REC] listFoldersRecursive empty; rebuilt from getFolderStructure');
+          }
+        } catch (eStruct) {
+          console.warn('[COM-REC] Rebuild from getFolderStructure failed:', eStruct.message);
+        }
+      }
       if (!Array.isArray(flat) || flat.length === 0) {
         throw new Error('Aucun dossier disponible pour ce store');
       }
