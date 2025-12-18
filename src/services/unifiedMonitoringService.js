@@ -1173,10 +1173,14 @@ class UnifiedMonitoringService extends EventEmitter {
             console.log(`🔍 DEBUG folder.path: "${folder.path}"`);
             console.log(`🔍 DEBUG folder.name: "${folder.name}"`);
 
-            // Récupérer tous les emails du dossier avec gestion d'erreur
+            // Récupérer tous les emails du dossier avec gestion d'erreur (inclure IDs pour meilleure résolution)
             let emails = [];
             try {
-                const emailsResult = await this.outlookConnector.getFolderEmails(folder.path);
+                const emailsResult = await this.outlookConnector.getFolderEmails(folder.path, {
+                    storeId: folder.storeId || folder.store_id,
+                    storeName: folder.storeName || folder.store_name,
+                    folderEntryId: folder.entryId || folder.entry_id
+                });
                 
                 // getFolderEmails retourne un objet avec une propriété emails ou Emails
                 if (emailsResult && emailsResult.success && emailsResult.emails && Array.isArray(emailsResult.emails)) {
@@ -1295,7 +1299,10 @@ class UnifiedMonitoringService extends EventEmitter {
                 { 
                     limit: 100, 
                     since: yesterday,
-                    expressMode: true // Mode ultra-rapide
+                    expressMode: true, // Mode ultra-rapide
+                    storeId: folder.storeId || folder.store_id,
+                    storeName: folder.storeName || folder.store_name,
+                    folderEntryId: folder.entryId || folder.entry_id
                 }
             );
             
@@ -2304,7 +2311,11 @@ class UnifiedMonitoringService extends EventEmitter {
                 // Démarrer les items d'un batch en série avec petit délai pour éviter les pics CPU/IO
                 for (const folderConfig of batch) {
                     try {
-                        await this.outlookConnector.startFolderMonitoring(folderConfig.path);
+                        await this.outlookConnector.startFolderMonitoring(folderConfig.path, {
+                            storeId: folderConfig.storeId || folderConfig.store_id,
+                            storeName: folderConfig.storeName || folderConfig.store_name,
+                            folderEntryId: folderConfig.entryId || folderConfig.entry_id
+                        });
                         this.log(`✅ Monitoring activé: ${folderConfig.name}`, 'REALTIME');
                         if (delayMs > 0) { await this.sleep(delayMs); }
                     } catch (error) {

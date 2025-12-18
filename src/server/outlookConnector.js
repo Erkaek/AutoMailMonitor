@@ -1513,7 +1513,7 @@ class OutlookConnector extends EventEmitter {
   /**
    * MONITORING: Surveillance d'un dossier spécifique
    */
-  async startFolderMonitoring(folderPath) {
+  async startFolderMonitoring(folderPath, options = {}) {
     try {
       console.log(`🔍 Démarrage du monitoring temps réel pour: ${folderPath}`);
       
@@ -1525,7 +1525,11 @@ class OutlookConnector extends EventEmitter {
       console.log(`🎧 [REALTIME] Activation monitoring PowerShell pour: ${folderPath}`);
       
       // Stocker l'état initial du dossier pour détecter les changements
-      const initialEmails = await this.getFolderEmails(folderPath);
+      const initialEmails = await this.getFolderEmails(folderPath, {
+        storeId: options.storeId,
+        storeName: options.storeName,
+        folderEntryId: options.folderEntryId
+      });
       
       if (!initialEmails.success) {
         throw new Error(`Impossible d'accéder au dossier pour monitoring: ${initialEmails.error}`);
@@ -1536,7 +1540,12 @@ class OutlookConnector extends EventEmitter {
         path: folderPath,
         lastCount: initialEmails.count,
         lastCheck: new Date(),
-        emails: new Map() // EntryID -> email info
+        emails: new Map(), // EntryID -> email info
+        opts: {
+          storeId: options.storeId,
+          storeName: options.storeName,
+          folderEntryId: options.folderEntryId
+        }
       };
       
       // Stocker les emails actuels par EntryID
@@ -1607,7 +1616,11 @@ class OutlookConnector extends EventEmitter {
       }
       
       const folderState = this.monitoringStates.get(folderPath);
-      const currentEmails = await this.getFolderEmails(folderPath);
+      const currentEmails = await this.getFolderEmails(folderPath, {
+        storeId: folderState?.opts?.storeId,
+        storeName: folderState?.opts?.storeName,
+        folderEntryId: folderState?.opts?.folderEntryId
+      });
       
       if (!currentEmails.success) {
         console.error(`❌ Erreur vérification ${folderPath}: ${currentEmails.error}`);

@@ -1546,9 +1546,11 @@ ipcMain.handle('api-folders-add', async (event, { folderPath, category, storeId:
           toInsert.push({ path: normalizedBasePath, name: extractFolderName(original), entryId: payloadEntryId || '', storeId, storeName: payloadStoreName || mailboxDisplay || mailboxName });
         }
         // DFS: essayer COM, sinon retomber sur EWS pour la descente complète
+        const MAX_COM_DFS_VISITS = 250; // avoid Outlook open-item limit
         const runDfsCom = async (rootDisplayPath) => {
           const stack = [rootDisplayPath];
-          while (stack.length) {
+          let visited = 0;
+          while (stack.length && visited < MAX_COM_DFS_VISITS) {
             const parentDisplayPath = stack.pop();
             let kids = [];
             try {
@@ -1590,6 +1592,8 @@ ipcMain.handle('api-folders-add', async (event, { folderPath, category, storeId:
 
             if (!Array.isArray(kids) || kids.length === 0) continue;
             for (const k of kids) {
+              if (visited >= MAX_COM_DFS_VISITS) { console.warn('[ADD][DFS][COM] Stop: visit cap'); break; }
+              visited++;
               const childDisplayPath = k?.FolderPath || '';
               if (!childDisplayPath) continue;
               const childName = k?.Name || extractFolderName(childDisplayPath);
@@ -1733,7 +1737,8 @@ ipcMain.handle('api-folders-add', async (event, { folderPath, category, storeId:
             });
             if (!inbox) return;
             const stack = [inbox.FolderPath || `${mailboxDisplay}\\${inbox.Name}`];
-            while (stack.length) {
+            let visited = 0;
+            while (stack.length && visited < MAX_COM_DFS_VISITS) {
               const p = stack.pop();
               let kids = [];
               try {
@@ -1741,6 +1746,8 @@ ipcMain.handle('api-folders-add', async (event, { folderPath, category, storeId:
                 kids = Array.isArray(res) ? res : (res && Array.isArray(res.children) ? res.children : []);
               } catch {}
               for (const k of (kids || [])) {
+                if (visited >= MAX_COM_DFS_VISITS) { console.warn('[ADD][DFS][COM][INBOX] Stop: visit cap'); break; }
+                visited++;
                 const childDisplayPath = k?.FolderPath || '';
                 if (!childDisplayPath) continue;
                 const childName = k?.Name || extractFolderName(childDisplayPath);
@@ -1755,101 +1762,99 @@ ipcMain.handle('api-folders-add', async (event, { folderPath, category, storeId:
           } catch {}
         };
 
-        // Prefer COM DFS. If COM didn't add any children, fall back to EWS DFS
+        // Prefer EWS DFS when available to avoid COM open-item pressure. COM is capped and used only if EWS yields nothing.
         const beforeCount = toInsert.length;
-        await (async () => {
-          console.log(`[ADD][DFS] COM by display path start: ${displayBasePath}`);
-          await runDfsCom(displayBasePath);
-        })().catch(e => console.warn('[ADD][DFS] COM by display path failed:', e?.message || String(e)));
-        const afterCount = toInsert.length;
-        console.log(`[ADD][DFS] COM by display path inserted: ${afterCount - beforeCount}`);
-  if (afterCount === beforeCount) {
-          // COM yielded nothing; try EWS DFS
+        const ewsAvailable = typeof outlookConnector.getChildFoldersFast === 'function';
+        if (ewsAvailable) {
           await (async () => {
-            console.log('[ADD][DFS] Falling back to EWS DFS...');
+            console.log('[ADD][DFS] EWS-first traversal...');
             await runDfsEws(displayBasePath);
           })().catch(e => console.warn('[ADD][DFS] EWS DFS failed:', e?.message || String(e)));
-          // If still nothing and we started under Inbox, try explicit inbox traversal via COM
-          if (toInsert.length === afterCount) {
-            const nn = (s) => String(s||'').normalize('NFD').replace(/\p{Diacritic}/gu,'').toLowerCase().trim();
-            const segs = displayBasePath.split('\\');
-            if (segs.length >= 2 && (nn(segs[1]) === 'inbox' || nn(segs[1]).includes('boite') || nn(segs[1]).includes('reception'))) {
-              await (async () => {
-                console.log('[ADD][DFS] COM DFS from Inbox...');
-                await runDfsFromInboxCom();
-              })().catch(e => console.warn('[ADD][DFS] COM DFS from Inbox failed:', e?.message || String(e)));
+        } else {
+          await (async () => {
+            console.log(`[ADD][DFS] COM traversal start: ${displayBasePath}`);
+            await runDfsCom(displayBasePath);
+          })().catch(e => console.warn('[ADD][DFS] COM by display path failed:', e?.message || String(e)));
+        }
+        const afterCount = toInsert.length;
+        console.log(`[ADD][DFS] traversal inserted: ${afterCount - beforeCount}`);
+        // If EWS yielded nothing and COM is needed, use capped COM DFS and minimal fallbacks
+        if (afterCount === beforeCount && ewsAvailable) {
+          await (async () => {
+            console.log('[ADD][DFS] EWS empty, trying capped COM traversal...');
+            await runDfsCom(displayBasePath);
+          })().catch(e => console.warn('[ADD][DFS] COM by display path failed:', e?.message || String(e)));
+        }
+        const afterComCount = toInsert.length;
+        if (afterComCount === afterCount) {
+          // Last-resort: fast COM traversal by EntryID using outlookFastFolders (still bounded by visit cap because it shares seen)
+          await (async () => {
+            console.log('[ADD][DFS] Last-resort: fast COM traversal by EntryID...');
+            const nn2 = (s) => String(s||'').normalize('NFD').replace(/\p{Diacritic}/gu,'').toLowerCase().trim();
+            const fastOL = require('../server/outlookFastFolders');
+            const segs2 = displayBasePath.split('\\').filter(Boolean);
+            const chainSegs = segs2.slice(1);
+            if (!chainSegs.length) return;
+            const rootList = await fastOL.listFoldersShallow(storeId, '');
+            const parentName = (rootList && rootList.parentName) ? String(rootList.parentName) : (inboxLocalizedName || 'Inbox');
+            let curParentId = '';
+            let curChain = [parentName];
+            let startIdx = 0;
+            if (chainSegs.length && nn2(chainSegs[0]) === nn2(parentName)) startIdx = 1;
+            let ok = true;
+            for (let i = startIdx; i < chainSegs.length; i++) {
+              const segment = chainSegs[i];
+              const listing = await fastOL.listFoldersShallow(storeId, curParentId);
+              const arr = (listing && Array.isArray(listing.folders)) ? listing.folders : [];
+              const match = arr.find(f => nn2(f.Name) === nn2(segment));
+              if (!match) { ok = false; break; }
+              curParentId = match.EntryId || match.EntryID || '';
+              curChain.push(match.Name);
             }
-            // Last-resort: fast COM traversal by EntryID using outlookFastFolders
-            if (toInsert.length === afterCount) {
-              await (async () => {
-                console.log('[ADD][DFS] Last-resort: fast COM traversal by EntryID...');
-                const nn2 = (s) => String(s||'').normalize('NFD').replace(/\p{Diacritic}/gu,'').toLowerCase().trim();
-                const fastOL = require('../server/outlookFastFolders');
-                const segs2 = displayBasePath.split('\\').filter(Boolean);
-                const chainSegs = segs2.slice(1);
-                if (!chainSegs.length) return;
-                const rootList = await fastOL.listFoldersShallow(storeId, '');
-                const parentName = (rootList && rootList.parentName) ? String(rootList.parentName) : (inboxLocalizedName || 'Inbox');
-                let curParentId = '';
-                let curChain = [parentName];
-                let startIdx = 0;
-                if (chainSegs.length && nn2(chainSegs[0]) === nn2(parentName)) startIdx = 1;
-                let ok = true;
-                for (let i = startIdx; i < chainSegs.length; i++) {
-                  const segment = chainSegs[i];
-                  const listing = await fastOL.listFoldersShallow(storeId, curParentId);
-                  const arr = (listing && Array.isArray(listing.folders)) ? listing.folders : [];
-                  const match = arr.find(f => nn2(f.Name) === nn2(segment));
-                  if (!match) { ok = false; break; }
-                  curParentId = match.EntryId || match.EntryID || '';
-                  curChain.push(match.Name);
+            if (!ok) return;
+            const stack = [{ id: curParentId, chain: curChain.slice() }];
+            while (stack.length) {
+              const node = stack.pop();
+              const listing = await fastOL.listFoldersShallow(storeId, node.id);
+              const kids = (listing && Array.isArray(listing.folders)) ? listing.folders : [];
+              for (const k of kids) {
+                const childChain = node.chain.concat(k.Name);
+                const disp = `${mailboxDisplay}\\${childChain.join('\\')}`;
+                const norm = normalizePath(disp);
+                if (!seen.has(norm)) {
+                  seen.add(norm);
+                  toInsert.push({ path: norm, name: k.Name });
                 }
-                if (!ok) return;
-                const stack = [{ id: curParentId, chain: curChain.slice() }];
-                while (stack.length) {
-                  const node = stack.pop();
-                  const listing = await fastOL.listFoldersShallow(storeId, node.id);
-                  const kids = (listing && Array.isArray(listing.folders)) ? listing.folders : [];
-                  for (const k of kids) {
-                    const childChain = node.chain.concat(k.Name);
-                    const disp = `${mailboxDisplay}\\${childChain.join('\\')}`;
-                    const norm = normalizePath(disp);
-                    if (!seen.has(norm)) {
-                      seen.add(norm);
-                      toInsert.push({ path: norm, name: k.Name });
-                    }
-                    const kidId = k.EntryId || k.EntryID || '';
-                    if (kidId) stack.push({ id: kidId, chain: childChain });
-                  }
-                }
-              })().catch(e => console.warn('[ADD][DFS] Last-resort fast COM traversal failed:', e?.message || String(e)));
+                const kidId = k.EntryId || k.EntryID || '';
+                if (kidId) stack.push({ id: kidId, chain: childChain });
+              }
             }
-            // Ultimate fallback: backend recursive enumeration (COM BFS) then filter under selected base
-            if (toInsert.length === afterCount) {
-              await (async () => {
-                try {
-                  const list = await outlookConnector.listFoldersRecursive?.(storeId, { maxDepth: 25 });
-                  const base = displayBasePath;
-                  const toLower = (s) => String(s||'').toLowerCase();
-                  const isUnder = (fp) => {
-                    const a = toLower(fp); const b = toLower(base);
-                    return a === b || a.startsWith(b + '\\');
-                  };
-                  const items = Array.isArray(list) ? list.filter(x => isUnder(x.fullPath)) : [];
-                  for (const it of items) {
-                    const norm = normalizePath(it.fullPath || '');
-                    if (!norm) continue;
-                    if (!seen.has(norm)) {
-                      seen.add(norm);
-                      toInsert.push({ path: norm, name: it.name || extractFolderName(norm) });
-                    }
-                  }
-                } catch (e) {
-                  console.warn('[ADD][DFS] ultimate recursive fallback failed:', e?.message || String(e));
+          })().catch(e => console.warn('[ADD][DFS] Last-resort fast COM traversal failed:', e?.message || String(e)));
+        }
+        const afterFastCount = toInsert.length;
+        if (afterFastCount === afterComCount) {
+          await (async () => {
+            try {
+              const list = await outlookConnector.listFoldersRecursive?.(storeId, { maxDepth: 10 });
+              const base = displayBasePath;
+              const toLower = (s) => String(s||'').toLowerCase();
+              const isUnder = (fp) => {
+                const a = toLower(fp); const b = toLower(base);
+                return a === b || a.startsWith(b + '\\');
+              };
+              const items = Array.isArray(list) ? list.filter(x => isUnder(x.fullPath)) : [];
+              for (const it of items) {
+                const norm = normalizePath(it.fullPath || '');
+                if (!norm) continue;
+                if (!seen.has(norm)) {
+                  seen.add(norm);
+                  toInsert.push({ path: norm, name: it.name || extractFolderName(norm) });
                 }
-              })();
+              }
+            } catch (e) {
+              console.warn('[ADD][DFS] ultimate recursive fallback failed:', e?.message || String(e));
             }
-          }
+          })();
         }
   } // End of recursive enumeration block
   // Ajout récursif partiel: fallback à insertion simple (erreur silencieuse précédemment capturée)
