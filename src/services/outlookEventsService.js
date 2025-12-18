@@ -627,8 +627,9 @@ try {
     
     # Liste des dossiers à surveiller
     $foldersToMonitor = @(
-      ${monitoredFolders.map(f => '@{ Path="' + (f.path||'').replace(/"/g,'\\"') + '"; EntryId="' + (f.entryId||'').replace(/"/g,'\\"') + '"; StoreId="' + (f.storeId||'').replace(/"/g,'\\"') + '"; StoreName="' + (f.storeName||'').replace(/"/g,'\\"') + '" }').join(',
-      ')}
+      ${monitoredFolders
+        .map(f => `@{ Path="${(f.path||'').replace(/"/g,'""')}"; EntryId="${(f.entryId||'').replace(/"/g,'""')}"; StoreId="${(f.storeId||'').replace(/"/g,'""')}"; StoreName="${(f.storeName||'').replace(/"/g,'""')}" }`)
+        .join('\n      ')}
     )
     
     Write-Host "[FOLDER] [POLLING] Configuration surveillance pour $($foldersToMonitor.Length) dossiers"
