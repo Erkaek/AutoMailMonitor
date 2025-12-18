@@ -788,31 +788,13 @@ class OutlookConnector extends EventEmitter {
         }
       `;
 
-      let result = await this.executePowerShellScript(script, 60000);
-      if (!result.success) {
-        // Retry in 32-bit if first attempt fails
-        result = await this.executePowerShellScript(script, 60000, { force32Bit: true });
-      }
+      const result = await this.executePowerShellScript(script, 30000);
       if (!result.success) {
         throw new Error(result.error || 'Échec récupération structure dossiers');
       }
       const rawOutput = result.output || '';
       let json = OutlookConnector.parseJsonOutput(rawOutput) || {};
       let folders = Array.isArray(json.folders) ? json.folders : [];
-
-      if (folders.length === 0) {
-        // Retry 32-bit inline parse if first call succeeded but returned empty
-        const res32 = await this.executePowerShellScript(script, 60000, { force32Bit: true });
-        if (res32.success) {
-          const j2 = OutlookConnector.parseJsonOutput(res32.output || '') || {};
-          folders = Array.isArray(j2.folders) ? j2.folders : folders;
-          if (!folders.length && res32.output) {
-            console.warn('[OUTLOOK] getFolderStructure empty (32-bit) output head=', String(res32.output).slice(0, 300));
-          }
-        } else {
-          console.warn('[OUTLOOK] getFolderStructure 32-bit attempt failed:', res32.error || res32.code || 'unknown');
-        }
-      }
 
       if (folders.length === 0) {
         // Diagnostic: log output head to understand failures
@@ -2301,18 +2283,41 @@ ${safeTarget}
           @{ success = $false; error = $err; folders = @() } | ConvertTo-Json -Depth 3 -Compress | Write-Output
         }
       `;
-        // Use external script to avoid complex quoting issues
-        const { resolveResource } = require('./scriptPathResolver');
-        const fs = require('fs');
-        const psArgs = [];
-        if (targetStoreId) { psArgs.push('-StoreId', String(targetStoreId)); }
-        if (Number.isFinite(effectiveMaxDepth) && effectiveMaxDepth >= 0) { psArgs.push('-MaxDepth', String(effectiveMaxDepth)); }
+        const parseChildCount = (value) => {
+          const num = Number(value);
+          return Number.isFinite(num) ? num : 0;
+        };
+
+        const flattenStructure = (struct, storeIdHint) => {
+          const out = [];
+          const walk = (node, storeNameHint) => {
+            if (!node || !node.Name) return;
+            const storeNameVal = storeNameHint || node.StoreID || '';
+            const fullPath = node.FolderPath || (storeNameVal ? `${storeNameVal}\\${node.Name}` : node.Name);
+            out.push({
+              storeId: storeIdHint || node.StoreID || '',
+              storeName: storeNameVal,
+              fullPath,
+              entryId: node.EntryID || node.EntryId || '',
+              name: node.Name,
+              childCount: parseChildCount(node.ChildCount ?? (node.SubFolders ? node.SubFolders.length : 0))
+            });
+            if (Array.isArray(node.SubFolders)) {
+              for (const ch of node.SubFolders) {
+                walk(ch, storeNameVal || node.Name);
+              }
+            }
+          };
+          const root = Array.isArray(struct) ? struct[0] : null;
+          if (root) walk(root, root.Name || '');
+          return out;
+        };
 
         let lst = [];
 
-        // Try inline script first to avoid packaged-script pipeline glitches
+        // Try inline script first (short timeout) to avoid packaged-script pipeline glitches
         try {
-          const inline = await this.executePowerShellScript(script, 180000);
+          const inline = await this.executePowerShellScript(script, 30000);
           if (inline && inline.success) {
             const json2 = OutlookConnector.parseJsonOutput(inline.output) || {};
             lst = Array.isArray(json2.stores)
@@ -2342,46 +2347,6 @@ ${safeTarget}
           console.warn('[COM-REC] Inline PS fallback failed:', epsInline.message);
         }
 
-        // If still empty, try external file unless previously marked broken
-        if (!Array.isArray(lst) || lst.length === 0) {
-          if (this._psGetAllFoldersBroken) {
-            console.warn('[COM-REC] Skipping external get-all-folders.ps1 (marked broken)');
-          } else {
-            const res = resolveResource(['powershell'], 'get-all-folders.ps1');
-            const psPath = res.path || path.join(__dirname, '../../powershell/get-all-folders.ps1');
-            try {
-              const psExists = psPath && fs.existsSync(psPath);
-              if (!psExists) {
-                throw new Error(`PS script missing at ${psPath}`);
-              }
-              const raw = await this.execPowerShellFile(psPath, psArgs, 180000);
-              const json = OutlookConnector.parseJsonOutput(raw) || {};
-              lst = Array.isArray(json.stores)
-                ? json.stores.flatMap(s => {
-                    const rootNode = s.Root;
-                    const collect = [];
-                    const walk = (node) => {
-                      if (!node) return;
-                      collect.push({
-                        StoreEntryID: s.StoreId || s.StoreID,
-                        StoreDisplayName: s.Name,
-                        FolderName: node.Name,
-                        FolderEntryID: node.EntryId,
-                        FullPath: node.DisplayPath,
-                        ChildCount: Number(node.ChildCount || (node.Children ? node.Children.length : 0))
-                      });
-                      if (Array.isArray(node.Children)) { node.Children.forEach(ch => walk(ch)); }
-                    };
-                    walk(rootNode);
-                    return collect;
-                  })
-                : (Array.isArray(json.folders) ? json.folders : []);
-            } catch (eps) {
-              this._psGetAllFoldersBroken = true;
-              console.warn('[COM-REC] PS external failed, marking broken and keeping inline/WSH fallback:', eps.message, 'psPath=', psPath, 'tried=', res.tried?.slice(0,6));
-            }
-          }
-        }
         let flat = lst.map(f => ({
           storeId: f.StoreEntryID,
           storeName: f.StoreDisplayName,
@@ -2390,183 +2355,18 @@ ${safeTarget}
           name: f.FolderName,
           childCount: Number(f.ChildCount || 0)
         }));
+
         if (!flat.length) {
-          // Fallback A: BFS using getFolderStructure + getSubFolders (multiple lightweight COM calls)
+          // Fast fallback: reuse getFolderStructure (already Session-based) and flatten
           try {
-            const maxDepth = Number.isFinite(effectiveMaxDepth) && effectiveMaxDepth >= 0 ? effectiveMaxDepth : 20;
-            // Resolve the real MAPI StoreID first
-            let storeName = '';
-            let mapiStoreId = '';
-            try {
-              const mbs = await this.getMailboxes();
-              const q = String(targetStoreId || '').toLowerCase();
-              const found = mbs.find(s => String(s.StoreID || '').toLowerCase() === q || String(s.Name || '').toLowerCase() === q || (String(s.SmtpAddress || '').toLowerCase() === q));
-              if (found) { storeName = found.Name || ''; mapiStoreId = found.StoreID || ''; }
-            } catch {}
-            // Get top-level structure using whichever identifier resolves
-            const top = await this.getFolderStructure(mapiStoreId || storeName || targetStoreId);
-            const mb = Array.isArray(top) ? top[0] : null;
-            if (!storeName && mb?.Name) storeName = mb.Name;
-
-            const storeTokensRaw = [prefixStoreSegment, storeName, mapiStoreId].filter(Boolean);
-            const storeTokensLower = new Set(storeTokensRaw.map(v => v.toLowerCase()));
-            const storeTokensSan = new Set(storeTokensRaw.map(sanitizeToken).filter(Boolean));
-
-            const ensureStoreDelimiter = (value) => {
-              if (!value) return value;
-              const lowerValue = value.toLowerCase();
-              for (const token of storeTokensRaw) {
-                if (!token) continue;
-                const tokenLower = token.toLowerCase();
-                if (lowerValue.startsWith(tokenLower) && value.length > token.length) {
-                  const charAfter = value[token.length];
-                  if (charAfter !== '\\') {
-                    return `${value.slice(0, token.length)}\\${value.slice(token.length)}`;
-                  }
-                }
-              }
-              return value;
-            };
-
-            const canonicalizeFullPath = (rawPath) => {
-              if (!rawPath) return null;
-              let normalized = rawPath.replace(/\//g, '\\');
-              normalized = ensureStoreDelimiter(normalized);
-              const segments = normalized.split('\\').filter(Boolean);
-              if (!segments.length) return null;
-              const first = segments[0];
-              const firstLower = first.toLowerCase();
-              const firstSan = sanitizeToken(first);
-              if (prefixStoreSegment && (storeTokensLower.has(firstLower) || (firstSan && storeTokensSan.has(firstSan)))) {
-                segments[0] = prefixStoreSegment;
-              }
-              return segments.join('\\');
-            };
-
-            const queue = [];
-            const seen = new Set();
-            const out = [];
-            const shouldInclude = (lowerPath) => {
-              if (!prefixLower) return true;
-              return lowerPath === prefixLower || lowerPath.startsWith(prefixLowerWithSep);
-            };
-            const shouldExplore = (lowerPath) => {
-              if (!prefixLower) return true;
-              if (lowerPath === prefixLower) return true;
-              if (lowerPath.startsWith(prefixLowerWithSep)) return true;
-              return prefixLower.startsWith(`${lowerPath}\\`);
-            };
-
-            function pushNode(node, depth = 1) {
-              if (!node || !node.Name) return;
-              const fullPath = node.FolderPath || (storeName ? `${storeName}\\${node.Name}` : node.Name);
-              const canonicalFull = canonicalizeFullPath(fullPath) || fullPath;
-              const key = `${node.EntryID || canonicalFull}`;
-              if (seen.has(key)) return;
-              seen.add(key);
-              const lowerFull = canonicalFull.toLowerCase();
-              const includeNode = shouldInclude(lowerFull);
-              const exploreNode = shouldExplore(lowerFull);
-              if (!exploreNode) return;
-              if (includeNode) {
-                out.push({
-                  storeId: String(mapiStoreId || targetStoreId || ''),
-                  storeName,
-                  fullPath: canonicalFull,
-                  entryId: node.EntryID || null,
-                  name: node.Name,
-                  childCount: Number(node.ChildCount || (node.SubFolders?.length || 0))
-                });
-              }
-              queue.push({ depth, path: fullPath, canonical: canonicalFull, entryId: node.EntryID, childCount: Number(node.ChildCount || 0) });
+            const struct = await this.getFolderStructure(targetStoreId);
+            const rebuilt = flattenStructure(struct, targetStoreId);
+            if (rebuilt.length) {
+              flat = rebuilt;
+              console.warn('[COM-REC] Inline empty, rebuilt from getFolderStructure');
             }
-            if (mb && Array.isArray(mb.SubFolders)) {
-              for (const n of mb.SubFolders) { pushNode(n, 1); }
-            }
-            const startedAt = Date.now();
-            while (queue.length) {
-              const cur = queue.shift();
-              if (cur.depth > maxDepth) continue;
-              if (cur.childCount <= 0) continue;
-              const lowerCur = String(cur.canonical || cur.path || '').toLowerCase();
-              if (!shouldExplore(lowerCur)) continue;
-              const kids = await this.getSubFolders(mapiStoreId || storeName || targetStoreId, cur.entryId, cur.path);
-              if (Array.isArray(kids) && kids.length) {
-                for (const k of kids) {
-                  const fp = k.FolderPath || k.Folderpath || k.Folder || k.Path || k.path || (storeName ? `${storeName}\\${k.Name}` : k.Name);
-                  const child = { Name: k.Name, FolderPath: fp, EntryID: k.EntryID, ChildCount: Number(k.ChildCount || 0), SubFolders: [] };
-                  pushNode(child, cur.depth + 1);
-                }
-              }
-              if (Date.now() - startedAt > 120000) { break; } // safety 2 min
-            }
-            if (out.length) {
-              flat = out;
-            }
-          } catch (ebfs) {
-            console.warn('[COM-REC] BFS fallback failed:', ebfs.message);
-          }
-        }
-        if (!flat.length) {
-          // Fallback to existing COM tree builder and flatten for the requested store
-          try {
-            // Try WSH JScript enumerator first (avoids PowerShell pipeline issues)
-            try {
-              const { resolveResource } = require('./scriptPathResolver');
-              const fs = require('fs');
-              const jsRes = resolveResource(['scripts'], 'enum-outlook-folders.js');
-              const jsPath = jsRes.path || path.join(__dirname, '../../scripts/enum-outlook-folders.js');
-              if (jsPath && fs.existsSync(jsPath)) {
-                const { spawnSync } = require('child_process');
-                const run = spawnSync('cscript.exe', ['//nologo', jsPath, String(targetStoreId || ''), String(effectiveMaxDepth)], { encoding: 'utf8', windowsHide: true });
-                if (run && run.status === 0 && run.stdout) {
-                  const j = OutlookConnector.parseJsonOutput(run.stdout) || {};
-                  const ws = Array.isArray(j.folders) ? j.folders : [];
-                  if (ws.length) {
-                    flat = ws.map(f => ({
-                      storeId: f.StoreEntryID,
-                      storeName: f.StoreDisplayName,
-                      fullPath: f.FullPath,
-                      entryId: f.FolderEntryID,
-                      name: f.FolderName,
-                      childCount: Number(f.ChildCount || 0)
-                    }));
-                  }
-                } else if (run && run.stderr) {
-                  console.warn('[COM-REC] WSH stderr:', run.stderr.trim().slice(0, 400));
-                }
-              } else {
-                console.warn('[COM-REC] WSH fallback skipped: script introuvable', jsRes?.tried);
-              }
-            } catch (ejs) {
-              console.warn('[COM-REC] WSH fallback failed:', ejs.message);
-            }
-            if (!flat.length) {
-              const tree = await this.getAllStoresAndTreeViaCOM({ maxDepth: opts.maxDepth || this.settings?.outlook?.maxEnumerationDepth || 6 });
-              const storeKey = (targetStoreId || '').toString();
-              // Match by StoreID or by display name if needed
-              let chosenStoreId = null;
-              if (tree.foldersByStore[storeKey]) {
-                chosenStoreId = storeKey;
-              } else {
-                // Try to find by store name
-                const st = tree.stores.find(s => s.Name === storeKey || (s.SmtpAddress && s.SmtpAddress === storeKey));
-                if (st && tree.foldersByStore[st.StoreID]) chosenStoreId = st.StoreID;
-              }
-              if (chosenStoreId) {
-                const map = tree.foldersByStore[chosenStoreId];
-                flat = Object.values(map).map(n => ({
-                  storeId: chosenStoreId,
-                  storeName: tree.stores.find(s => s.StoreID === chosenStoreId)?.Name || '',
-                  fullPath: n.path,
-                  entryId: n.entryId,
-                  name: n.name,
-                  childCount: Number(n.childCount || 0)
-                })).filter(x => x.name && x.fullPath);
-              }
-            }
-          } catch (e2) {
-            console.warn('[COM-REC] Fallback COM tree failed:', e2.message);
+          } catch (eStruct) {
+            console.warn('[COM-REC] Rebuild via getFolderStructure failed:', eStruct.message);
           }
         }
         if (Array.isArray(flat) && flat.length) {
