@@ -627,7 +627,7 @@ try {
     
     # Liste des dossiers à surveiller
     $foldersToMonitor = @(
-      ${monitoredFolders.map(f => `@{ Path="${(f.path||'').replace(/"/g,'\"')}"; EntryId="${(f.entryId||'').replace(/"/g,'\"')}"; StoreId="${(f.storeId||'').replace(/"/g,'\"')}"; StoreName="${(f.storeName||'').replace(/"/g,'\"')}" }`).join(',
+      ${monitoredFolders.map(f => '@{ Path="' + (f.path||'').replace(/"/g,'\\"') + '"; EntryId="' + (f.entryId||'').replace(/"/g,'\\"') + '"; StoreId="' + (f.storeId||'').replace(/"/g,'\\"') + '"; StoreName="' + (f.storeName||'').replace(/"/g,'\\"') + '" }').join(',
       ')}
     )
     
