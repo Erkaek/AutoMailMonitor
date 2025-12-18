@@ -822,7 +822,12 @@ async function initializeOutlook() {
     }
     try {
       const databaseService = require('../services/optimizedDatabaseService');
-      await databaseService.initialize();
+      try {
+        await databaseService.initialize();
+      } catch (e) {
+        console.error('[LOG] ❌ monitoring/db initialize failed:', e && e.stack ? e.stack : e);
+        throw e;
+      }
       
       sendTaskProgress('monitoring', 'Base de données initialisée...', false);
       if (loadingWindow) {
@@ -833,7 +838,13 @@ async function initializeOutlook() {
         });
       }
       
-      const folderConfig = databaseService.getFoldersConfiguration();
+      let folderConfig = [];
+      try {
+        folderConfig = databaseService.getFoldersConfiguration();
+      } catch (e) {
+        console.error('[LOG] ❌ monitoring/getFoldersConfiguration failed:', e && e.stack ? e.stack : e);
+        throw e;
+      }
       const configFound = Array.isArray(folderConfig) && folderConfig.length > 0;
       if (configFound) {
         console.log(`[LOG] 📁 Configuration trouvée en BDD: ${folderConfig.length} dossiers configurés`);
@@ -861,7 +872,7 @@ async function initializeOutlook() {
           console.log('[LOG] ℹ️ Service unifié prêt - ajoutez des dossiers pour déclencher la sync PowerShell');
         }
       }).catch((error) => {
-        console.error('[LOG] ❌ Erreur initialisation service unifié:', error.message);
+        console.error('[LOG] ❌ Erreur initialisation service unifié:', error && error.stack ? error.stack : error);
       });
       
       sendTaskProgress('monitoring', 'Service de monitoring configuré', true);
@@ -897,7 +908,7 @@ async function initializeOutlook() {
       }
       
     } catch (monitoringError) {
-      console.warn('[LOG] ⚠️ Erreur monitoring:', monitoringError.message);
+      console.warn('[LOG] ⚠️ Erreur monitoring:', monitoringError && monitoringError.stack ? monitoringError.stack : monitoringError);
       if (loadingWindow) {
         loadingWindow.webContents.send('loading-progress', {
           step: 6,
