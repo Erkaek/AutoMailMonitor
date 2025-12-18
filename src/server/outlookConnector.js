@@ -778,13 +778,58 @@ class OutlookConnector extends EventEmitter {
       if (!result.success) {
         throw new Error(result.error || 'Échec récupération structure dossiers');
       }
-      let json = OutlookConnector.parseJsonOutput(result.output) || {};
+      const rawOutput = result.output || '';
+      let json = OutlookConnector.parseJsonOutput(rawOutput) || {};
       let folders = Array.isArray(json.folders) ? json.folders : [];
+
       if (folders.length === 0) {
+        // Retry 32-bit inline parse if first call succeeded but returned empty
         const res32 = await this.executePowerShellScript(script, 60000, { force32Bit: true });
         if (res32.success) {
-          const j2 = OutlookConnector.parseJsonOutput(res32.output) || {};
+          const j2 = OutlookConnector.parseJsonOutput(res32.output || '') || {};
           folders = Array.isArray(j2.folders) ? j2.folders : folders;
+        }
+      }
+
+      if (folders.length === 0) {
+        // Diagnostic: log output head to understand failures
+        try {
+          console.warn('[OUTLOOK] getFolderStructure empty output; head=', String(rawOutput).slice(0, 300));
+        } catch {}
+        try {
+          // Fallback: rebuild minimal tree from flat enumeration
+          const flat = await this.listFoldersRecursive(storeId, { maxDepth: this.settings?.outlook?.maxEnumerationDepth || 4, forceRefresh: true });
+          if (Array.isArray(flat) && flat.length) {
+            const storeNameHint = storeName || (matchedStore?.Name) || (flat[0].storeName) || storeId;
+            const rootNode = { Name: storeNameHint, StoreID: storeId, SmtpAddress: smtpAddress, SubFolders: [] };
+            const byPath = new Map();
+            const ensureNode = (fullPath, entryId, name, childCount) => {
+              const norm = String(fullPath || '').replace(/\\+/g, '\\');
+              const lower = norm.toLowerCase();
+              if (byPath.has(lower)) return byPath.get(lower);
+              const node = { Name: name || norm.split('\\').pop() || norm, FolderPath: norm, EntryID: entryId || '', ChildCount: Number(childCount || 0), SubFolders: [] };
+              byPath.set(lower, node);
+              return node;
+            };
+            for (const f of flat) {
+              const fp = f.fullPath || f.FullPath;
+              if (!fp) continue;
+              const node = ensureNode(fp, f.entryId || f.FolderEntryID, f.name || f.FolderName, f.childCount || f.ChildCount);
+              const parentPath = fp.includes('\\') ? fp.substring(0, fp.lastIndexOf('\\')) : null;
+              if (parentPath) {
+                const parent = ensureNode(parentPath, null, parentPath.split('\\').pop(), null);
+                if (!parent.SubFolders.includes(node)) parent.SubFolders.push(node);
+              } else {
+                if (!rootNode.SubFolders.includes(node)) rootNode.SubFolders.push(node);
+              }
+            }
+            folders = [rootNode];
+            try {
+              rootNode.SubFolders.sort((a, b) => a.Name.localeCompare(b.Name, 'fr', { sensitivity: 'base' }));
+            } catch {}
+          }
+        } catch (fallbackErr) {
+          console.warn('[OUTLOOK] Fallback build tree failed:', fallbackErr.message);
         }
       }
       try {
