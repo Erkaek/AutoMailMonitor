@@ -2380,22 +2380,31 @@ ${safeTarget}
           try {
             // Try WSH JScript enumerator first (avoids PowerShell pipeline issues)
             try {
-              const jsPath = path.join(__dirname, '../../scripts/enum-outlook-folders.js');
-              const { spawnSync } = require('child_process');
-              const run = spawnSync('cscript.exe', ['//nologo', jsPath, String(targetStoreId || ''), String(effectiveMaxDepth)], { encoding: 'utf8', windowsHide: true });
-              if (run && run.status === 0 && run.stdout) {
-                const j = OutlookConnector.parseJsonOutput(run.stdout) || {};
-                const ws = Array.isArray(j.folders) ? j.folders : [];
-                if (ws.length) {
-                  flat = ws.map(f => ({
-                    storeId: f.StoreEntryID,
-                    storeName: f.StoreDisplayName,
-                    fullPath: f.FullPath,
-                    entryId: f.FolderEntryID,
-                    name: f.FolderName,
-                    childCount: Number(f.ChildCount || 0)
-                  }));
+              const { resolveResource } = require('./scriptPathResolver');
+              const fs = require('fs');
+              const jsRes = resolveResource(['scripts'], 'enum-outlook-folders.js');
+              const jsPath = jsRes.path || path.join(__dirname, '../../scripts/enum-outlook-folders.js');
+              if (jsPath && fs.existsSync(jsPath)) {
+                const { spawnSync } = require('child_process');
+                const run = spawnSync('cscript.exe', ['//nologo', jsPath, String(targetStoreId || ''), String(effectiveMaxDepth)], { encoding: 'utf8', windowsHide: true });
+                if (run && run.status === 0 && run.stdout) {
+                  const j = OutlookConnector.parseJsonOutput(run.stdout) || {};
+                  const ws = Array.isArray(j.folders) ? j.folders : [];
+                  if (ws.length) {
+                    flat = ws.map(f => ({
+                      storeId: f.StoreEntryID,
+                      storeName: f.StoreDisplayName,
+                      fullPath: f.FullPath,
+                      entryId: f.FolderEntryID,
+                      name: f.FolderName,
+                      childCount: Number(f.ChildCount || 0)
+                    }));
+                  }
+                } else if (run && run.stderr) {
+                  console.warn('[COM-REC] WSH stderr:', run.stderr.trim().slice(0, 400));
                 }
+              } else {
+                console.warn('[COM-REC] WSH fallback skipped: script introuvable', jsRes?.tried);
               }
             } catch (ejs) {
               console.warn('[COM-REC] WSH fallback failed:', ejs.message);

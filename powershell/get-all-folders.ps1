@@ -4,11 +4,12 @@ param(
 	[int]$MaxDepth = -1
 )
 
+$ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
+
 $enc = New-Object System.Text.UTF8Encoding $false
 [Console]::OutputEncoding = $enc
 $OutputEncoding = $enc
-$ErrorActionPreference = 'SilentlyContinue'
-$ProgressPreference = 'SilentlyContinue'
 
 function New-FolderNode {
 	param(
@@ -17,11 +18,14 @@ function New-FolderNode {
 		[Parameter(Mandatory = $true)] [string] $StoreId
 	)
 
-	$name = ''; try { $name = [string]$Folder.Name } catch {}
+	$name = ''
+	try { $name = [string]$Folder.Name } catch {}
 	if ([string]::IsNullOrWhiteSpace($name)) { return $null }
 
-	$eid = ''; try { $eid = [string]$Folder.EntryID } catch {}
-	$childCount = 0; try { $childCount = [int]$Folder.Folders.Count } catch {}
+	$eid = ''
+	try { $eid = [string]$Folder.EntryID } catch {}
+	$childCount = 0
+	try { $childCount = [int]$Folder.Folders.Count } catch {}
 
 	return [ordered]@{
 		Name        = $name
@@ -33,12 +37,31 @@ function New-FolderNode {
 	}
 }
 
+function Get-StoreRoot {
+	param($Store, $Namespace)
+	$root = $null
+	try { $root = $Store.GetRootFolder() } catch {}
+	if ($null -ne $root) {
+		try {
+			$c = 0; try { $c = [int]$root.Folders.Count } catch {}
+			if ($c -gt 0) { return $root }
+		} catch {}
+	}
+	# Certains stores partagés exposent un root vide; fallback via Namespace.Folders
+	foreach ($tf in $Namespace.Folders) {
+		try { if ($tf.Store.StoreID -eq $Store.StoreID) { return $tf } } catch {}
+	}
+	return $root
+}
+
 try {
+	try { Add-Type -AssemblyName Microsoft.Office.Interop.Outlook | Out-Null } catch {}
 	$ol = New-Object -ComObject Outlook.Application
 	$ns = $ol.GetNamespace('MAPI')
 	try { $null = $ns.Logon() } catch {}
 
-	$stores = @(); foreach ($st in $ns.Stores) { try { $stores += $st } catch {} }
+	$stores = @()
+	foreach ($st in $ns.Stores) { try { $stores += $st } catch {} }
 
 	if ($StoreName -and $StoreName.Trim() -ne '') {
 		$stores = @($stores | Where-Object { $_.DisplayName -eq $StoreName -or $_.DisplayName -like ("*" + $StoreName + "*") })
@@ -51,21 +74,16 @@ try {
 	foreach ($store in $stores) {
 		$root = $null
 		try {
-			$storeName = ''; try { $storeName = [string]$store.DisplayName } catch {}
-			$storeIdVal = ''; try { $storeIdVal = [string]$store.StoreID } catch {}
+			$storeName = ''
+			try { $storeName = [string]$store.DisplayName } catch {}
+			$storeIdVal = ''
+			try { $storeIdVal = [string]$store.StoreID } catch {}
 
-			try { $root = $store.GetRootFolder() } catch {}
-			# Certaines boîtes partagées peuvent exposer une racine vide; fallback via Namespace.Folders
-			try {
-				$rc = 0; try { $rc = [int]$root.Folders.Count } catch {}
-				if ($rc -eq 0) {
-					foreach ($tf in $ns.Folders) { try { if ($tf.Store.StoreID -eq $store.StoreID) { $root = $tf; break } } catch {} }
-				}
-			} catch {}
-
+			$root = Get-StoreRoot -Store $store -Namespace $ns
 			if ($null -eq $root) { continue }
 
-			$rootEntryId = ''; try { $rootEntryId = [string]$root.EntryID } catch {}
+			$rootEntryId = ''
+			try { $rootEntryId = [string]$root.EntryID } catch {}
 			$rootNode = [ordered]@{
 				Name        = $storeName
 				EntryId     = $rootEntryId
@@ -105,7 +123,7 @@ try {
 						$byId[$node.EntryId] = $node
 
 						if ($byId.ContainsKey($parentId)) {
-						  $byId[$parentId].Children += $node
+							$byId[$parentId].Children += $node
 						}
 
 						$nextDepth = $depth + 1
@@ -116,7 +134,6 @@ try {
 				}
 			}
 
-			# Mettre à jour ChildCount pour chaque noeud
 			foreach ($id in $byId.Keys) {
 				$n = $byId[$id]
 				if ($n -and $n.Children) { $n.ChildCount = $n.Children.Count }
