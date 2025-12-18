@@ -2204,50 +2204,82 @@ ${safeTarget}
         // Use external script to avoid complex quoting issues
         const { resolveResource } = require('./scriptPathResolver');
         const fs = require('fs');
-        const res = resolveResource(['powershell'], 'get-all-folders.ps1');
-        const psPath = res.path || path.join(__dirname, '../../powershell/get-all-folders.ps1');
         const psArgs = [];
         if (targetStoreId) { psArgs.push('-StoreId', String(targetStoreId)); }
         if (Number.isFinite(effectiveMaxDepth) && effectiveMaxDepth >= 0) { psArgs.push('-MaxDepth', String(effectiveMaxDepth)); }
+
         let lst = [];
+
+        // Try inline script first to avoid packaged-script pipeline glitches
         try {
-          const psExists = psPath && fs.existsSync(psPath);
-          if (!psExists) {
-            throw new Error(`PS script missing at ${psPath}`);
+          const inline = await this.executePowerShellScript(script, 180000);
+          if (inline && inline.success) {
+            const json2 = OutlookConnector.parseJsonOutput(inline.output) || {};
+            lst = Array.isArray(json2.stores)
+              ? json2.stores.flatMap(s => {
+                  const rootNode = s.Root;
+                  const collect = [];
+                  const walk = (node) => {
+                    if (!node) return;
+                    collect.push({
+                      StoreEntryID: s.StoreId || s.StoreID,
+                      StoreDisplayName: s.Name,
+                      FolderName: node.Name,
+                      FolderEntryID: node.EntryId,
+                      FullPath: node.DisplayPath,
+                      ChildCount: Number(node.ChildCount || (node.Children ? node.Children.length : 0))
+                    });
+                    if (Array.isArray(node.Children)) { node.Children.forEach(ch => walk(ch)); }
+                  };
+                  walk(rootNode);
+                  return collect;
+                })
+              : (Array.isArray(json2.folders) ? json2.folders : []);
+          } else if (inline && inline.output) {
+            console.warn('[COM-REC] Inline PS returned non-success, output head:', String(inline.output).slice(0,200));
           }
-          const raw = await this.execPowerShellFile(psPath, psArgs, 180000);
-          const json = OutlookConnector.parseJsonOutput(raw) || {};
-          lst = Array.isArray(json.stores) ? (json.stores.flatMap(s => {
-            const rootNode = s.Root;
-            const collect = [];
-            const walk = (node) => {
-              if (!node) return;
-              collect.push({
-                StoreEntryID: s.StoreId || s.StoreID,
-                StoreDisplayName: s.Name,
-                FolderName: node.Name,
-                FolderEntryID: node.EntryId,
-                FullPath: node.DisplayPath,
-                ChildCount: Number(node.ChildCount || (node.Children ? node.Children.length : 0))
-              });
-              if (Array.isArray(node.Children)) {
-                node.Children.forEach(ch => walk(ch));
+        } catch (epsInline) {
+          console.warn('[COM-REC] Inline PS fallback failed:', epsInline.message);
+        }
+
+        // If still empty, try external file unless previously marked broken
+        if (!Array.isArray(lst) || lst.length === 0) {
+          if (this._psGetAllFoldersBroken) {
+            console.warn('[COM-REC] Skipping external get-all-folders.ps1 (marked broken)');
+          } else {
+            const res = resolveResource(['powershell'], 'get-all-folders.ps1');
+            const psPath = res.path || path.join(__dirname, '../../powershell/get-all-folders.ps1');
+            try {
+              const psExists = psPath && fs.existsSync(psPath);
+              if (!psExists) {
+                throw new Error(`PS script missing at ${psPath}`);
               }
-            };
-            walk(rootNode);
-            return collect;
-          })) : (Array.isArray(json.folders) ? json.folders : []);
-        } catch (eps) {
-          console.warn('[COM-REC] PS external failed, will try inline script fallback:', eps.message, 'psPath=', psPath);
-          try {
-            const inline = await this.executePowerShellScript(script, 180000);
-            if (inline && inline.success) {
-              const json2 = OutlookConnector.parseJsonOutput(inline.output) || {};
-              lst = Array.isArray(json2.folders) ? json2.folders : [];
+              const raw = await this.execPowerShellFile(psPath, psArgs, 180000);
+              const json = OutlookConnector.parseJsonOutput(raw) || {};
+              lst = Array.isArray(json.stores)
+                ? json.stores.flatMap(s => {
+                    const rootNode = s.Root;
+                    const collect = [];
+                    const walk = (node) => {
+                      if (!node) return;
+                      collect.push({
+                        StoreEntryID: s.StoreId || s.StoreID,
+                        StoreDisplayName: s.Name,
+                        FolderName: node.Name,
+                        FolderEntryID: node.EntryId,
+                        FullPath: node.DisplayPath,
+                        ChildCount: Number(node.ChildCount || (node.Children ? node.Children.length : 0))
+                      });
+                      if (Array.isArray(node.Children)) { node.Children.forEach(ch => walk(ch)); }
+                    };
+                    walk(rootNode);
+                    return collect;
+                  })
+                : (Array.isArray(json.folders) ? json.folders : []);
+            } catch (eps) {
+              this._psGetAllFoldersBroken = true;
+              console.warn('[COM-REC] PS external failed, marking broken and keeping inline/WSH fallback:', eps.message, 'psPath=', psPath, 'tried=', res.tried?.slice(0,6));
             }
-          } catch (eps2) {
-            console.warn('[COM-REC] Inline PS fallback failed:', eps2.message);
-            lst = [];
           }
         }
         let flat = lst.map(f => ({
