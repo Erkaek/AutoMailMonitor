@@ -1155,6 +1155,41 @@ ipcMain.handle('api-folders-add', async (event, { folderPath, category, storeId:
     }
     debugPhases.push('db-initialized');
 
+    // Normaliser le chemin et corriger les cas où le nom de boîte est collé sans antislash (ex: "FlotteAutoBoîte de réception")
+    let mailboxesCache = null;
+    const ensureMailboxes = async () => {
+      if (mailboxesCache) return mailboxesCache;
+      try {
+        mailboxesCache = await outlookConnector.getMailboxes?.();
+      } catch (_) {
+        mailboxesCache = null;
+      }
+      return mailboxesCache;
+    };
+
+    const normalizeFolderPath = async (rawPath) => {
+      let p = String(rawPath || '').replace(/\//g, '\\').replace(/\\+/g, '\\').replace(/^\\+/, '');
+      const mbs = await ensureMailboxes();
+      if (Array.isArray(mbs)) {
+        const lower = p.toLowerCase();
+        const candidate = mbs.find(mb => {
+          const name = String(mb?.Name || '').trim();
+          if (!name) return false;
+          const nameLc = name.toLowerCase();
+          return lower.startsWith(nameLc) && lower[nameLc.length] !== '\\';
+        });
+        if (candidate && candidate.Name) {
+          const remainder = p.slice(candidate.Name.length);
+          const trimmed = remainder.startsWith('\\') ? remainder.slice(1) : remainder;
+          p = `${candidate.Name}\\${trimmed}`;
+          debugPhases.push('path-normalized-missing-slash');
+        }
+      }
+      return p;
+    };
+
+    folderPath = await normalizeFolderPath(folderPath);
+
   // Nouvelle logique: résoudre la boîte par nom, puis parcourir récursivement
   // tous les descendants via lazy-load COM en se basant sur le chemin (robuste aux langues)
   const toInsert = [];
@@ -1166,7 +1201,7 @@ ipcMain.handle('api-folders-add', async (event, { folderPath, category, storeId:
       // 1) Trouver le StoreID de la boîte aux lettres
       let storeId = payloadStoreId || '';
       try {
-        const mbs = await outlookConnector.getMailboxes?.();
+        const mbs = await ensureMailboxes();
         if (Array.isArray(mbs)) {
           const exact = mbs.find(m => m?.Name === mailboxName);
           const like = exact || mbs.find(m => String(m?.Name || '').toLowerCase().includes(String(mailboxName).toLowerCase()));
