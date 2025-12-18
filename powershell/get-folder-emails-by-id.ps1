@@ -133,7 +133,7 @@ try {
 
     if (-not $targetFolder) {
         $err = "Dossier introuvable (EntryID ou chemin)"
-        @{ success = $false; error = $err; Emails = @(); emails = @(); count = 0; totalInFolder = 0 } | ConvertTo-Json -Depth 4 -Compress | Write-Output
+        @{ success = $false; error = $err; emails = @(); count = 0; totalInFolder = 0 } | ConvertTo-Json -Depth 4 -Compress | Write-Output
         return
     }
 
@@ -194,14 +194,16 @@ try {
         } catch {}
     }
 
+    $folderNameOut = try { $targetFolder.Name } catch { $FolderPath }
+    $folderPathOut = $FolderPath
+
     $res = @{
         success = $true
-        Emails = $list
         emails = $list
         count = $list.Count
         totalInFolder = $totalCount
-        folderName = try { $targetFolder.Name } catch { $FolderPath }
-        folderPath = $FolderPath
+        folderName = $folderNameOut
+        folderPath = $folderPathOut
         storeName = $storeNameOut
         storeId = $storeIdOut
         timestamp = (Get-Date).ToString("yyyy-MM-ddTHH:mm:ssZ")
@@ -211,5 +213,5 @@ try {
 
 } catch {
     $err = $_.Exception.Message
-    @{ success = $false; error = $err; Emails = @(); emails = @(); count = 0; totalInFolder = 0 } | ConvertTo-Json -Depth 4 -Compress | Write-Output
+    @{ success = $false; error = $err; emails = @(); count = 0; totalInFolder = 0 } | ConvertTo-Json -Depth 4 -Compress | Write-Output
 }
