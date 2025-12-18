@@ -1129,6 +1129,51 @@ class OutlookConnector extends EventEmitter {
         }
       }
 
+      // Deepen the subtree: breadth-first expansion using getSubFolders up to maxDepth (or env default) to populate grandchildren.
+      const deepenSubtree = async () => {
+        const depthLimit = Number.isFinite(maxDepth) && maxDepth >= 0 ? maxDepth : 20;
+        const seen = new Set();
+        const queue = [];
+        const pushChild = (parentNode, childNode, depth) => {
+          if (!childNode) return;
+          const key = (childNode.EntryID || childNode.FolderPath || '').toLowerCase();
+          if (key && seen.has(key)) return;
+          if (key) seen.add(key);
+          queue.push({ parent: parentNode, node: childNode, depth });
+        };
+        for (const ch of rootNode.SubFolders || []) {
+          pushChild(rootNode, ch, 1);
+        }
+        const startedDepth = Date.now();
+        while (queue.length) {
+          if (Date.now() - startedDepth > 60_000) break; // safety to avoid long hangs
+          const { parent, node, depth } = queue.shift();
+          const childCountHint = parseChildCount(node.ChildCount);
+          if (depth > depthLimit || childCountHint === 0) continue;
+          try {
+            const moreKids = await this.getSubFolders(storeId, node.EntryID, node.FolderPath);
+            if (Array.isArray(moreKids) && moreKids.length) {
+              for (const k of moreKids) {
+                const childPath = k.FolderPath || `${node.FolderPath}\\${k.Name}`;
+                const childNode = registerNode(childPath, {
+                  name: k.Name,
+                  entryId: k.EntryID,
+                  childCount: parseChildCount(k.ChildCount)
+                });
+                if (childNode) {
+                  if (!node.SubFolders.includes(childNode)) node.SubFolders.push(childNode);
+                  pushChild(node, childNode, depth + 1);
+                }
+              }
+            }
+          } catch (deepErr) {
+            console.warn('[COM-REC] Deep children fetch failed:', deepErr.message || deepErr);
+          }
+        }
+      };
+
+      await deepenSubtree();
+
       const ensureManualChildren = () => {
         const rootLc = rootNode.FolderPath.toLowerCase();
         if (rootLc.includes('testboitepartagee') && rootLc.includes('boîte de réception')) {
