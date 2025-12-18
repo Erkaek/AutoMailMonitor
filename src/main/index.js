@@ -1139,6 +1139,9 @@ ipcMain.handle('api-folders-add', async (event, { folderPath, category, storeId:
   const startedAt = Date.now();
   let debugPhases = [];
   let toInsertDebugSample = [];
+  let mailboxName = '';
+  let storeId = payloadStoreId || '';
+  let mailboxDisplay = '';
   try {
     if (!folderPath) {
       throw new Error('Chemin du dossier requis');
@@ -1196,16 +1199,16 @@ ipcMain.handle('api-folders-add', async (event, { folderPath, category, storeId:
   const seen = new Set(); // éviter doublons
     {
       const parts = String(folderPath).split('\\');
-      const mailboxName = parts[0];
+      mailboxName = parts[0];
 
       // 1) Trouver le StoreID de la boîte aux lettres
-      let storeId = payloadStoreId || '';
       try {
         const mbs = await ensureMailboxes();
         if (Array.isArray(mbs)) {
           const exact = mbs.find(m => m?.Name === mailboxName);
           const like = exact || mbs.find(m => String(m?.Name || '').toLowerCase().includes(String(mailboxName).toLowerCase()));
           storeId = like?.StoreID || '';
+          mailboxDisplay = like?.Name || mailboxName;
         }
       } catch (_) {}
 
@@ -1217,6 +1220,7 @@ ipcMain.handle('api-folders-add', async (event, { folderPath, category, storeId:
           const exact = stores.find(s => s?.DisplayName === mailboxName);
           const like = exact || stores.find(s => String(s?.DisplayName || '').toLowerCase().includes(String(mailboxName).toLowerCase()));
           storeId = like?.StoreId || '';
+          mailboxDisplay = like?.DisplayName || mailboxName;
         } catch (_) {}
       }
 
@@ -1911,95 +1915,9 @@ ipcMain.handle('api-folders-add', async (event, { folderPath, category, storeId:
     initialInsertedCount = inserted;
     debugPhases.push('insert-done');
 
-    // COM full tree fallback if little or no children captured (heuristic: < 2 insertions)
-    if (inserted < 2) {
-      try {
-        debugPhases.push('com-tree-fallback-start');
-        const outlookConnector2 = require('../server/outlookConnector');
-        const tree = await outlookConnector2.getAllStoresAndTreeViaCOM({ forceRefresh: false });
-        if (!tree || !tree.index || !tree.index.byPath) throw new Error('Arbre COM indisponible');
-        const lowerBase = String(folderPath).toLowerCase();
-        // Chercher nœud de base (exact ou commençant par) avec logique de variante Inbox
-        let baseNode = tree.index.byPath.get(lowerBase) || null;
-        if (!baseNode) {
-          try {
-            const partsUser = String(folderPath).split('\\');
-            const mailboxUser = (partsUser[0] || '').toLowerCase();
-            const tailUserNorm = partsUser.slice(1).map(s => s.normalize('NFD').replace(/\p{Diacritic}/gu,'').toLowerCase().trim());
-            const isInboxLike = (s) => {
-              const n = String(s||'').normalize('NFD').replace(/\p{Diacritic}/gu,'').toLowerCase();
-              return n === 'inbox' || n.includes('boite') || n.includes('reception');
-            };
-            for (const [p, node] of tree.index.byPath.entries()) {
-              if (baseNode) break;
-              const segs = p.split('\\');
-              if (!segs.length) continue;
-              const mailboxSeg = segs[0].toLowerCase();
-              if (mailboxSeg !== mailboxUser) continue;
-              const tailSegsNorm = segs.slice(1).map(s => s.normalize('NFD').replace(/\p{Diacritic}/gu,'').toLowerCase().trim());
-              let match = tailSegsNorm.length === tailUserNorm.length && tailSegsNorm.every((v,i)=> v === tailUserNorm[i]);
-              if (!match && tailSegsNorm.length === tailUserNorm.length + 1 && isInboxLike(tailSegsNorm[0])) {
-                match = tailSegsNorm.slice(1).every((v,i)=> v === tailUserNorm[i]);
-              }
-              if (match) baseNode = node;
-            }
-            if (baseNode) {
-              debugPhases.push('com-tree-fallback-variant-match');
-            }
-          } catch { /* ignore */ }
-        }
-        if (baseNode) {
-          // Insérer tous les descendants sous ce path (paths commençant par base path + '\\')
-          let added = 0;
-          for (const [p, node] of tree.index.byPath.entries()) {
-            if (p === lowerBase) continue;
-            if (p.startsWith(lowerBase + '\\')) {
-              const normPath = node.path; // déjà canonical
-              if (!seen.has(normPath)) {
-                try {
-                  await dbRef.addFolderConfiguration(normPath, category, node.name || normPath.split('\\').pop());
-                  seen.add(normPath);
-                  added++; inserted++;
-                  if (toInsertDebugSample.length < 10) toInsertDebugSample.push(normPath);
-                } catch (e) {
-                  console.warn('[COM-TREE][ADD] Échec insertion descendant:', normPath, e.message || e);
-                }
-              }
-            }
-          }
-          console.log(`[COM-TREE][ADD] Descendants ajoutés via fallback: ${added}`);
-        } else {
-          console.warn('[COM-TREE][ADD] Base introuvable dans index COM, tentative forceRefresh…');
-          const tree2 = await outlookConnector2.getAllStoresAndTreeViaCOM({ forceRefresh: true });
-          const base2 = tree2.index.byPath.get(lowerBase);
-          if (base2) {
-            let added2 = 0;
-            for (const [p, node] of tree2.index.byPath.entries()) {
-              if (p === lowerBase) continue;
-              if (p.startsWith(lowerBase + '\\')) {
-                const normPath = node.path;
-                if (!seen.has(normPath)) {
-                  try {
-                    await dbRef.addFolderConfiguration(normPath, category, node.name || normPath.split('\\').pop());
-                    seen.add(normPath);
-                    added2++; inserted++;
-                    if (toInsertDebugSample.length < 10) toInsertDebugSample.push(normPath);
-                  } catch (e) {
-                    console.warn('[COM-TREE][ADD] Échec insertion descendant (refresh):', normPath, e.message || e);
-                  }
-                }
-              }
-            }
-            console.log(`[COM-TREE][ADD] Descendants ajoutés après refresh: ${added2}`);
-          } else {
-            console.warn('[COM-TREE][ADD] Base toujours introuvable après refresh');
-          }
-        }
-        debugPhases.push('com-tree-fallback-done');
-      } catch (e) {
-        debugPhases.push('com-tree-fallback-error');
-        console.warn('[COM-TREE][ADD] Fallback échec:', e.message || e);
-      }
+    // Ancien fallback COM global très long désactivé pour accélérer l'ajout
+    if (inserted < 1) {
+      debugPhases.push('com-tree-fallback-skipped-fast');
     }
 
     // OPTIMIZED: Invalidation intelligente du cache
