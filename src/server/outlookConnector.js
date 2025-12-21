@@ -55,8 +55,12 @@ class OutlookConnector extends EventEmitter {
 
     // Cache et mutex pour l'exploration complète des dossiers
     this._treeCache = new Map();
-    this._treeCacheTtlMs = 480000; // 8 minutes
+    this._treeCacheTtlMs = 900000; // 15 minutes pour limiter les explorations répétées
     this._treeLocks = new Map();
+
+    // Cache dédié aux structures (Store -> arbre inbox) pour éviter les PowerShell répétés
+    this._folderStructCache = new Map();
+    this._folderStructureTtlMs = 600000; // 10 minutes
   }
 
   /**
@@ -473,6 +477,9 @@ class OutlookConnector extends EventEmitter {
    */
   async getMailboxes() {
     try {
+      let storeName = null;
+      let smtpAddress = null;
+
       const ok = await this.ensureConnected();
       if (!ok) {
         return [];
@@ -638,8 +645,74 @@ class OutlookConnector extends EventEmitter {
    * Récupère la structure des dossiers pour un Store donné
    * Retour: Array<{ Name, StoreID, SubFolders: Folder[] }>
    */
-  async getFolderStructure(storeId) {
+  async getFolderStructure(storeId, opts = {}) {
     try {
+      const cacheKey = storeId || 'all';
+      const ttlStruct = Number.isFinite(opts.ttlMs) ? opts.ttlMs : (this._folderStructureTtlMs || 0);
+      if (!this._folderStructCache) this._folderStructCache = new Map();
+
+      const buildTreeFromFlat = (flatList) => {
+        if (!Array.isArray(flatList) || !flatList.length) return null;
+        const parseChildCount = (value) => {
+          const num = Number(value);
+          return Number.isFinite(num) ? num : 0;
+        };
+        const first = flatList[0];
+        const inferredStoreName = first?.storeName || first?.StoreDisplayName || (storeId || '').toString();
+        const inferredStoreId = first?.storeId || first?.StoreEntryID || storeId || '';
+        const rootNode = { Name: inferredStoreName, StoreID: inferredStoreId, SmtpAddress: null, SubFolders: [] };
+        const byPath = new Map();
+        const ensureNode = (fullPath, entryId, name, childCount) => {
+          const norm = String(fullPath || '').replace(/\+/g, '\\');
+          const lower = norm.toLowerCase();
+          if (byPath.has(lower)) return byPath.get(lower);
+          const node = { Name: name || norm.split('\\').pop() || norm, FolderPath: norm, EntryID: entryId || '', ChildCount: parseChildCount(childCount), SubFolders: [] };
+          byPath.set(lower, node);
+          return node;
+        };
+
+        for (const f of flatList) {
+          const fp = f?.fullPath || f?.FullPath;
+          if (!fp) continue;
+          const node = ensureNode(fp, f?.entryId || f?.FolderEntryID, f?.name || f?.FolderName, f?.childCount ?? f?.ChildCount);
+          const parentPath = fp.includes('\\') ? fp.substring(0, fp.lastIndexOf('\\')) : null;
+          if (parentPath) {
+            const parent = ensureNode(parentPath, null, parentPath.split('\\').pop(), null);
+            if (!parent.SubFolders.includes(node)) parent.SubFolders.push(node);
+          } else {
+            if (!rootNode.SubFolders.includes(node)) rootNode.SubFolders.push(node);
+          }
+        }
+
+        if (!rootNode.SubFolders.length) return null;
+        try {
+          rootNode.SubFolders.sort((a, b) => a.Name.localeCompare(b.Name, 'fr', { sensitivity: 'base' }));
+        } catch {}
+        rootNode.ChildCount = rootNode.SubFolders.length;
+        return [rootNode];
+      };
+
+      // Cache structure (TTL configurable)
+      if (!opts.forceRefresh && ttlStruct > 0) {
+        const cachedStruct = this._folderStructCache.get(cacheKey);
+        if (cachedStruct && (Date.now() - cachedStruct.at) < ttlStruct) {
+          return cachedStruct.data;
+        }
+      }
+
+      // Try rebuilding from cached flat tree to avoid a new PowerShell execution
+      const fastTree = (() => {
+        if (!this._treeCache || !this._treeCacheTtlMs) return null;
+        const key = `${storeId || 'all'}|${this.settings?.outlook?.maxEnumerationDepth || 3}`;
+        const cached = this._treeCache.get(key);
+        if (!cached || (Date.now() - cached.at) >= this._treeCacheTtlMs) return null;
+        return buildTreeFromFlat(cached.data);
+      })();
+      if (fastTree) {
+        this._folderStructCache.set(cacheKey, { at: Date.now(), data: fastTree });
+        return fastTree;
+      }
+
       const ok = await this.ensureConnected();
       if (!ok) {
         return [];
@@ -796,6 +869,15 @@ class OutlookConnector extends EventEmitter {
       let json = OutlookConnector.parseJsonOutput(rawOutput) || {};
       let folders = Array.isArray(json.folders) ? json.folders : [];
 
+      // Prélever des indices sur le store pour la mise en cache
+      try {
+        const mb = folders && folders[0];
+        if (mb) {
+          storeName = mb.Name || storeName;
+          smtpAddress = mb.SmtpAddress || smtpAddress;
+        }
+      } catch {}
+
       if (folders.length === 0) {
         // Diagnostic: log output head to understand failures
         try {
@@ -805,7 +887,7 @@ class OutlookConnector extends EventEmitter {
           // Fallback: rebuild minimal tree from flat enumeration
           const flat = await this.listFoldersRecursive(storeId, { maxDepth: this.settings?.outlook?.maxEnumerationDepth || 4, forceRefresh: true });
           if (Array.isArray(flat) && flat.length) {
-            const storeNameHint = storeName || (matchedStore?.Name) || (flat[0].storeName) || storeId;
+            const storeNameHint = storeName || (flat[0].storeName) || storeId;
             const rootNode = { Name: storeNameHint, StoreID: storeId, SmtpAddress: smtpAddress, SubFolders: [] };
             const byPath = new Map();
             const ensureNode = (fullPath, entryId, name, childCount) => {
@@ -871,10 +953,15 @@ class OutlookConnector extends EventEmitter {
           });
         }
       }
+      if (Array.isArray(folders) && folders.length) {
+        this._folderStructCache.set(cacheKey, { at: Date.now(), data: folders });
+      }
       
       return folders;
     } catch (error) {
       console.error('❌ Erreur getFolderStructure:', error.message);
+      const cachedStruct = this._folderStructCache?.get(storeId || 'all');
+      if (cachedStruct) return cachedStruct.data;
       return [];
     }
   }
