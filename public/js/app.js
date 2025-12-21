@@ -1424,6 +1424,27 @@ class MailMonitor {
                     </div>
                   </div>
                   <div class="mb-3">
+                    <label class="form-label">Dossiers sélectionnés</label>
+                    <div class="border rounded bg-surface">
+                      <table class="table table-sm align-middle mb-0">
+                        <thead class="table-light">
+                          <tr>
+                            <th style="width: 18%;">Dossier</th>
+                            <th>Chemin complet</th>
+                            <th style="width: 190px;">Catégorie</th>
+                            <th style="width: 52px;"></th>
+                          </tr>
+                        </thead>
+                        <tbody id="selected-folders-body">
+                          <tr id="selected-folders-empty">
+                            <td colspan="4" class="text-muted small py-2 ps-2">Cochez un ou plusieurs dossiers dans l'arborescence.</td>
+                          </tr>
+                        </tbody>
+                      </table>
+                    </div>
+                    <div class="form-text">Chaque dossier peut être affecté à une catégorie différente.</div>
+                  </div>
+                  <div class="mb-3">
                     <label class="form-label">Logs (complets pour debug)</label>
                     <div id="folder-log-box" class="border rounded p-2 bg-light" style="max-height: 200px; overflow-y: auto; font-family: monospace; font-size: 12px;"></div>
                     <div class="form-text">Flux complet des logs temps réel pendant l'exploration (limité à 200 lignes).</div>
@@ -1463,6 +1484,14 @@ class MailMonitor {
       const loadButton = document.getElementById('load-root-tree');
       const alertBox = document.getElementById('folder-modal-alert');
       const logBox = document.getElementById('folder-log-box');
+
+      // Gestion multi-sélection pour l'ajout en masse
+      const selectionCtrl = this.createFolderSelectionController({
+        defaultCategorySelectId: 'category-input',
+        selectedBodyId: 'selected-folders-body',
+        hiddenInputId: 'selected-folder-path'
+      });
+      this._folderSelectionController = selectionCtrl;
 
       const pushLog = (msg) => {
         if (!logBox) return;
@@ -1512,6 +1541,7 @@ class MailMonitor {
       };
 
       const resetSelection = () => {
+        this._folderSelectionController?.clear?.();
         document.getElementById('selected-folder-path').value = '';
       };
 
@@ -1525,9 +1555,15 @@ class MailMonitor {
         folderTree.dataset.smtp = meta?.smtp || '';
         folderTree.dataset.storeId = meta?.storeId || '';
         folderTree.dataset.mode = 'root-path';
-        const html = this.createFolderTree(rootNode, 0);
+        const html = this.createFolderTree(rootNode, 0, true);
         folderTree.innerHTML = html;
-        this.initializeFolderTreeEvents();
+        this.initializeFolderTreeEvents({
+          onToggle: (payload) => selectionCtrl?.toggle(payload),
+          isSelected: (path) => selectionCtrl?.isSelected(path),
+          highlightSelected: true,
+          withCheckbox: true
+        });
+        selectionCtrl?.syncCheckboxes?.();
       };
 
       const loadTreeFromRoot = async () => {
@@ -1751,6 +1787,27 @@ class MailMonitor {
                   </div>
                 </div>
                 <div class="mb-3">
+                  <label class="form-label">Dossiers sélectionnés</label>
+                  <div class="border rounded bg-surface">
+                    <table class="table table-sm align-middle mb-0">
+                      <thead class="table-light">
+                        <tr>
+                          <th style="width: 18%;">Dossier</th>
+                          <th>Chemin complet</th>
+                          <th style="width: 190px;">Catégorie</th>
+                          <th style="width: 52px;"></th>
+                        </tr>
+                      </thead>
+                      <tbody id="selected-folders-body">
+                        <tr id="selected-folders-empty">
+                          <td colspan="4" class="text-muted small py-2 ps-2">Cochez un ou plusieurs dossiers dans l'arborescence.</td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                  <div class="form-text">Chaque dossier peut être affecté à une catégorie différente.</div>
+                </div>
+                <div class="mb-3">
                   <label class="form-label">Catégorie</label>
                   <select class="form-control" id="category-input" required>
                     <option value="">-- Sélectionner une catégorie --</option>
@@ -1785,10 +1842,19 @@ class MailMonitor {
       catEl?.classList.remove('is-invalid');
     } catch(_) {}
 
+    // Gestion multi-sélection
+    const selectionCtrl = this.createFolderSelectionController({
+      defaultCategorySelectId: 'category-input',
+      selectedBodyId: 'selected-folders-body',
+      hiddenInputId: 'selected-folder-path'
+    });
+    this._folderSelectionController = selectionCtrl;
+
     // Gérer le changement de boîte mail
     const mailboxSelectEl = document.getElementById('mailbox-select');
     mailboxSelectEl.addEventListener('change', async (e) => {
       const storeId = e.target.value || '';
+      this._folderSelectionController?.clear?.();
       await this.loadFoldersForMailbox(storeId);
     });
 
@@ -1896,9 +1962,15 @@ class MailMonitor {
         };
         const treeItems = list.map(n => buildTreeItem2(n, mailboxDisplay));
         let html = '';
-        for (const it of treeItems) html += this.createFolderTree(it, 0);
+        for (const it of treeItems) html += this.createFolderTree(it, 0, true);
         folderTree.innerHTML = html;
-        this.initializeFolderTreeEvents();
+        this.initializeFolderTreeEvents({
+          onToggle: (payload) => this._folderSelectionController?.toggle(payload),
+          isSelected: (path) => this._folderSelectionController?.isSelected(path),
+          highlightSelected: true,
+          withCheckbox: true
+        });
+        this._folderSelectionController?.syncCheckboxes?.();
       } catch (err) {
         console.error('❌ Erreur top-level:', err);
         folderTree.innerHTML = '<div class="text-danger"><i class="bi bi-exclamation-triangle me-2"></i>Erreur de chargement</div>';
@@ -1909,7 +1981,7 @@ class MailMonitor {
     }
   }
 
-  createFolderTree(structure, level = 0) {
+  createFolderTree(structure, level = 0, withCheckbox = false) {
     let html = '';
     
     // Support des deux formats : l'ancien (Path/Subfolders) et le nouveau (FolderPath/SubFolders)
@@ -1940,18 +2012,21 @@ class MailMonitor {
       
       const safeName = this.escapeHtml(folderName);
       const safePath = this.escapeHtml(folderPath);
+      const safeEntryId = this.escapeHtml(entryId);
+      const checkboxHtml = withCheckbox ? `<input type="checkbox" class="form-check-input folder-checkbox me-2" data-path="${safePath}" data-name="${safeName}" data-entry-id="${safeEntryId}">` : '';
       html += `
         <div class="folder-item" data-level="${level}">
           <div class="folder-line folder-selectable" 
                data-path="${safePath}" 
                data-name="${safeName}"
-               data-entry-id="${entryId}"
+               data-entry-id="${safeEntryId}"
                data-has-children="${hasChildren ? '1' : '0'}"
                style="--depth:${level};">
             ${hasChildren ? 
               `<i class="bi bi-chevron-right folder-toggle" data-target="${folderId}" role="button" aria-label="Afficher les sous-dossiers"></i>` : 
               `<span class="folder-toggle-placeholder"></span>`
             }
+            ${checkboxHtml}
             <i class="bi bi-folder text-warning folder-glyph"></i>
             <span class="folder-name" title="${safePath}">${safeName}</span>
             ${unreadCount > 0 ? `<span class="badge bg-light text-dark ms-1">${unreadCount}</span>` : ''}
@@ -1960,7 +2035,7 @@ class MailMonitor {
       `;
       // Si on a déjà des subfolders fournis, les insérer maintenant
       if (Array.isArray(subfolders) && subfolders.length > 0) {
-        html = html.replace(`id="${folderId}" style="display: none;">`, `id="${folderId}" style="display: none;">` + subfolders.map(sf => this.createFolderTree(sf, level + 1)).join(''));
+        html = html.replace(`id="${folderId}" style="display: none;">`, `id="${folderId}" style="display: none;">` + subfolders.map(sf => this.createFolderTree(sf, level + 1, withCheckbox)).join(''));
       }
 
       html += '</div>';
@@ -1969,19 +2044,136 @@ class MailMonitor {
     return html;
   }
 
-  initializeFolderTreeEvents() {
-    // Événements pour déplier/replier les dossiers
+  toggleFolderLineHighlight(line, active) {
+    if (!line) return;
+    line.classList.toggle('bg-primary', !!active);
+    line.classList.toggle('text-white', !!active);
+    if (!active) line.classList.remove('hover-surface');
+  }
+
+  renderCategoryOptions(selected) {
+    const categories = ['Déclarations', 'Règlements', 'Mails simples'];
+    return categories.map(cat => `<option value="${cat}" ${selected === cat ? 'selected' : ''}>${cat}</option>`).join('');
+  }
+
+  createFolderSelectionController(config = {}) {
+    const selection = new Map();
+    const {
+      defaultCategorySelectId = 'category-input',
+      selectedBodyId = 'selected-folders-body',
+      hiddenInputId = 'selected-folder-path'
+    } = config;
+
+    const defaultCategoryEl = document.getElementById(defaultCategorySelectId);
+    const body = document.getElementById(selectedBodyId);
+    const hiddenInput = document.getElementById(hiddenInputId);
+
+    const getDefaultCategory = () => (defaultCategoryEl?.value?.trim() || 'Mails simples');
+
+    const syncHidden = () => {
+      if (!hiddenInput) return;
+      hiddenInput.value = selection.size ? [...selection.keys()][0] : '';
+    };
+
+    const syncCheckboxes = () => {
+      document.querySelectorAll('.folder-checkbox').forEach(cb => {
+        const path = cb.getAttribute('data-path');
+        const checked = selection.has(path);
+        cb.checked = checked;
+        this.toggleFolderLineHighlight(cb.closest('.folder-line'), checked);
+      });
+    };
+
+    const render = () => {
+      if (!body) return;
+      if (selection.size === 0) {
+        body.innerHTML = `<tr id="selected-folders-empty"><td colspan="4" class="text-muted small py-2 ps-2">Cochez un ou plusieurs dossiers dans l'arborescence.</td></tr>`;
+      } else {
+        body.innerHTML = [...selection.entries()].map(([path, info]) => {
+          const cat = info.category || getDefaultCategory();
+          const safePath = this.escapeHtml(path);
+          const safeName = this.escapeHtml(info.name || 'Dossier');
+          return `
+            <tr class="selected-folder-row" data-path="${safePath}" data-entry-id="${this.escapeHtml(info.entryId || '')}" data-name="${safeName}">
+              <td class="text-nowrap">${safeName}</td>
+              <td class="small">${safePath}</td>
+              <td style="width: 190px;">
+                <select class="form-select form-select-sm selected-folder-category">${this.renderCategoryOptions(cat)}</select>
+              </td>
+              <td class="text-end" style="width: 52px;">
+                <button class="btn btn-outline-secondary btn-sm" type="button" data-remove-folder="${safePath}" aria-label="Retirer"><i class="bi bi-x"></i></button>
+              </td>
+            </tr>`;
+        }).join('');
+      }
+
+      syncHidden();
+
+      body.querySelectorAll('.selected-folder-category').forEach(sel => sel.addEventListener('change', (e) => {
+        const row = e.target.closest('.selected-folder-row');
+        const p = row?.dataset.path;
+        if (p && selection.has(p)) selection.get(p).category = e.target.value;
+      }));
+
+      body.querySelectorAll('[data-remove-folder]').forEach(btn => btn.addEventListener('click', (ev) => {
+        const p = ev.currentTarget.getAttribute('data-remove-folder');
+        if (p) selection.delete(p);
+        render();
+        syncCheckboxes();
+      }));
+
+      syncCheckboxes();
+    };
+
+    const add = ({ path, name, entryId }) => {
+      if (!path) return;
+      if (!selection.has(path)) selection.set(path, { name, entryId, category: getDefaultCategory() });
+      render();
+    };
+
+    const remove = (path) => {
+      selection.delete(path);
+      render();
+    };
+
+    const toggle = ({ path, name, entryId, checked }) => {
+      if (checked) add({ path, name, entryId });
+      else remove(path);
+    };
+
+    render();
+
+    return {
+      toggle,
+      add,
+      remove,
+      clear: () => { selection.clear(); render(); },
+      isSelected: (path) => selection.has(path),
+      syncCheckboxes,
+      render,
+      getSelections: () => [...selection.entries()].map(([path, info]) => ({
+        path,
+        name: info.name,
+        entryId: info.entryId,
+        category: info.category || getDefaultCategory()
+      }))
+    };
+  }
+
+  initializeFolderTreeEvents(options = {}) {
+    const { onToggle, isSelected, highlightSelected = false, withCheckbox = false } = options;
+
+    // Gestion dépliage/repliage + lazy-load
     document.querySelectorAll('.folder-toggle').forEach(toggle => {
       toggle.addEventListener('click', async (e) => {
         e.stopPropagation();
         const targetId = toggle.getAttribute('data-target');
         const targetDiv = document.getElementById(targetId);
         const isExpanded = targetDiv.style.display !== 'none';
-        // Lazy-load au premier dépliage
         if (!isExpanded && targetDiv && targetDiv.children.length === 0) {
           const folderLine = toggle.closest('.folder-item')?.querySelector('.folder-line');
           if (folderLine && folderLine.getAttribute('data-has-children') === '1') {
-                const mailbox = document.getElementById('folder-tree')?.dataset.mailbox || '';
+            const mailbox = document.getElementById('folder-tree')?.dataset.mailbox || '';
             const smtp = document.getElementById('folder-tree')?.dataset.smtp || '';
             const parentEntryId = folderLine.getAttribute('data-entry-id') || '';
             const storeId = document.getElementById('folder-tree')?.dataset.storeId || '';
@@ -1990,7 +2182,6 @@ class MailMonitor {
               try {
                 let children = [];
                 const parentDisplayPath = folderLine.getAttribute('data-path') || '';
-                // 1) COM getSubFolders avec parentPath (précis pour boîtes partagées)
                 try {
                   if (storeId) {
                     const res = await window.electronAPI.getSubFolders({ storeId, parentEntryId: parentEntryId || '', parentPath: parentDisplayPath || '' });
@@ -1999,7 +2190,6 @@ class MailMonitor {
                     }
                   }
                 } catch {}
-                // 2) Fallback COM shallow par EntryID
                 if (!children.length) {
                   try {
                     if (storeId && parentEntryId) {
@@ -2011,13 +2201,11 @@ class MailMonitor {
                     }
                   } catch {}
                 }
-                // 3) Fallback EWS
                 if (!children.length) {
                   const ewsMailbox = (smtp && smtp.includes('@')) ? smtp : (document.getElementById('folder-tree')?.dataset.mailboxDisplay || mailbox);
                   const res = await window.electronAPI.ewsChildren(ewsMailbox, parentEntryId);
                   children = Array.isArray(res) ? res : (res?.folders || []);
                 }
-                // Build children paths based strictly on the FULL parent DISPLAY path to preserve segments like "Boîte de réception"
                 const parentPath = folderLine.getAttribute('data-path') || `${(document.getElementById('folder-tree')?.dataset.mailboxDisplay || mailbox)}\\${folderLine.getAttribute('data-name') || ''}`;
                 const mapped = children.map(ch => ({
                   Name: ch.Name,
@@ -2028,8 +2216,8 @@ class MailMonitor {
                 }));
                 const parentItem = toggle.closest('.folder-item');
                 const level = parseInt(parentItem?.getAttribute('data-level') || '0', 10) + 1;
-                targetDiv.innerHTML = mapped.map(m => this.createFolderTree(m, level)).join('');
-                this.initializeFolderTreeEvents();
+                targetDiv.innerHTML = mapped.map(m => this.createFolderTree(m, level, withCheckbox)).join('');
+                this.initializeFolderTreeEvents(options);
               } catch (err) {
                 console.error('Lazy-load sous-dossiers EWS échoué:', err);
                 targetDiv.innerHTML = '<div class="text-danger ms-4"><i class="bi bi-exclamation-triangle me-2"></i>Erreur</div>';
@@ -2037,7 +2225,6 @@ class MailMonitor {
             }
           }
         }
-        
         if (isExpanded) {
           targetDiv.style.display = 'none';
           toggle.classList.remove('bi-chevron-down');
@@ -2050,36 +2237,56 @@ class MailMonitor {
       });
     });
 
-    // Événements pour sélectionner un dossier
+    // Cases à cocher (multi-sélection)
+    document.querySelectorAll('.folder-checkbox').forEach(cb => {
+      const line = cb.closest('.folder-line');
+      const path = cb.getAttribute('data-path') || line?.getAttribute('data-path') || '';
+      const name = cb.getAttribute('data-name') || line?.getAttribute('data-name') || '';
+      const entryId = cb.getAttribute('data-entry-id') || line?.getAttribute('data-entry-id') || '';
+      if (typeof isSelected === 'function') {
+        const preset = !!isSelected(path);
+        cb.checked = preset;
+        if (preset && highlightSelected) this.toggleFolderLineHighlight(line, true);
+      }
+      cb.addEventListener('change', () => {
+        const payload = { path, name, entryId, checked: cb.checked };
+        if (typeof onToggle === 'function') onToggle(payload);
+        if (highlightSelected) this.toggleFolderLineHighlight(line, cb.checked);
+      });
+    });
+
+    // Sélection via clic sur la ligne
     document.querySelectorAll('.folder-selectable').forEach(folder => {
       folder.addEventListener('click', (e) => {
-        // Désélectionner tous les autres dossiers
+        if (e.target.closest('.folder-toggle')) return;
+        if (e.target.closest('.folder-checkbox')) return;
+        const checkbox = folder.querySelector('.folder-checkbox');
+        if (checkbox) {
+          checkbox.checked = !checkbox.checked;
+          checkbox.dispatchEvent(new Event('change'));
+          return;
+        }
+
+        // Mode historique (sélection unique)
         document.querySelectorAll('.folder-selectable').forEach(f => {
           f.classList.remove('bg-primary', 'text-white');
-          // Nettoyer les états de survol custom
           f.classList.remove('hover-surface');
         });
-        
-        // Sélectionner le dossier cliqué
+
         folder.classList.add('bg-primary', 'text-white');
         folder.classList.remove('text-dark');
-        
-        // Mettre à jour le champ caché
+
         const path = folder.getAttribute('data-path');
-        const name = folder.getAttribute('data-name');
         document.getElementById('selected-folder-path').value = path;
-        
-        console.log('Dossier sélectionné:', { name, path });
       });
-      
-      // Effet de survol
-      folder.addEventListener('mouseenter', (e) => {
+
+      folder.addEventListener('mouseenter', () => {
         if (!folder.classList.contains('bg-primary')) {
           folder.classList.add('hover-surface');
         }
       });
-      
-      folder.addEventListener('mouseleave', (e) => {
+
+      folder.addEventListener('mouseleave', () => {
         if (!folder.classList.contains('bg-primary')) {
           folder.classList.remove('hover-surface');
         }
@@ -2108,29 +2315,38 @@ class MailMonitor {
 
   async saveFolderConfiguration(modal) {
     try {
-      const folderPath = document.getElementById('selected-folder-path').value;
-      const category = document.getElementById('category-input').value.trim();
-      
-      // Récupérer le nom du dossier depuis l'élément sélectionné
-      const selectedFolder = document.querySelector('.folder-selectable.bg-primary');
-      const folderName = selectedFolder ? selectedFolder.getAttribute('data-name') : 'Dossier';
-      const entryId = selectedFolder ? (selectedFolder.getAttribute('data-entry-id') || '') : '';
+      const fallbackPath = document.getElementById('selected-folder-path').value;
+      const defaultCategory = document.getElementById('category-input').value.trim();
       const storeId = document.getElementById('folder-tree')?.dataset.storeId || '';
       const storeName = document.getElementById('folder-tree')?.dataset.mailboxDisplay || document.getElementById('folder-tree')?.dataset.mailbox || '';
 
-      // Validation inline visible (les notifications sont no-op)
-  const catEl = document.getElementById('category-input');
-  const treeEl = document.getElementById('folder-tree');
-  const treeWrapper = treeEl ? treeEl.parentElement : null;
-  catEl?.classList.remove('is-invalid');
-  treeWrapper?.classList.remove('border-danger');
-      if (!category) {
-        catEl?.classList.add('is-invalid');
+      const selectionList = (this._folderSelectionController?.getSelections?.() || []).filter(s => s.path);
+      // Fallback single-selection (legacy) si aucune case à cocher n'est utilisée
+      if (!selectionList.length && fallbackPath) {
+        const selectedFolder = document.querySelector('.folder-selectable.bg-primary');
+        selectionList.push({
+          path: fallbackPath,
+          category: defaultCategory,
+          name: selectedFolder ? selectedFolder.getAttribute('data-name') : 'Dossier',
+          entryId: selectedFolder ? (selectedFolder.getAttribute('data-entry-id') || '') : ''
+        });
       }
-      if (!folderPath) {
+
+      const catEl = document.getElementById('category-input');
+      const treeEl = document.getElementById('folder-tree');
+      const treeWrapper = treeEl ? treeEl.parentElement : null;
+      catEl?.classList.remove('is-invalid');
+      treeWrapper?.classList.remove('border-danger');
+
+      if (!selectionList.length) {
         treeWrapper?.classList.add('border-danger');
+        return;
       }
-      if (!folderPath || !category) {
+
+      // Vérifier les catégories par dossier
+      const missingCategory = selectionList.some(sel => !sel.category);
+      if (missingCategory) {
+        catEl?.classList.add('is-invalid');
         return;
       }
 
@@ -2142,10 +2358,22 @@ class MailMonitor {
       if (alertBox) { alertBox.classList.add('d-none'); alertBox.textContent = ''; }
       try { spinner?.classList.remove('d-none'); if (text) text.textContent = 'Ajout...'; if (btn) btn.disabled = true; } catch(_) {}
 
-      // Demander au processus principal d'ajouter le dossier et tous ses sous-dossiers
-      const result = await window.electronAPI.addFolderToMonitoring({ folderPath, category, entryId, storeId, storeName });
+      // Ajouter tous les dossiers sélectionnés
+      const results = await Promise.allSettled(selectionList.map(sel => {
+        return window.electronAPI.addFolderToMonitoring({
+          folderPath: sel.path,
+          category: sel.category,
+          entryId: sel.entryId || '',
+          storeId,
+          storeName
+        });
+      }));
 
-      if (result.success) {
+      const succeeded = results.filter(r => r.status === 'fulfilled' && r.value?.success).length;
+      const failed = results.filter(r => r.status === 'fulfilled' && r.value?.success === false);
+      const rejected = results.filter(r => r.status === 'rejected');
+
+      if (succeeded > 0) {
         await this.loadFoldersConfiguration();
         this.updateFolderConfigDisplay();
         // Forcer l'actualisation de l'arborescence Monitoring immédiatement
@@ -2162,12 +2390,12 @@ class MailMonitor {
           }
         }
         
-        const count = result.count || 1;
+        const count = succeeded;
         // Afficher un feedback discret dans la console (les toasts sont désactivés)
-        console.log(`✅ Configuration sauvegardée: ${count} dossier(s) ajouté(s) en "${category}"`);
+        console.log(`✅ Configuration sauvegardée: ${count} dossier(s) ajouté(s)`);
         console.log('✅ Configuration de dossier sauvegardée (avec sous-dossiers)');
       } else {
-        const msg = result.error || 'Impossible de sauvegarder la configuration';
+        const msg = failed[0]?.value?.error || failed[0]?.reason?.message || rejected[0]?.reason?.message || 'Impossible de sauvegarder la configuration';
         console.warn('Erreur de sauvegarde', msg);
         if (alertBox) { alertBox.textContent = msg; alertBox.classList.remove('d-none'); }
       }
