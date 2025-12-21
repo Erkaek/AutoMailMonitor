@@ -1987,7 +1987,8 @@ class MailMonitor {
     // Support des deux formats : l'ancien (Path/Subfolders) et le nouveau (FolderPath/SubFolders)
     const folderName = structure.Name;
     const folderPath = structure.Path || structure.FolderPath;
-    let subfolders = structure.Subfolders || structure.SubFolders || [];
+    const rawSubfolders = structure.Subfolders ?? structure.SubFolders;
+    let subfolders = rawSubfolders || [];
   const unreadCount = structure.UnreadCount || 0;
   const entryId = structure.EntryID || '';
   const childCount = structure.ChildCount || 0;
@@ -2006,7 +2007,10 @@ class MailMonitor {
     }
     
     if (folderName && folderPath) {
-      const hasChildren = (childCount > 0) || (Array.isArray(subfolders) && subfolders.length > 0);
+      const hasInlineChildren = Array.isArray(subfolders) && subfolders.length > 0;
+      const childCountIsNumber = typeof structure.ChildCount === 'number';
+      const assumeExpandable = !hasInlineChildren && (structure.ChildCount === 0 || !childCountIsNumber) && rawSubfolders === undefined;
+      const hasChildren = hasInlineChildren || (childCountIsNumber ? childCount > 0 : true) || assumeExpandable;
       const indent = '  '.repeat(level);
       const folderId = `folder_${Math.random().toString(36).substr(2, 9)}`;
       
@@ -2176,12 +2180,12 @@ class MailMonitor {
             const mailbox = document.getElementById('folder-tree')?.dataset.mailbox || '';
             const smtp = document.getElementById('folder-tree')?.dataset.smtp || '';
             const parentEntryId = folderLine.getAttribute('data-entry-id') || '';
+            const parentDisplayPath = folderLine.getAttribute('data-path') || '';
             const storeId = document.getElementById('folder-tree')?.dataset.storeId || '';
-            if (mailbox && parentEntryId) {
+            if (mailbox && (parentEntryId || parentDisplayPath)) {
               targetDiv.innerHTML = '<div class="text-muted ms-4"><i class="bi bi-hourglass-split me-2"></i>Chargement…</div>';
               try {
                 let children = [];
-                const parentDisplayPath = folderLine.getAttribute('data-path') || '';
                 try {
                   if (storeId) {
                     const res = await window.electronAPI.getSubFolders({ storeId, parentEntryId: parentEntryId || '', parentPath: parentDisplayPath || '' });
@@ -2201,12 +2205,12 @@ class MailMonitor {
                     }
                   } catch {}
                 }
-                if (!children.length) {
+                if (!children.length && parentEntryId) {
                   const ewsMailbox = (smtp && smtp.includes('@')) ? smtp : (document.getElementById('folder-tree')?.dataset.mailboxDisplay || mailbox);
                   const res = await window.electronAPI.ewsChildren(ewsMailbox, parentEntryId);
                   children = Array.isArray(res) ? res : (res?.folders || []);
                 }
-                const parentPath = folderLine.getAttribute('data-path') || `${(document.getElementById('folder-tree')?.dataset.mailboxDisplay || mailbox)}\\${folderLine.getAttribute('data-name') || ''}`;
+                const parentPath = parentDisplayPath || `${(document.getElementById('folder-tree')?.dataset.mailboxDisplay || mailbox)}\\${folderLine.getAttribute('data-name') || ''}`;
                 const mapped = children.map(ch => ({
                   Name: ch.Name,
                   FolderPath: `${parentPath}\\${ch.Name}`,
