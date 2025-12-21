@@ -1203,11 +1203,11 @@ class OutlookConnector extends EventEmitter {
         throw new Error('Impossible de localiser le dossier racine demandé');
       }
 
-      // If the requested root exists but came from a shallow structure (e.g., getFolderStructure only listed 1-level children),
-      // fetch its direct children via getSubFolders to avoid empty displays on deep paths.
-      if (rootNode.EntryID && Array.isArray(rootNode.SubFolders) && rootNode.SubFolders.length === 0) {
+      // If the requested root exists but came from a shallow or empty structure, fetch its direct children.
+      if (Array.isArray(rootNode.SubFolders) && rootNode.SubFolders.length === 0) {
+        const parentId = rootNode.EntryID || '';
         try {
-          const kids = await this.getSubFolders(storeId, rootNode.EntryID, rootNode.FolderPath);
+          const kids = await this.getSubFolders(storeId, parentId, rootNode.FolderPath);
           if (Array.isArray(kids) && kids.length) {
             for (const k of kids) {
               const childPath = k.FolderPath || `${rootNode.FolderPath}\\${k.Name}`;
