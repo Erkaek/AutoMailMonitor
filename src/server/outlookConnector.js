@@ -1154,8 +1154,11 @@ class OutlookConnector extends EventEmitter {
         const ok = await this.ensureConnected();
         if (!ok) throw new Error('Outlook non connecté');
 
-        const safeStoreId = String(storeId || '').replace(/`/g, '``').replace(/"/g, '\\"');
-        const safeParentPath = String(normalizedPath || '').replace(/`/g, '``').replace(/"/g, '\\"');
+        // IMPORTANT: en PowerShell, \" n'échappe pas un guillemet dans une string.
+        // On injecte donc des littéraux entre quotes simples et on échappe uniquement les apostrophes.
+        const psSingleQuote = (value) => String(value ?? '').replace(/'/g, "''");
+        const safeStoreId = psSingleQuote(storeId || '');
+        const safeParentPath = psSingleQuote(normalizedPath || '');
 
         const script = `
           $enc = New-Object System.Text.UTF8Encoding $false
@@ -1165,7 +1168,8 @@ class OutlookConnector extends EventEmitter {
             $outlook = New-Object -ComObject Outlook.Application
             $ns = $outlook.GetNamespace("MAPI")
             $store = $null
-            foreach ($st in $ns.Stores) { if ($st.StoreID -eq "${safeStoreId}") { $store = $st; break } }
+            $targetStoreId = '${safeStoreId}'
+            foreach ($st in $ns.Stores) { if ($st.StoreID -eq $targetStoreId) { $store = $st; break } }
             if (-not $store) { throw "Store introuvable" }
             $root = $store.GetRootFolder()
             $mbName = $store.DisplayName
@@ -1213,8 +1217,10 @@ class OutlookConnector extends EventEmitter {
             }
 
             # Résolution par chemin d'affichage (MB\...)
-            if (-not $parent -and "${safeParentPath}" -ne "") {
-              $parts = "${safeParentPath}" -split "\\"
+            $parentPath = '${safeParentPath}'
+            if (-not $parent -and $parentPath -ne '') {
+              # Split sans regex (évite les erreurs de pattern sur le backslash)
+              $parts = $parentPath.Split([char]92)
               if ($parts.Length -eq 1 -and (Normalize-Name $parts[0]) -eq (Normalize-Name $mbName)) {
                 $parent = $root
               } elseif ($parts.Length -gt 1) {
