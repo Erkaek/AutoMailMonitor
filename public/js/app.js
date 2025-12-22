@@ -2439,17 +2439,21 @@ class MailMonitor {
           storeName
         });
 
-        const bulkResults = Array.isArray(bulkRes?.results) ? bulkRes.results : [];
-        succeeded = bulkResults.filter(r => r && r.success).length;
-        failed = bulkResults.length - succeeded;
+        const inserted = Number(bulkRes?.inserted || 0);
+        const unique = (bulkRes && Object.prototype.hasOwnProperty.call(bulkRes, 'unique'))
+          ? Number(bulkRes.unique || 0)
+          : null;
 
-        if (failed > 0) {
-          const firstErr = bulkResults.find(r => r && r.success === false);
-          const msg = firstErr?.message || firstErr?.error || 'Certains dossiers n\'ont pas pu être ajoutés';
+        // On ne reçoit plus un résultat par item; on affiche un résumé.
+        succeeded = inserted;
+        failed = Math.max(0, total - inserted);
+
+        if (!bulkRes?.success) {
+          const msg = bulkRes?.error || 'Certains dossiers n\'ont pas pu être ajoutés';
           errors.push(msg);
-          pushLog(`[BULK] ${succeeded} OK, ${failed} échec(s)`);
+          pushLog(`[BULK] inserted=${inserted}${unique !== null ? ` unique=${unique}` : ''} (échec)`);
         } else {
-          pushLog(`[BULK] ${succeeded} OK`);
+          pushLog(`[BULK] inserted=${inserted}${unique !== null ? ` unique=${unique}` : ''}`);
         }
       } else {
 
