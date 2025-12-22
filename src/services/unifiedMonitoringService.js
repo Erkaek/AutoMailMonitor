@@ -1169,19 +1169,30 @@ class UnifiedMonitoringService extends EventEmitter {
             this.stats.emailsAdded = 0;
             this.stats.emailsUpdated = 0;
 
+            const failedFolders = [];
+
             // Traiter chaque dossier configuré
             for (const folder of this.monitoredFolders) {
-                await this.syncFolder(folder);
+                try {
+                    await this.syncFolder(folder);
+                } catch (e) {
+                    failedFolders.push({ name: folder?.name || folder?.path || 'unknown', error: e?.message || String(e) });
+                    this.log(`⚠️ Dossier ignoré (erreur): ${folder?.name || folder?.path} — ${e?.message || e}`, 'WARNING');
+                }
             }
 
             const duration = ((Date.now() - startTime) / 1000).toFixed(1);
+            if (failedFolders.length > 0) {
+                this.log(`⚠️ Synchronisation terminée avec ${failedFolders.length} dossier(s) en erreur (voir logs)`, 'WARNING');
+            }
             this.log(`✅ Synchronisation terminée en ${duration}s (${this.stats.emailsAdded} ajoutés, ${this.stats.emailsUpdated} mis à jour)`, 'SUCCESS');
             this.stats.lastSyncTime = new Date().toISOString();
             
             this.emit('sync-complete', {
                 duration,
                 emailsAdded: this.stats.emailsAdded,
-                emailsUpdated: this.stats.emailsUpdated
+                emailsUpdated: this.stats.emailsUpdated,
+                failedFolders
             });
         } catch (error) {
             this.log(`❌ Erreur synchronisation complète: ${error.message}`, 'ERROR');

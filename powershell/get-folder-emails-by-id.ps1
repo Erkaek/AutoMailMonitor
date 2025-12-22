@@ -50,14 +50,25 @@ function Find-ChildByName($parentFolder, [string]$targetName) {
 
 function Find-FolderFromPath([string]$Path, $Namespace, $FallbackInbox = $false) {
     if (-not $Path) { return $null }
-    $parts = $Path -split "\\"
-    if ($parts.Length -lt 2) { return $null }
+    $p = [string]$Path
+    try { $p = $p.Replace('/', '\\') } catch {}
+    try { $p = $p.Trim() } catch {}
 
-    $accountName = $parts[0]
+    # Supporte les chemins commençant par \\ ("UNC-like")
+    while ($p.StartsWith('\\')) { $p = $p.Substring(1) }
+
+    # Split en ignorant les segments vides (ex: \\mailbox\\Folder => "mailbox","Folder")
+    $parts = @($p -split "\\" | Where-Object { $_ -and $_.Trim() -ne '' })
+    if ($parts.Length -lt 1) { return $null }
+
+    # Cas: un seul segment fourni (ex: "SANOFI"). On tentera root/inbox du store par défaut.
+    $accountName = if ($parts.Length -ge 2) { $parts[0] } else { '' }
     $targetStore = $null
     foreach ($store in $Namespace.Stores) {
         try {
-            if ((Normalize-Name $store.DisplayName) -eq (Normalize-Name $accountName)) { $targetStore = $store; break }
+            $nd = Normalize-Name $store.DisplayName
+            $na = Normalize-Name $accountName
+            if ($na -and ($nd -eq $na -or $nd -like "*$na*" -or $na -like "*$nd*")) { $targetStore = $store; break }
         } catch {}
     }
     if (-not $targetStore) { $targetStore = $Namespace.DefaultStore }
@@ -75,8 +86,10 @@ function Find-FolderFromPath([string]$Path, $Namespace, $FallbackInbox = $false)
         }
     } catch {}
 
-    # Naviguer dans le chemin (ignorer la première partie: store)
-    for ($i = 1; $i -lt $parts.Length; $i++) {
+    # Naviguer dans le chemin (si format store\path, ignorer la première partie)
+    $startIndex = 1
+    if ($parts.Length -eq 1) { $startIndex = 0 }
+    for ($i = $startIndex; $i -lt $parts.Length; $i++) {
         $name = $parts[$i]
         if (-not $cursor) { break }
         $next = Find-ChildByName -parentFolder $cursor -targetName $name
@@ -94,12 +107,13 @@ function Find-FolderFromPath([string]$Path, $Namespace, $FallbackInbox = $false)
             $inbox = $targetStore.GetDefaultFolder(6)
             if ($inbox -ne $null) {
                 $cursor = $inbox
-                $startIndex = 1
+                $startIndex2 = 1
+                if ($parts.Length -eq 1) { $startIndex2 = 0 }
                 if ($parts.Length -gt 1) {
                     $p1 = $parts[1]
-                    if ((Normalize-Name $p1) -eq (Normalize-Name $inbox.Name)) { $startIndex = 2 }
+                    if ((Normalize-Name $p1) -eq (Normalize-Name $inbox.Name)) { $startIndex2 = 2 }
                 }
-                for ($i = $startIndex; $i -lt $parts.Length; $i++) {
+                for ($i = $startIndex2; $i -lt $parts.Length; $i++) {
                     $name = $parts[$i]
                     $next = Find-ChildByName -parentFolder $cursor -targetName $name
                     if ($next -eq $null) { break }
