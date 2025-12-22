@@ -323,11 +323,8 @@ class OptimizedDatabaseService {
         // Index optimisés pour les requêtes fréquentes
         this.db.exec(`
             CREATE INDEX IF NOT EXISTS idx_emails_outlook_id ON emails(outlook_id);
-            CREATE UNIQUE INDEX IF NOT EXISTS idx_emails_internet_message_id ON emails(internet_message_id);
             CREATE INDEX IF NOT EXISTS idx_emails_folder_name ON emails(folder_name);
             CREATE INDEX IF NOT EXISTS idx_emails_received_time ON emails(received_time);
-            CREATE INDEX IF NOT EXISTS idx_emails_last_modified_time ON emails(last_modified_time);
-            CREATE INDEX IF NOT EXISTS idx_emails_last_seen_at ON emails(last_seen_at);
             CREATE INDEX IF NOT EXISTS idx_emails_is_read ON emails(is_read);
             CREATE INDEX IF NOT EXISTS idx_emails_category ON emails(category);
             CREATE INDEX IF NOT EXISTS idx_emails_week_identifier ON emails(week_identifier);
