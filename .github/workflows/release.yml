@@ -12,6 +12,9 @@ jobs:
     env:
       ELECTRON_BUILDER_DEBUG: true
       NPM_CONFIG_LOGLEVEL: info
+      # Caches pour éviter de re-télécharger Electron / artefacts builder à chaque run
+      ELECTRON_CACHE: ${{ runner.temp }}/electron-cache
+      ELECTRON_BUILDER_CACHE: ${{ runner.temp }}/electron-builder-cache
       CODE_SIGNING_CERT_BASE64: ${{ secrets.CODE_SIGNING_CERT_BASE64 }}
       CODE_SIGNING_CERT_PASSWORD: ${{ secrets.CODE_SIGNING_CERT_PASSWORD }}
       PRIVATE_UPDATER_TOKEN: ${{ secrets.PRIVATE_UPDATER_TOKEN }}
@@ -27,11 +30,55 @@ jobs:
           node-version: 20
           cache: 'npm'
 
+      - name: Cache Electron downloads
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ env.ELECTRON_CACHE }}
+            ${{ env.ELECTRON_BUILDER_CACHE }}
+          key: ${{ runner.os }}-electron-cache-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-electron-cache-
+
+      - name: Configure npm network retries
+        shell: bash
+        run: |
+          npm config set fetch-retries 5
+          npm config set fetch-retry-mintimeout 20000
+          npm config set fetch-retry-maxtimeout 120000
+          npm config set fetch-timeout 600000
+
       - name: Install dependencies
-        run: npm ci
+        shell: bash
+        run: |
+          set -e
+          for i in 1 2 3; do
+            echo "npm ci attempt $i/3"
+            npm ci && break
+            if [ "$i" -lt 3 ]; then
+              echo "npm ci failed, retrying in 15s..."
+              sleep 15
+            else
+              echo "npm ci failed after 3 attempts"
+              exit 1
+            fi
+          done
 
       - name: Prepare native deps for Electron
-        run: npx electron-builder install-app-deps
+        shell: bash
+        run: |
+          set -e
+          for i in 1 2 3; do
+            echo "install-app-deps attempt $i/3"
+            npx electron-builder install-app-deps && break
+            if [ "$i" -lt 3 ]; then
+              echo "install-app-deps failed, retrying in 15s..."
+              sleep 15
+            else
+              echo "install-app-deps failed after 3 attempts"
+              exit 1
+            fi
+          done
 
       - name: Inject updater token (for private releases)
         shell: bash
