@@ -1277,26 +1277,59 @@ class OutlookConnector extends EventEmitter {
         return node;
       };
 
-      let relevantCount = 0;
-      let debugSkipped = 0;
-      for (const item of flat) {
-        const rawPath = String(item.fullPath || item.FullPath || '').replace(/\//g, '\\');
-        const canonicalPath = canonicalizePath(rawPath);
-        if (!canonicalPath) continue;
-        const canonicalLower = canonicalPath.toLowerCase();
-        if (canonicalLower === normalizedLower || canonicalLower.startsWith(`${normalizedLower}\\`)) {
-          registerNode(canonicalPath, {
-            name: item.name || item.FolderName,
-            entryId: item.entryId || item.FolderEntryID,
-            childCount: parseChildCount(item.childCount ?? item.ChildCount)
-          });
-          relevantCount++;
+      const ingestFlat = (flatList, label = 'flat') => {
+        let relevant = 0;
+        let debugSkipped = 0;
+        for (const item of flatList) {
+          const rawPath = String(item.fullPath || item.FullPath || item.FolderPath || '').replace(/\//g, '\\');
+          const canonicalPath = canonicalizePath(rawPath);
+          if (!canonicalPath) continue;
+          const canonicalLower = canonicalPath.toLowerCase();
+          if (canonicalLower === normalizedLower || canonicalLower.startsWith(`${normalizedLower}\\`)) {
+            registerNode(canonicalPath, {
+              name: item.name || item.FolderName || item.Name,
+              entryId: item.entryId || item.FolderEntryID || item.EntryID,
+              childCount: parseChildCount(item.childCount ?? item.ChildCount)
+            });
+            relevant++;
+          } else if (debugSkipped < 10) {
+            debugSkipped++;
+            try {
+              console.log(`[TREE DEBUG] (${label}) Ignored path for root ${normalizedPath}:`, canonicalPath);
+            } catch {}
+          }
         }
-        else if (debugSkipped < 10) {
-          debugSkipped++;
-          try {
-            console.log(`[TREE DEBUG] Ignored path for root ${normalizedPath}:`, canonicalPath);
-          } catch {}
+        return relevant;
+      };
+
+      let relevantCount = ingestFlat(flat, 'listFoldersRecursive');
+
+      // If we couldn't match anything under the requested root, try a structure-based fallback.
+      // This happens when COM enumeration depth is too shallow for nested shared mailbox roots.
+      if (relevantCount === 0) {
+        try {
+          const struct = await this.getFolderStructure(storeId);
+          const mailbox = Array.isArray(struct) ? struct[0] : null;
+          if (mailbox) {
+            const rebuilt = [];
+            const walk = (node) => {
+              if (!node || !node.Name) return;
+              rebuilt.push({
+                fullPath: node.FolderPath || '',
+                entryId: node.EntryID || node.EntryId || '',
+                name: node.Name,
+                childCount: parseChildCount(node.ChildCount ?? (node.SubFolders ? node.SubFolders.length : 0))
+              });
+              if (Array.isArray(node.SubFolders)) node.SubFolders.forEach(walk);
+            };
+            walk(mailbox);
+
+            nodesByPath.clear();
+            relevantCount = ingestFlat(rebuilt, 'getFolderStructure');
+            console.warn('[COM-REC] No relevant nodes from listFoldersRecursive; retried via getFolderStructure');
+          }
+        } catch (eStruct2) {
+          console.warn('[COM-REC] getFolderStructure fallback failed:', eStruct2.message);
         }
       }
 
