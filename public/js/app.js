@@ -429,7 +429,128 @@ class MailMonitor {
       });
     }
     
+    // Événements de mise à jour automatique
+    this.setupUpdateListeners();
+    
     console.log('✅ Événements temps réel configurés (y compris COM)');
+  }
+
+  // Configuration des listeners pour les mises à jour
+  setupUpdateListeners() {
+    if (!window.electronAPI) return;
+    
+    // Toast pour afficher les notifications
+    const showUpdateToast = (message, type = 'info', duration = 5000) => {
+      const toastContainer = document.getElementById('toast-container') || (() => {
+        const container = document.createElement('div');
+        container.id = 'toast-container';
+        container.className = 'position-fixed top-0 end-0 p-3';
+        container.style.zIndex = '9999';
+        document.body.appendChild(container);
+        return container;
+      })();
+      
+      const toastId = `toast-${Date.now()}`;
+      const toast = document.createElement('div');
+      toast.id = toastId;
+      toast.className = `toast align-items-center text-white bg-${type} border-0`;
+      toast.setAttribute('role', 'alert');
+      toast.setAttribute('aria-live', 'assertive');
+      toast.setAttribute('aria-atomic', 'true');
+      toast.innerHTML = `
+        <div class="d-flex">
+          <div class="toast-body">${message}</div>
+          <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast"></button>
+        </div>
+      `;
+      
+      toastContainer.appendChild(toast);
+      const bsToast = new bootstrap.Toast(toast, { delay: duration });
+      bsToast.show();
+      
+      toast.addEventListener('hidden.bs.toast', () => {
+        toast.remove();
+      });
+    };
+    
+    // Vérification en cours
+    if (window.electronAPI.onUpdateChecking) {
+      window.electronAPI.onUpdateChecking(() => {
+        console.log('🔍 Vérification des mises à jour...');
+      });
+    }
+    
+    // Mise à jour disponible
+    if (window.electronAPI.onUpdateAvailable) {
+      window.electronAPI.onUpdateAvailable((info) => {
+        console.log('🎉 Mise à jour disponible:', info);
+        showUpdateToast(
+          `<i class="bi bi-download me-2"></i>Mise à jour v${info.version} disponible ! Téléchargement en cours...`,
+          'success',
+          8000
+        );
+      });
+    }
+    
+    // Aucune mise à jour
+    if (window.electronAPI.onUpdateNotAvailable) {
+      window.electronAPI.onUpdateNotAvailable(() => {
+        console.log('✅ Application à jour');
+      });
+    }
+    
+    // Erreur de mise à jour
+    if (window.electronAPI.onUpdateError) {
+      window.electronAPI.onUpdateError((data) => {
+        console.error('❌ Erreur de mise à jour:', data.error);
+        showUpdateToast(
+          `<i class="bi bi-exclamation-triangle me-2"></i>Erreur de mise à jour : ${data.error}`,
+          'danger',
+          10000
+        );
+      });
+    }
+    
+    // Progression du téléchargement
+    let lastProgressToast = null;
+    if (window.electronAPI.onUpdateDownloadProgress) {
+      window.electronAPI.onUpdateDownloadProgress((progress) => {
+        const percent = Math.floor(progress.percent);
+        console.log(`⬇️ Téléchargement: ${percent}%`);
+        
+        // Mettre à jour le toast existant ou en créer un nouveau
+        if (percent % 10 === 0 || percent === 100) { // Tous les 10%
+          if (lastProgressToast) {
+            const toastEl = document.getElementById(lastProgressToast);
+            if (toastEl) {
+              const body = toastEl.querySelector('.toast-body');
+              if (body) {
+                body.innerHTML = `<i class="bi bi-download me-2"></i>Téléchargement: ${percent}%`;
+              }
+            }
+          } else {
+            lastProgressToast = `toast-${Date.now()}`;
+            showUpdateToast(
+              `<i class="bi bi-download me-2"></i>Téléchargement: ${percent}%`,
+              'info',
+              percent === 100 ? 3000 : 30000
+            );
+          }
+        }
+      });
+    }
+    
+    // Mise à jour en attente de redémarrage
+    if (window.electronAPI.onUpdatePendingRestart) {
+      window.electronAPI.onUpdatePendingRestart((data) => {
+        console.log('🔄 Mise à jour en attente de redémarrage:', data);
+        showUpdateToast(
+          `<i class="bi bi-info-circle me-2"></i>La mise à jour v${data.version} sera installée au prochain démarrage`,
+          'info',
+          10000
+        );
+      });
+    }
   }
 
   // ====== LOGS TAB ======

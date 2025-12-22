@@ -9,6 +9,8 @@ AutoMailMonitor surveille Outlook et agrège des métriques sans lire le contenu
 - Dashboard en temps réel (KPIs, graphiques Chart.js)
 - Répartition par dossiers, analyse temporelle, performance système
 - Suivi hebdomadaire avec commentaires (CRUD) et sélection de semaine
+- **Système de logs filtrable** : Interface moderne avec niveaux et catégories
+- **Mise à jour automatique robuste** : Retry, timeout, notifications UI
 - Monitoring des dossiers Outlook (arbre, catégories Déclarations/Règlements/Mails simples)
 - Thèmes clair/sombre, sidebar repliable, UI responsive
 - SQLite (better-sqlite3, WAL) + cache
@@ -70,12 +72,74 @@ Paramètres clés (package.json):
 
 ## 🔄 Mises à jour
 
-- Application packagée: auto-update via GitHub Releases.
-  - Vérification au démarrage, puis toutes les 30 minutes.
-  - Téléchargement + prompt de redémarrage.
-- Mode développement: vérification Git au démarrage.
-  - fetch + comparaison HEAD..origin/BRANCHE
-  - prompt “pull & redémarrer” si des commits distants existent.
+Le système de mise à jour automatique a été complètement revu et robustifié :
+
+### ✨ Nouvelles Fonctionnalités
+
+- **Retry automatique** : 3 tentatives avec backoff exponentiel (5s, 10s, 15s)
+- **Timeout protection** : 30 secondes maximum par requête
+- **Notifications UI modernes** : Toasts Bootstrap pour informer l'utilisateur
+- **Progression détaillée** : Affichage du % de téléchargement en temps réel
+- **Logging avancé** : Tous les événements tracés dans l'onglet Logs
+- **Support dépôts privés** : Authentification GitHub via token
+- **Installation flexible** : Choix "Redémarrer maintenant" ou "Plus tard"
+
+### 📖 Documentation
+
+- **[AUTO_UPDATE_SYSTEM.md](docs/AUTO_UPDATE_SYSTEM.md)** : Documentation technique complète
+- **[AUTO_UPDATE_TESTING.md](docs/AUTO_UPDATE_TESTING.md)** : Guide de test et validation
+- **[IMPROVEMENTS_SUMMARY.md](IMPROVEMENTS_SUMMARY.md)** : Résumé des améliorations
+
+### 🧪 Test Rapide
+
+```bash
+# Lancer le script de test automatique
+./scripts/test-auto-update.sh
+
+# Ou manuellement
+mkdir -p /tmp/update-test && cd /tmp/update-test
+echo "version: 1.0.1" > latest.yml
+http-server -p 8080
+
+# Dans package.json, mettre version: "1.0.0"
+# Puis : npm start
+```
+
+### 🔧 Comportement
+
+- **Application packagée** : auto-update via GitHub Releases
+  - Vérification au démarrage (non-bloquante)
+  - Vérification périodique (2 heures)
+  - Vérification manuelle (Paramètres → Vérifier les MAJ)
+  - Téléchargement automatique + prompt de redémarrage
+  
+- **Mode développement** : vérification Git au démarrage
+  - `git fetch` + comparaison HEAD..origin/BRANCHE
+  - Prompt "pull & redémarrer" si commits distants
+
+### 🔐 Dépôts Privés
+
+Si votre dépôt est privé, configurez un token GitHub :
+
+**Option 1 - Fichier bundlé** (recommandé pour production) :
+```javascript
+// src/main/updaterToken.js (ne PAS commiter)
+module.exports = 'ghp_your_token_here';
+```
+
+**Option 2 - Variable d'environnement** :
+```bash
+export GH_TOKEN=ghp_your_token_here
+npm start
+```
+
+**Option 3 - Fichier .env** :
+```bash
+# .env
+UPDATER_TOKEN=ghp_your_token_here
+```
+
+Le token est automatiquement ajouté aux headers d'authentification.
 
 ## 🧾 Versionnement (source unique)
 

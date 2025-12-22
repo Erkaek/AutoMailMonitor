@@ -18,11 +18,16 @@ const databaseService = require('../services/optimizedDatabaseService');
 const { dialog } = require('electron');
 const activityImporter = require('../importers/activityXlsbImporter');
 const cacheService = require('../services/cacheService');
+// Nouveau service de logging avec filtres
+const logService = require('../services/logService');
+// Gestionnaire de mises à jour amélioré
+const updateManager = require('../services/updateManager');
 
 // Rendre les services disponibles globalement
 global.outlookConnector = outlookConnector;
 global.databaseService = databaseService;
 global.cacheService = cacheService;
+global.logService = logService;
 
 // Initialize logging early
 try { mainLogger.init(); mainLogger.hookConsole(); } catch {}
@@ -112,64 +117,7 @@ const APP_CONFIG = {
   height: 800
 };
 
-// Auto-update configuration
-autoUpdater.autoDownload = true;
-autoUpdater.autoInstallOnAppQuit = true;
-// Autoriser les pre-releases (souvent utiles pendant les tests). Peut etre force via env.
-autoUpdater.allowPrerelease = String(process.env.ALLOW_PRERELEASE || 'true').toLowerCase() !== 'false';
-
-// If repo is private, allow providing a GitHub token bundled or via env to authorize release access
-try {
-  let bundledToken = null;
-  try {
-    // Optional local file included at build time (not committed): src/main/updaterToken.js exports a string
-    bundledToken = require('./updaterToken');
-  } catch {}
-  const envToken = process.env.GH_TOKEN || process.env.UPDATER_TOKEN || process.env.ELECTRON_UPDATER_TOKEN;
-  const updaterToken = (typeof bundledToken === 'string' && bundledToken.trim()) ? bundledToken.trim() : envToken;
-  if (updaterToken) {
-    autoUpdater.requestHeaders = { Authorization: `token ${updaterToken}` };
-    logClean('🔑 Token GitHub pour mises a jour configure (repo prive pris en charge)');
-  }
-} catch {}
-
-function setupAutoUpdater() {
-  autoUpdater.on('checking-for-update', () => {
-    logClean('🔎 Recherche de mise a jour demarree');
-  });
-  autoUpdater.on('error', (err) => {
-    logClean('⚠️ Mise à jour: erreur: ' + (err?.message || String(err)));
-  });
-  autoUpdater.on('update-available', (info) => {
-    logClean('🔔 Mise à jour disponible: v' + info?.version);
-  });
-  autoUpdater.on('update-not-available', () => {
-    try {
-      const cur = app.getVersion();
-      logClean('ℹ️ Aucune mise à jour disponible (version locale v' + cur + ')');
-    } catch {
-      logClean('ℹ️ Aucune mise à jour disponible');
-    }
-  });
-  autoUpdater.on('download-progress', (p) => {
-    logClean(`⬇️ Téléchargement mise à jour: ${Math.floor(p.percent)}%`);
-  });
-  autoUpdater.on('update-downloaded', async (info) => {
-    try {
-      const result = await electronDialog.showMessageBox({
-        type: 'info',
-        title: 'Mise à jour prête',
-        message: `La version ${info.version} a été téléchargée. Redémarrer pour l’installer ?`,
-        buttons: ['Redémarrer maintenant', 'Plus tard'],
-        cancelId: 1,
-        defaultId: 0
-      });
-      if (result.response === 0) {
-        autoUpdater.quitAndInstall();
-      }
-    } catch {}
-  });
-}
+// L'auto-updater est maintenant géré par updateManager.js
 
 // IPC: fournir la version de l'application au renderer (source unique: package.json via app.getVersion())
 ipcMain.handle('app-get-version', async () => {
@@ -216,6 +164,43 @@ ipcMain.handle('api-logs-open-folder', async () => {
     return { success: true };
   } catch (e) {
     return { success: false, error: e.message };
+  }
+});
+
+// === NOUVEAU SYSTÈME DE LOGS AVEC FILTRES ===
+
+// Récupérer l'historique des logs avec filtres
+ipcMain.handle('api-get-log-history', async (event, filters) => {
+  try {
+    return logService.getHistory(filters);
+  } catch (e) {
+    console.error('Erreur récupération historique logs:', e);
+    return [];
+  }
+});
+
+// Effacer les logs
+ipcMain.handle('api-clear-logs', async () => {
+  try {
+    logService.clear();
+    // Notifier tous les clients
+    if (global.mainWindow && !global.mainWindow.isDestroyed()) {
+      global.mainWindow.webContents.send('logs-cleared');
+    }
+    return { success: true };
+  } catch (e) {
+    console.error('Erreur effacement logs:', e);
+    return { success: false, error: e.message };
+  }
+});
+
+// Obtenir les statistiques des logs
+ipcMain.handle('api-get-log-stats', async () => {
+  try {
+    return logService.getStats();
+  } catch (e) {
+    console.error('Erreur récupération stats logs:', e);
+    return { DEBUG: 0, INFO: 0, SUCCESS: 0, WARN: 0, ERROR: 0 };
   }
 });
 
@@ -346,7 +331,7 @@ function createLoadingWindow() {
 
 app.on('ready', () => {
   try { mainLogger.init(); } catch {}
-  setupAutoUpdater();
+  updateManager.initialize();
   try {
     logClean(`🚀 Application v${app.getVersion()} (${process.platform} ${process.arch})`);
   } catch {}
@@ -355,13 +340,8 @@ app.on('ready', () => {
     const cfgPath = autoUpdater.updateConfigPath;
     logClean('📄 update config path: ' + (cfgPath || 'inconnu'));
   } catch {}
-  // Vérification périodique (l'initiale est lancée par la fenêtre de chargement)
-  setInterval(() => {
-    logClean('🔎 Verification periodique des mises a jour...');
-    autoUpdater.checkForUpdatesAndNotify().catch((e) => {
-      logClean('⚠️ Echec verification MAJ (periodique): ' + (e?.message || String(e)));
-    });
-  }, 30 * 60 * 1000);
+  // Vérification périodique gérée par updateManager
+  updateManager.startPeriodicCheck();
   // En mode dev: vérifie s'il y a des commits distants et propose un pull
   setTimeout(() => { checkDevGitUpdatesOnStartup(); }, 3000);
 });
@@ -382,9 +362,10 @@ async function runInitialUpdateCheck() {
         message: 'Vérification des mises à jour...'
       });
     }
-    // Préférer checkForUpdates pour ne pas bloquer l’init sur le téléchargement
-    const res = await autoUpdater.checkForUpdates();
+    
+    const res = await updateManager.checkForUpdates();
     const info = res?.updateInfo;
+    
     if (info && info.version && loadingWindow) {
       loadingWindow.webContents.send('loading-progress', {
         step: 1,
@@ -407,18 +388,7 @@ async function runInitialUpdateCheck() {
 
 // IPC: Vérification manuelle des mises à jour
 ipcMain.handle('app-check-updates-now', async () => {
-  try {
-    logClean('🖐️ Vérification manuelle des mises à jour demandée');
-    const res = await autoUpdater.checkForUpdates();
-    const info = res?.updateInfo || null;
-    return {
-      success: true,
-      updateInfo: info,
-      downloading: !!res?.downloadPromise
-    };
-  } catch (e) {
-    return { success: false, error: e?.message || String(e) };
-  }
+  return await updateManager.checkManually();
 });
 
 /**
@@ -601,13 +571,28 @@ function createWindow() {
   mainWindow.once('ready-to-show', () => {
     mainWindow.show();
     logClean('🎉 Application prete !');
+    
+    // Connecter updateManager à la fenêtre principale pour les notifications
+    updateManager.setMainWindow(mainWindow);
   });
 
-  // Logs: stream real-time entries to renderer
+  // Logs: stream real-time entries to renderer (ancien système)
   try {
     mainLogger.onEntry((entry) => {
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send('log-entry', entry);
+      }
+    });
+  } catch (e) {
+    console.warn('Log streaming setup failed:', e);
+  }
+
+  // Nouveau système de logs avec filtres - envoyer en temps réel
+  logService.addListener((logEntry) => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('log-entry', logEntry);
+    }
+  });
       }
     });
   } catch {}

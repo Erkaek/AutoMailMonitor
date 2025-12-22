@@ -7,6 +7,7 @@
 const { EventEmitter } = require('events');
 const { exec, spawn } = require('child_process');
 const path = require('path');
+const logService = require('../services/logService');
 
 // Simplification: pas d'import de Graph API pour éviter les problèmes de dépendances
 let graphAvailable = false; // Désactivé temporairement
@@ -15,6 +16,7 @@ class OutlookConnector extends EventEmitter {
   constructor() {
     super();
     
+    logService.info('INIT', 'Création d\'une nouvelle instance OutlookConnector optimisée');
     console.log('🚀 DIAGNOSTIC: Création d\'une nouvelle instance OutlookConnector optimisée');
     
     // État de connexion

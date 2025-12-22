@@ -7,6 +7,7 @@
 const EventEmitter = require('events');
 const optimizedDatabaseService = require('./optimizedDatabaseService');
 const cacheService = require('./cacheService');
+const logService = require('./logService');
 
 // NOUVEAU: Connector optimisé Graph API
 // CORRECTION: Utiliser le connecteur principal
@@ -97,6 +98,30 @@ class UnifiedMonitoringService extends EventEmitter {
         const timestamp = new Date().toISOString().substr(11, 8);
         const prefix = `[${timestamp}] [${type}]`;
         console.log(`${prefix} ${message}`);
+        
+        // Utiliser aussi le nouveau système de logs
+        try {
+            // Mapper les types vers le nouveau système
+            const levelMap = {
+                'INIT': 'INFO',
+                'INFO': 'INFO',
+                'SUCCESS': 'SUCCESS',
+                'SYNC': 'INFO',
+                'COM': 'INFO',
+                'DB': 'INFO',
+                'WARNING': 'WARN',
+                'WARN': 'WARN',
+                'ERROR': 'ERROR',
+                'START': 'INFO',
+                'STOP': 'INFO',
+                'AUTO': 'INFO'
+            };
+            
+            const level = levelMap[type] || 'INFO';
+            logService.log(level, type, message);
+        } catch (e) {
+            // Si le nouveau système n'est pas disponible, ignorer silencieusement
+        }
     }
 
     /**
