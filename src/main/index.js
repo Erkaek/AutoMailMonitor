@@ -328,6 +328,12 @@ function createLoadingWindow() {
       });
   });
 
+  loadingWindow.on('closed', () => {
+    loadingWindow = null;
+  });
+
+  return loadingWindow;
+}
 
 app.on('ready', () => {
   try { mainLogger.init(); } catch {}
@@ -345,12 +351,6 @@ app.on('ready', () => {
   // En mode dev: vérifie s'il y a des commits distants et propose un pull
   setTimeout(() => { checkDevGitUpdatesOnStartup(); }, 3000);
 });
-  loadingWindow.on('closed', () => {
-    loadingWindow = null;
-  });
-
-  return loadingWindow;
-}
 
 // Lancer la vérification initiale de mise à jour et informer la fenêtre de chargement
 async function runInitialUpdateCheck() {
@@ -593,9 +593,6 @@ function createWindow() {
       mainWindow.webContents.send('log-entry', logEntry);
     }
   });
-      }
-    });
-  } catch {}
 
   mainWindow.on('closed', () => {
     mainWindow = null;
