@@ -1434,6 +1434,12 @@ class MailMonitor {
         }
       }
 
+      // Conserver la vue "brute" (toute l'arborescence) + index DB pour les calculs dashboard (ex: par client)
+      // Sans impacter le rendu de l'onglet Monitoring (qui reste limité aux dossiers surveillés).
+      this._lastFoldersTreeRaw = (foldersData && Array.isArray(foldersData.folders)) ? foldersData.folders : [];
+      this._lastDbFolderStatsRaw = Array.isArray(dbStats) ? dbStats : [];
+      this._lastDbFolderStatsByPath = statsByPath;
+
       const monitoredConfigs = this.state.folderCategories || {};
       const monitoredPaths = Object.keys(monitoredConfigs);
 
@@ -1469,9 +1475,8 @@ class MailMonitor {
               const db = statsByPath.get(toKey(fPath))
                 || statsByPath.get(toKey(this.extractFolderName(fPath)))
                 || [...statsByPath.entries()].find(([k]) => toKey(fPath).endsWith(k))?.[1];
-              if (db && Number.isFinite(+db.unreadCount)) {
-                unreadRaw = +db.unreadCount;
-              }
+              const dbUnread = db?.unreadCount ?? db?.unread_count;
+              if (Number.isFinite(+dbUnread)) unreadRaw = +dbUnread;
             }
 
             const counts = this._computeFolderCounts({
@@ -1554,22 +1559,127 @@ class MailMonitor {
           reglements: { label: 'Règlements', icon: 'bi-credit-card', color: 'text-success' }
         };
 
-        // Totaux par catégorie
-        const totalsByCategory = { declarations: 0, mails: 0, reglements: 0 };
-        for (const f of safeFolders) {
-          const k = normalizeCategoryKey(f.category);
-          totalsByCategory[k] += (f.unread || 0);
-        }
+        // ------------------------------------------------------------------
+        // Regroupement par client :
+        // Prendre en compte les ENFANTS des dossiers racine :
+        //  - 1-Déclaration
+        //  - 2-courriers
+        //  - 3-règlements
+        // (et ignorer ces dossiers racine eux-mêmes)
+        // ------------------------------------------------------------------
 
-        // Regroupement par client (les clients sont les noms de dossiers)
+        const normalizeSeg = (s) => String(s || '')
+          .trim()
+          .toLowerCase()
+          .normalize('NFD')
+          .replace(/[\u0300-\u036f]/g, '');
+
+        const rootToCategoryKey = (seg) => {
+          const v = normalizeSeg(seg);
+          if (!v) return null;
+          if ((v.startsWith('1-') || v.startsWith('1 ')) && v.includes('declar')) return 'declarations';
+          if ((v.startsWith('2-') || v.startsWith('2 ')) && (v.includes('courrier') || v.includes('courriers'))) return 'mails';
+          if ((v.startsWith('3-') || v.startsWith('3 ')) && v.includes('regl')) return 'reglements';
+          return null;
+        };
+
+        const tryExtractClientFromPath = (folderPath) => {
+          if (!folderPath) return null;
+          const parts = String(folderPath).split(/\\|\//).map(p => p.trim()).filter(Boolean);
+          for (let i = 0; i < parts.length; i++) {
+            const catKey = rootToCategoryKey(parts[i]);
+            if (!catKey) continue;
+            const client = parts[i + 1];
+            // Si on est sur le dossier racine (pas d'enfant), on ignore
+            if (!client) return null;
+            return { clientName: client, categoryKey: catKey };
+          }
+          return null;
+        };
+
+        const getCountsFromTreeNode = (node) => {
+          const fPath = node?.path || node?.FolderPath || node?.Path || '';
+          const name = node?.name || node?.Name || this.extractFolderName(fPath) || 'Dossier';
+
+          const totalRaw =
+            node?.TotalItems ?? node?.ItemsCount ?? node?.TotalItemCount ?? node?.ItemCount ?? node?.Count ?? node?.total ?? node?.totalEmails ?? node?.emailCount;
+          let unreadRaw =
+            node?.UnReadItemCount ?? node?.UnreadItemCount ?? node?.UnreadCount ?? node?.unreadCount ?? node?.UnreadItems ?? node?.unreadItems ?? node?.unread ?? node?.unreadEmails;
+
+          // Fallback DB unread si absent côté Outlook
+          const statsByPath = this._lastDbFolderStatsByPath;
+          const toKey = (s) => (s || '').toLowerCase();
+          if (!(Number.isFinite(+unreadRaw)) && statsByPath && typeof statsByPath.get === 'function') {
+            const db = statsByPath.get(toKey(fPath))
+              || statsByPath.get(toKey(this.extractFolderName(fPath)))
+              || [...statsByPath.entries()].find(([k]) => toKey(fPath).endsWith(k))?.[1];
+            const dbUnread = db?.unreadCount ?? db?.unread_count;
+            if (Number.isFinite(+dbUnread)) unreadRaw = +dbUnread;
+          }
+
+          const counts = this._computeFolderCounts({ total: totalRaw, unread: unreadRaw, path: fPath, name });
+          return { name, path: fPath, total: counts.total, unread: counts.unread };
+        };
+
+        // Source: la répartition "par client" doit couvrir TOUS les dossiers (pas seulement ceux monitorés).
+        // On privilégie donc les stats BDD (emails.groupBy folder_name) qui couvrent l'ensemble des chemins.
+        const clientSource = (Array.isArray(this._lastDbFolderStatsRaw) && this._lastDbFolderStatsRaw.length)
+          ? this._lastDbFolderStatsRaw
+          : ((Array.isArray(this._lastFoldersTreeRaw) && this._lastFoldersTreeRaw.length)
+            ? this._lastFoldersTreeRaw
+            : safeFolders);
+
         const byClient = new Map();
-        for (const f of safeFolders) {
-          const clientName = this.extractClientNameFromFolder?.(f) || f.name;
+        const totalsByCategory = { declarations: 0, mails: 0, reglements: 0 };
+
+        for (const raw of clientSource) {
+          const fPath = raw?.path || raw?.FolderPath || raw?.Path || raw?.path || '';
+          const extracted = tryExtractClientFromPath(fPath);
+          if (!extracted) {
+            continue;
+          }
+
+          const { clientName, categoryKey } = extracted;
           const key = String(clientName || 'Client').trim() || 'Client';
+
+          let counts;
+          if (raw && raw.unread !== undefined && raw.total !== undefined) {
+            counts = {
+              unread: Number.isFinite(+raw.unread) ? +raw.unread : 0,
+              total: Number.isFinite(+raw.total) ? +raw.total : 0
+            };
+          } else if (raw && (raw.unreadCount !== undefined || raw.unread_count !== undefined || raw.emailCount !== undefined || raw.email_count !== undefined)) {
+            const unread = raw.unreadCount ?? raw.unread_count;
+            const total = raw.emailCount ?? raw.email_count;
+            counts = {
+              unread: Number.isFinite(+unread) ? +unread : 0,
+              total: Number.isFinite(+total) ? +total : 0
+            };
+          } else {
+            counts = getCountsFromTreeNode(raw);
+          }
+
+          // On ignore le dossier racine catégorie lui-même (par sécurité)
+          // => extrait ne renvoie pas de client si root, mais on garde ce garde-fou.
+          if (!counts || !Number.isFinite(+counts.unread)) continue;
+
           if (!byClient.has(key)) byClient.set(key, { declarations: 0, mails: 0, reglements: 0 });
           const bucket = byClient.get(key);
-          const k = normalizeCategoryKey(f.category);
-          bucket[k] += (f.unread || 0);
+          bucket[categoryKey] += (counts.unread || 0);
+          totalsByCategory[categoryKey] += (counts.unread || 0);
+        }
+
+        // Fallback: si rien n'a été extrait (structure différente), reprendre l'ancienne heuristique
+        if (byClient.size === 0) {
+          for (const f of safeFolders) {
+            const clientName = this.extractClientNameFromFolder?.(f) || f.name;
+            const key = String(clientName || 'Client').trim() || 'Client';
+            if (!byClient.has(key)) byClient.set(key, { declarations: 0, mails: 0, reglements: 0 });
+            const bucket = byClient.get(key);
+            const k = normalizeCategoryKey(f.category);
+            bucket[k] += (f.unread || 0);
+            totalsByCategory[k] += (f.unread || 0);
+          }
         }
 
         const clients = Array.from(byClient.entries()).map(([client, counts]) => {
