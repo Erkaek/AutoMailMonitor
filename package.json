@@ -1,6 +1,6 @@
 {
   "name": "mailmonitor",
-  "version": "0.9.98",
+  "version": "0.10.0",
   "description": "Application de monitoring des emails Outlook avec interface moderne",
   "main": "src/main/index.js",
   "scripts": { 
@@ -88,6 +88,7 @@
     ],
     "win": {
       "target": "nsis",
+      "publisherName": ["MailMonitor Dev"],
   "icon": "resources/new logo/logo.ico",
   "signingHashAlgorithms": ["sha256"],
   "rfc3161TimeStampServer": "http://timestamp.digicert.com"

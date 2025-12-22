@@ -21,13 +21,32 @@ class UpdateManager {
     this.lastUpdateCheck = null;
     this.mainWindow = null;
     this.isSetup = false;
+
+    // Si une MAJ échoue pour signature (Windows), on évite de re-télécharger en boucle.
+    this.disableAutoDownloadForSession = false;
+
+    this.releaseUrl = process.env.UPDATE_RELEASES_URL || 'https://github.com/Erkaek/AutoMailMonitor/releases/latest';
+  }
+
+  isWindowsSignatureError(message) {
+    const msg = String(message || '').toLowerCase();
+    return (
+      msg.includes('not signed by the application owner') ||
+      msg.includes('publishernames') ||
+      msg.includes('certificat racine') ||
+      msg.includes("n'est pas approuvé") ||
+      msg.includes('untrustedroot') ||
+      msg.includes('chain') && msg.includes('not trusted')
+    );
   }
 
   /**
    * Configure l'auto-updater
    */
   configure() {
-    autoUpdater.autoDownload = true;
+    // Par défaut en mode “manuel” (certificat interne non approuvé sur les postes)
+    // Opt-in possible via env pour les postes où la chaîne est approuvée.
+    autoUpdater.autoDownload = String(process.env.AUTO_UPDATE_AUTO_DOWNLOAD || 'false').toLowerCase() === 'true';
     autoUpdater.autoInstallOnAppQuit = true;
     autoUpdater.allowPrerelease = String(process.env.ALLOW_PRERELEASE || 'true').toLowerCase() !== 'false';
     
@@ -78,7 +97,28 @@ class UpdateManager {
       const errorMsg = err?.message || String(err);
       logService.error('INIT', 'Erreur lors de la vérification de mise à jour', errorMsg);
       this.notifyWindow('update-error', { error: errorMsg });
-      this.handleUpdateError();
+
+      // Erreur de signature Windows: ne pas retry, et désactiver l’auto-download pour la session.
+      if (this.isWindowsSignatureError(errorMsg)) {
+        this.disableAutoDownloadForSession = true;
+        try { autoUpdater.autoDownload = false; } catch {}
+        logService.warn(
+          'INIT',
+          'Mise à jour rejetée (signature Windows). Désactivation auto-download pour la session.',
+          'Vérifie le certificat de signature (éditeur) et la chaîne de confiance sur les postes.'
+        );
+        this.notifyWindow('update-error', {
+          error: errorMsg,
+          kind: 'SIGNATURE',
+          action: 'Signature non approuvée sur ce poste. Installer manuellement depuis la page de release (lien) ou déployer la chaîne de confiance (si possible).',
+          releaseUrl: this.releaseUrl
+        });
+        // Stopper les retries automatiques dans ce cas.
+        this.updateCheckAttempts = 0;
+        return;
+      }
+
+      this.handleUpdateError(errorMsg);
     });
     
     autoUpdater.on('update-available', (info) => {
@@ -88,7 +128,9 @@ class UpdateManager {
         version: info.version,
         currentVersion,
         releaseDate: info.releaseDate,
-        releaseNotes: info.releaseNotes
+        releaseNotes: info.releaseNotes,
+        releaseUrl: this.releaseUrl,
+        autoDownload: Boolean(autoUpdater.autoDownload)
       });
       this.updateCheckAttempts = 0;
     });
@@ -127,9 +169,11 @@ class UpdateManager {
   /**
    * Gère les erreurs de mise à jour avec retry automatique
    */
-  handleUpdateError() {
+  handleUpdateError(errorMsg = '') {
     if (this.updateCheckAttempts < this.config.maxRetries) {
-      const retryDelay = this.config.retryDelay * this.updateCheckAttempts;
+      // Éviter les retries à 0s (ex: erreur après update-available où attempts peut être retombé à 0)
+      const attempts = Math.max(1, Number(this.updateCheckAttempts) || 0);
+      const retryDelay = this.config.retryDelay * attempts;
       logService.info('INIT', `Nouvelle tentative dans ${retryDelay / 1000}s...`);
       
       setTimeout(() => {
@@ -192,6 +236,10 @@ class UpdateManager {
    */
   async checkForUpdates() {
     try {
+      if (this.disableAutoDownloadForSession) {
+        logService.warn('INIT', 'Auto-download désactivé pour la session (erreur signature précédente)');
+      }
+
       // Vérifier qu'on n'a pas vérifié trop récemment
       const now = Date.now();
       if (this.lastUpdateCheck && (now - this.lastUpdateCheck) < this.config.minCheckInterval) {

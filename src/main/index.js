@@ -367,11 +367,16 @@ function createLoadingWindow() {
     loadingWindow.show();
     // Étape 1: Vérification de mise à jour en tout début de chargement
     runInitialUpdateCheck()
+      .then((blocked) => {
+        if (blocked) {
+          return;
+        }
+        // Étape 2: Initialisation Outlook
+        initializeOutlook();
+      })
       .catch((e) => {
         logClean('⚠️ Echec verification MAJ (initiale): ' + (e?.message || String(e)));
-      })
-      .finally(() => {
-        // Étape 2: Initialisation Outlook
+        // Ne pas bloquer l'app si la vérification MAJ échoue
         initializeOutlook();
       });
   });
@@ -413,6 +418,45 @@ async function runInitialUpdateCheck() {
     
     const res = await updateManager.checkForUpdates();
     const info = res?.updateInfo;
+
+    // Si une MAJ est détectée au démarrage: bloquer l'init et ouvrir le téléchargement.
+    if (info && info.version) {
+      const { shell } = require('electron');
+      const versionRaw = String(info.version);
+      const tag = versionRaw.startsWith('v') ? versionRaw : `v${versionRaw}`;
+      const version = versionRaw.replace(/^v/, '');
+      const directUrl = `https://github.com/Erkaek/AutoMailMonitor/releases/download/${tag}/Mail-Monitor-Setup-${version}.exe`;
+      const releasesUrl = 'https://github.com/Erkaek/AutoMailMonitor/releases/latest';
+
+      if (loadingWindow) {
+        loadingWindow.webContents.send('loading-error', {
+          kind: 'UPDATE_AVAILABLE',
+          version,
+          message: `Mise à jour disponible: v${version}. Ouverture du téléchargement…`
+        });
+      }
+
+      try {
+        await shell.openExternal(directUrl);
+      } catch (e) {
+        try { await shell.openExternal(releasesUrl); } catch {}
+      }
+
+      // Fermer l'app: l'utilisateur doit installer la MAJ.
+      try {
+        if (loadingWindow) {
+          loadingWindow.webContents.send('loading-progress', {
+            step: 1,
+            progress: 20,
+            message: 'Mise à jour détectée. Fermeture de l\'application…'
+          });
+        }
+      } catch {}
+      setTimeout(() => {
+        try { app.quit(); } catch {}
+      }, 2500);
+      return true;
+    }
     
     if (info && info.version && loadingWindow) {
       loadingWindow.webContents.send('loading-progress', {
@@ -432,6 +476,8 @@ async function runInitialUpdateCheck() {
       });
     }
   }
+
+  return false;
 }
 
 // IPC: Vérification manuelle des mises à jour

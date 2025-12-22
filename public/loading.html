@@ -277,6 +277,13 @@
 
                 window.electronAPI.onLoadingError?.((err)=>{
                     const btn = qs('retry');
+                    if (err && err.kind === 'UPDATE_AVAILABLE') {
+                        setStatus(err.message || `Mise à jour disponible${err.version ? ' v'+err.version : ''}.`);
+                        btn.style.display = 'none';
+                        adjustSize();
+                        return;
+                    }
+
                     setStatus(`Erreur: ${(err && (err.message||err)) || 'inconnue'}`);
                     btn.style.display = 'inline-block';
                     btn.onclick = ()=>{
