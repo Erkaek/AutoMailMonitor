@@ -62,7 +62,18 @@ jobs:
           set -e
           for i in 1 2 3; do
             echo "npm ci attempt $i/3"
-            npm ci && break
+            if npm ci; then
+              break
+            fi
+
+            # Fallback miroir: utile si le téléchargement Electron (install.js) échoue (503 / socket hang up)
+            if [ "$i" -eq 1 ]; then
+              echo "First npm ci failed: enabling Electron mirrors for next attempts"
+              export ELECTRON_MIRROR="https://npmmirror.com/mirrors/electron/"
+              export ELECTRON_BUILDER_BINARIES_MIRROR="https://npmmirror.com/mirrors/electron-builder-binaries/"
+              echo "ELECTRON_MIRROR=$ELECTRON_MIRROR" >> "$GITHUB_ENV"
+              echo "ELECTRON_BUILDER_BINARIES_MIRROR=$ELECTRON_BUILDER_BINARIES_MIRROR" >> "$GITHUB_ENV"
+            fi
             if [ "$i" -lt 3 ]; then
               echo "npm ci failed, retrying in 15s..."
               sleep 15
@@ -78,7 +89,18 @@ jobs:
           set -e
           for i in 1 2 3; do
             echo "install-app-deps attempt $i/3"
-            npx electron-builder install-app-deps && break
+            if npx electron-builder install-app-deps; then
+              break
+            fi
+
+            # Même fallback miroir si les binaires electron-builder sont indisponibles temporairement
+            if [ "$i" -eq 1 ]; then
+              echo "First install-app-deps failed: enabling Electron mirrors for next attempts"
+              export ELECTRON_MIRROR="https://npmmirror.com/mirrors/electron/"
+              export ELECTRON_BUILDER_BINARIES_MIRROR="https://npmmirror.com/mirrors/electron-builder-binaries/"
+              echo "ELECTRON_MIRROR=$ELECTRON_MIRROR" >> "$GITHUB_ENV"
+              echo "ELECTRON_BUILDER_BINARIES_MIRROR=$ELECTRON_BUILDER_BINARIES_MIRROR" >> "$GITHUB_ENV"
+            fi
             if [ "$i" -lt 3 ]; then
               echo "install-app-deps failed, retrying in 15s..."
               sleep 15
