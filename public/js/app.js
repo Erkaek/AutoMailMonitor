@@ -841,6 +841,7 @@ class MailMonitor {
   // Boutons start/stop retirés: la surveillance est automatique
     document.getElementById('add-folder')?.addEventListener('click', () => this.showAddFolderModal());
     document.getElementById('refresh-folders')?.addEventListener('click', () => this.refreshFoldersDisplay());
+    document.getElementById('force-resync')?.addEventListener('click', () => this.forceFullResync());
     // Filtres Monitoring (recherche + catégorie)
   document.getElementById('folder-search')?.addEventListener('input', () => this.updateFolderConfigDisplay());
   document.getElementById('category-filter')?.addEventListener('change', () => this.updateFolderConfigDisplay());
@@ -3743,6 +3744,63 @@ class MailMonitor {
     } catch (error) {
       console.error('❌ Erreur lors de l\'actualisation:', error);
       this.showNotification('Erreur', 'Impossible d\'actualiser la liste', 'danger');
+    }
+  }
+
+  async forceFullResync() {
+    // Demander confirmation avant de lancer la resynchronisation
+    const result = await this.showConfirmModal(
+      'Resynchronisation complète',
+      'Cette opération va réinitialiser l\'état de synchronisation de tous les dossiers et récupérer à nouveau tout l\'historique des emails. Cela peut prendre plusieurs minutes. Continuer ?',
+      'Resynchroniser',
+      'warning'
+    );
+    
+    if (!result) {
+      return;
+    }
+
+    try {
+      // Désactiver le bouton pendant la resync
+      const btn = document.getElementById('force-resync');
+      if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = '<i class="bi bi-hourglass-split me-1"></i> Resync en cours...';
+      }
+
+      this.showNotification('Resynchronisation', 'Resynchronisation complète en cours...', 'info');
+      
+      console.log('🔄 Démarrage resynchronisation complète forcée...');
+      const response = await window.api.invoke('api-force-full-resync');
+      
+      if (response.success) {
+        console.log('✅ Resynchronisation terminée:', response.stats);
+        this.showNotification(
+          'Resynchronisation terminée',
+          `${response.stats.emailsAdded} emails ajoutés, ${response.stats.emailsUpdated} mis à jour`,
+          'success'
+        );
+        
+        // Rafraîchir l'affichage
+        await this.refreshFoldersDisplay();
+        await this.loadStats();
+      } else {
+        throw new Error(response.message || 'Échec de la resynchronisation');
+      }
+    } catch (error) {
+      console.error('❌ Erreur lors de la resynchronisation:', error);
+      this.showNotification(
+        'Erreur',
+        `Erreur lors de la resynchronisation: ${error.message}`,
+        'danger'
+      );
+    } finally {
+      // Réactiver le bouton
+      const btn = document.getElementById('force-resync');
+      if (btn) {
+        btn.disabled = false;
+        btn.innerHTML = '<i class="bi bi-arrow-repeat me-1"></i> Resync complète';
+      }
     }
   }
 

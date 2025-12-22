@@ -1149,11 +1149,82 @@ class UnifiedMonitoringService extends EventEmitter {
                 await this.syncFolder(folder);
             }
 
-                        const inc = await this.incrementalSyncFolder(folder);
-                        const count = inc?.count || 0;
-                        if (count > 0) {
-                            this.log(`📧 ${count} changement(s) détecté(s)`, 'INFO');
-                        }
+            const duration = ((Date.now() - startTime) / 1000).toFixed(1);
+            this.log(`✅ Synchronisation terminée en ${duration}s (${this.stats.emailsAdded} ajoutés, ${this.stats.emailsUpdated} mis à jour)`, 'SUCCESS');
+            this.stats.lastSyncTime = new Date().toISOString();
+            
+            this.emit('sync-complete', {
+                duration,
+                emailsAdded: this.stats.emailsAdded,
+                emailsUpdated: this.stats.emailsUpdated
+            });
+        } catch (error) {
+            this.log(`❌ Erreur synchronisation complète: ${error.message}`, 'ERROR');
+            throw error;
+        }
+    }
+
+    /**
+     * Force une resynchronisation complète de tous les dossiers
+     * Réinitialise l'état de baseline et relance une synchronisation complète
+     */
+    async forceFullResync() {
+        try {
+            this.log('🔄 Forçage resynchronisation complète - Réinitialisation baseline...', 'SYNC');
+            
+            // Réinitialiser le baseline pour tous les dossiers surveillés
+            for (const folder of this.monitoredFolders) {
+                try {
+                    this.dbService.db.prepare(`
+                        UPDATE folder_sync_state 
+                        SET baseline_done = 0, 
+                            last_modified_cursor = NULL,
+                            last_full_scan_at = NULL,
+                            updated_at = CURRENT_TIMESTAMP
+                        WHERE folder_path = ?
+                    `).run(folder.path);
+                    this.log(`🔄 Baseline réinitialisé pour: ${folder.name}`, 'SYNC');
+                } catch (e) {
+                    this.log(`⚠️ Impossible de réinitialiser ${folder.name}: ${e.message}`, 'WARNING');
+                }
+            }
+            
+            // Lancer la synchronisation complète
+            this.log('🚀 Lancement synchronisation complète forcée...', 'SYNC');
+            await this.performCompleteSync();
+            
+            this.log('✅ Resynchronisation complète forcée terminée avec succès', 'SUCCESS');
+            return {
+                success: true,
+                message: 'Resynchronisation complète effectuée avec succès',
+                stats: {
+                    emailsAdded: this.stats.emailsAdded,
+                    emailsUpdated: this.stats.emailsUpdated
+                }
+            };
+        } catch (error) {
+            this.log(`❌ Erreur lors de la resynchronisation forcée: ${error.message}`, 'ERROR');
+            throw error;
+        }
+    }
+
+    /**
+     * Obtenir l'identité de synchronisation d'un dossier
+     */
+    getFolderSyncIdentity(folder) {
+        return {
+            folder_path: folder.path,
+            store_id: folder.storeId || folder.store_id || null,
+            entry_id: folder.entryId || folder.entry_id || null,
+            store_name: folder.storeName || folder.store_name || null
+        };
+    }
+
+    /**
+     * Obtenir l'état de synchronisation d'un dossier en toute sécurité
+     */
+    safeGetFolderSyncState(folder) {
+        try {
             return this.dbService.getFolderSyncState(folder.path);
         } catch {
             return null;

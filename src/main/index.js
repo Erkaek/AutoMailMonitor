@@ -1508,6 +1508,39 @@ ipcMain.handle('api-folders-reload-config', async (event) => {
     
   } catch (error) {
     console.error('❌ Erreur rechargement configuration dossiers:', error);
+    throw error;
+  }
+});
+
+// Forcer une resynchronisation complète de tous les dossiers
+ipcMain.handle('api-force-full-resync', async (event) => {
+  try {
+    console.log('🔄 Démarrage resynchronisation complète forcée...');
+    
+    if (!global.unifiedMonitoringService) {
+      throw new Error('Service de monitoring non disponible');
+    }
+
+    // Forcer la resynchronisation complète
+    const result = await global.unifiedMonitoringService.forceFullResync();
+    
+    console.log(`✅ Resynchronisation complète terminée: ${result.stats.emailsAdded} ajoutés, ${result.stats.emailsUpdated} mis à jour`);
+    
+    // Notifier l'interface
+    if (global.mainWindow) {
+      global.mainWindow.webContents.send('resync-complete', {
+        stats: result.stats,
+        message: result.message
+      });
+    }
+
+    return result;
+    
+  } catch (error) {
+    console.error('❌ Erreur resynchronisation complète:', error);
+    throw error;
+  }
+});
     return {
       success: false,
       error: error.message
