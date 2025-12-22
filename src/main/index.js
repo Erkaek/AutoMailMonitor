@@ -407,6 +407,27 @@ app.on('ready', () => {
 
 // Lancer la vérification initiale de mise à jour et informer la fenêtre de chargement
 async function runInitialUpdateCheck() {
+  const parseSemver = (v) => {
+    const s = String(v || '').trim().replace(/^v/i, '');
+    const parts = s.split('.');
+    const nums = parts.map((p) => {
+      const m = String(p).match(/^(\d+)/);
+      return m ? Number(m[1]) : 0;
+    });
+    while (nums.length < 3) nums.push(0);
+    return nums.slice(0, 3);
+  };
+
+  const compareSemver = (a, b) => {
+    const va = parseSemver(a);
+    const vb = parseSemver(b);
+    for (let i = 0; i < 3; i++) {
+      if (va[i] > vb[i]) return 1;
+      if (va[i] < vb[i]) return -1;
+    }
+    return 0;
+  };
+
   try {
     if (loadingWindow) {
       loadingWindow.webContents.send('loading-progress', {
@@ -420,9 +441,26 @@ async function runInitialUpdateCheck() {
     const info = res?.updateInfo;
 
     // Si une MAJ est détectée au démarrage: bloquer l'init et ouvrir le téléchargement.
-    if (info && info.version) {
+    const currentVersion = (() => {
+      try { return app.getVersion(); } catch { return null; }
+    })();
+    const remoteVersion = info?.version || null;
+
+    if (remoteVersion && currentVersion && compareSemver(remoteVersion, currentVersion) <= 0) {
+      // Même version (ou plus ancienne) => ne pas bloquer.
+      if (loadingWindow) {
+        loadingWindow.webContents.send('loading-progress', {
+          step: 1,
+          progress: 10,
+          message: `Aucune mise à jour (actuelle: v${currentVersion})`
+        });
+      }
+      return false;
+    }
+
+    if (remoteVersion) {
       const { shell } = require('electron');
-      const versionRaw = String(info.version);
+      const versionRaw = String(remoteVersion);
       const tag = versionRaw.startsWith('v') ? versionRaw : `v${versionRaw}`;
       const version = versionRaw.replace(/^v/, '');
       const directUrl = `https://github.com/Erkaek/AutoMailMonitor/releases/download/${tag}/Mail-Monitor-Setup-${version}.exe`;
@@ -432,7 +470,7 @@ async function runInitialUpdateCheck() {
         loadingWindow.webContents.send('loading-error', {
           kind: 'UPDATE_AVAILABLE',
           version,
-          message: `Mise à jour disponible: v${version}. Ouverture du téléchargement…`
+          message: `Mise à jour disponible: v${version}${currentVersion ? ` (actuelle: v${currentVersion})` : ''}. Ouverture du téléchargement…`
         });
       }
 
