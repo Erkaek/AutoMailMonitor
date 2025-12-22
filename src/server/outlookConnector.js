@@ -61,6 +61,12 @@ class OutlookConnector extends EventEmitter {
     // Cache dédié aux structures (Store -> arbre inbox) pour éviter les PowerShell répétés
     this._folderStructCache = new Map();
     this._folderStructureTtlMs = 600000; // 10 minutes
+    
+    // Détection de blocage Outlook
+    this._outlookHealthy = true;
+    this._lastHealthCheckAt = 0;
+    this._consecutiveTimeouts = 0;
+    this._healthCheckIntervalMs = 60000; // Vérifier la santé toutes les 60s
   }
 
   /**
@@ -642,11 +648,71 @@ class OutlookConnector extends EventEmitter {
   }
 
   /**
+   * Vérifie si Outlook est en bonne santé (ne bloque pas)
+   * et adapte la stratégie en conséquence
+   */
+  async checkOutlookHealth() {
+    const now = Date.now();
+    
+    // Ne vérifier que toutes les 60s pour éviter de surcharger
+    if ((now - this._lastHealthCheckAt) < this._healthCheckIntervalMs) {
+      return this._outlookHealthy;
+    }
+    
+    this._lastHealthCheckAt = now;
+    
+    try {
+      // Test simple: essayer de lister les stores avec un timeout court
+      const testScript = `
+        try {
+          $outlook = $null
+          try { $outlook = [System.Runtime.Interopservices.Marshal]::GetActiveObject('Outlook.Application') } catch {}
+          if (-not $outlook) { throw "Outlook not running" }
+          $ns = $null
+          try { $ns = $outlook.Session } catch {}
+          if (-not $ns) { $ns = $outlook.GetNamespace("MAPI") }
+          $count = 0
+          try { $count = $ns.Stores.Count } catch {}
+          Write-Output "OK:$count"
+        } catch {
+          Write-Output "ERROR:$($_.Exception.Message)"
+        }
+      `;
+      
+      const result = await this.executePowerShellScript(testScript, 5000); // Timeout court de 5s
+      
+      if (result.success && result.output && result.output.startsWith('OK:')) {
+        this._outlookHealthy = true;
+        this._consecutiveTimeouts = 0;
+        return true;
+      } else {
+        this._outlookHealthy = false;
+        this._consecutiveTimeouts++;
+        console.warn(`⚠️ [HEALTH] Outlook health check failed: ${result.error || 'unknown'}`);
+        
+        // Si trop de timeouts consécutifs, recommander un redémarrage
+        if (this._consecutiveTimeouts >= 3) {
+          console.error(`❌ [HEALTH] Outlook semble bloqué (${this._consecutiveTimeouts} timeouts). Recommandation: redémarrer Outlook`);
+        }
+        return false;
+      }
+    } catch (error) {
+      this._outlookHealthy = false;
+      this._consecutiveTimeouts++;
+      console.warn(`⚠️ [HEALTH] Health check error: ${error.message}`);
+      return false;
+    }
+  }
+
+  /**
    * Récupère la structure des dossiers pour un Store donné
    * Retour: Array<{ Name, StoreID, SubFolders: Folder[] }>
    */
   async getFolderStructure(storeId, opts = {}) {
     try {
+      // Vérifier la santé d'Outlook avant d'exécuter un script potentiellement long
+      await this.checkOutlookHealth();
+      
       const cacheKey = storeId || 'all';
       const ttlStruct = Number.isFinite(opts.ttlMs) ? opts.ttlMs : (this._folderStructureTtlMs || 0);
       if (!this._folderStructCache) this._folderStructCache = new Map();
@@ -699,6 +765,15 @@ class OutlookConnector extends EventEmitter {
           return cachedStruct.data;
         }
       }
+      
+      // Si Outlook n'est pas sain, utiliser le cache même expiré plutôt que de bloquer
+      if (!this._outlookHealthy) {
+        const cachedStruct = this._folderStructCache.get(cacheKey);
+        if (cachedStruct) {
+          console.warn(`⚠️ [CACHE] Outlook unhealthy - returning stale cache (age: ${Math.floor((Date.now() - cachedStruct.at) / 1000)}s)`);
+          return cachedStruct.data;
+        }
+      }
 
       // Try rebuilding from cached flat tree to avoid a new PowerShell execution
       const fastTree = (() => {
@@ -725,11 +800,25 @@ class OutlookConnector extends EventEmitter {
         $enc = New-Object System.Text.UTF8Encoding $false
         [Console]::OutputEncoding = $enc
         $OutputEncoding = $enc
+        
+        # Timeout interne pour éviter blocages infinis
+        $global:timeoutReached = $false
+        $timeoutTimer = [System.Diagnostics.Stopwatch]::StartNew()
+        $maxExecutionMs = 25000  # 25s max pour éviter timeout externe à 30s
+        
         try {
           # Création COM sans Add-Type pour éviter les cast 32/64 bits
           $outlook = $null
           try { $outlook = [System.Runtime.Interopservices.Marshal]::GetActiveObject('Outlook.Application') } catch {}
-          if (-not $outlook) { $outlook = New-Object -ComObject Outlook.Application }
+          if (-not $outlook) { 
+            Write-Warning "GetActiveObject failed, creating new instance..."
+            $outlook = New-Object -ComObject Outlook.Application 
+          }
+          
+          # Vérifier timeout
+          if ($timeoutTimer.ElapsedMilliseconds -gt $maxExecutionMs) {
+            throw "Script timeout reached at COM creation"
+          }
 
           $ns = $null
           # Préférer Session pour éviter les casts interop
@@ -746,11 +835,31 @@ class OutlookConnector extends EventEmitter {
             } catch {}
           }
           if (-not $ns) { throw "Namespace MAPI introuvable" }
+          
+          # Vérifier timeout après connection
+          if ($timeoutTimer.ElapsedMilliseconds -gt $maxExecutionMs) {
+            throw "Script timeout reached after MAPI connection"
+          }
 
           if ("${safeStoreId}" -eq "") {
             # Retourner uniquement la liste des boîtes (métadonnées), pas d'arborescence
             $mailboxes = @()
+            $storeCount = 0
+            try { $storeCount = $ns.Stores.Count } catch {}
+            
+            # Limiter l'énumération si trop de stores (timeout risk)
+            $maxStores = 20
+            $enumerated = 0
             foreach ($st in $ns.Stores) {
+              if ($enumerated -ge $maxStores) { 
+                Write-Warning "Store enumeration limit reached ($maxStores)"
+                break 
+              }
+              # Vérifier timeout
+              if ($timeoutTimer.ElapsedMilliseconds -gt $maxExecutionMs) {
+                Write-Warning "Timeout during store enumeration"
+                break
+              }
               try {
                 $mbName = $st.DisplayName
                 $smtp = $null
@@ -759,6 +868,7 @@ class OutlookConnector extends EventEmitter {
                   foreach ($acc in $accounts) { if ($acc.SmtpAddress -and ($acc.DisplayName -eq $mbName -or $mbName -like "*$($acc.DisplayName)*")) { $smtp = $acc.SmtpAddress; break } }
                 } catch {}
                 $mailboxes += @{ Name = $mbName; StoreID = $st.StoreID; SmtpAddress = $smtp; SubFolders = @() }
+                $enumerated++
               } catch {}
             }
             $res = @{ success = $true; folders = $mailboxes } | ConvertTo-Json -Depth 12 -Compress
@@ -768,7 +878,14 @@ class OutlookConnector extends EventEmitter {
 
           # Déterminer le store cible (par StoreID ou défaut)
           $target = $null
-          foreach ($st in $ns.Stores) { if ($st.StoreID -eq "${safeStoreId}" -or $st.DisplayName -eq "${safeStoreId}" -or $st.DisplayName -like "*${safeStoreId}*") { $target = $st; break } }
+          foreach ($st in $ns.Stores) { 
+            # Vérifier timeout
+            if ($timeoutTimer.ElapsedMilliseconds -gt $maxExecutionMs) {
+              Write-Warning "Timeout during target store search"
+              break
+            }
+            if ($st.StoreID -eq "${safeStoreId}" -or $st.DisplayName -eq "${safeStoreId}" -or $st.DisplayName -like "*${safeStoreId}*") { $target = $st; break } 
+          }
           if (-not $target) { $target = $ns.DefaultStore }
 
           $root = $target.GetRootFolder()
@@ -861,7 +978,7 @@ class OutlookConnector extends EventEmitter {
         }
       `;
 
-      const result = await this.executePowerShellScript(script, 30000);
+      const result = await this.executePowerShellScript(script, 60000); // Augmenté à 60s au lieu de 30s
       if (!result.success) {
         throw new Error(result.error || 'Échec récupération structure dossiers');
       }
@@ -2056,7 +2173,7 @@ class OutlookConnector extends EventEmitter {
   /**
    * Exécuter un script PowerShell via fichier temporaire (Windows PowerShell 5.1 + STA)
    */
-  async executePowerShellScript(script, timeout = 15000, opts = {}) {
+  async executePowerShellScript(script, timeout = 30000, opts = {}) {
     const attempts = opts.force32Bit ? 1 : Math.max(1, this.settings?.exchange?.retry?.maxAttempts || 2);
     const baseTimeout = timeout || this.settings?.exchange?.timeoutMs || 180000;
     const backoff = (tryIndex) => (this.settings?.exchange?.retry?.backoff === 'exponential') ? baseTimeout * Math.pow(2, tryIndex) : baseTimeout;
@@ -2076,13 +2193,17 @@ class OutlookConnector extends EventEmitter {
         const psResult = await this.runPowerShell(['-File', tempFile], { timeoutMs: attemptTimeout, force32Bit: force32 });
         const cmdLabel = `${path.basename(psResult.exe)} ${this.sanitizePsArgs(psResult.args || []).join(' ')}`;
         if (psResult.timedOut) {
-          console.warn(`⏱️ [PS] Timeout (${attemptTimeout}ms) cmd=${cmdLabel}`);
+          console.warn(`⏱️ [PS] Timeout (${attemptTimeout}ms) cmd=${cmdLabel} - attempt ${i + 1}/${attempts}`);
           lastResult = { success: false, error: 'PS_TIMEOUT', code: 'PS_TIMEOUT', stderr: psResult.stderr, durationMs: psResult.durationMs, command: cmdLabel };
           continue;
         }
         if (psResult.code !== 0) {
           const errMsg = psResult.stderr || `PowerShell exited ${psResult.code}`;
-          console.warn(`⚠️ [PS] Exit ${psResult.code} cmd=${cmdLabel} (${psResult.durationMs}ms)`);
+          console.warn(`⚠️ [PS] Exit ${psResult.code} cmd=${cmdLabel} (${psResult.durationMs}ms) - attempt ${i + 1}/${attempts}`);
+          // Log stderr pour debugging
+          if (psResult.stderr) {
+            console.warn(`⚠️ [PS] Stderr: ${String(psResult.stderr).slice(0, 500)}`);
+          }
           lastResult = { success: false, error: errMsg, code: `EXIT_${psResult.code}`, stderr: psResult.stderr, durationMs: psResult.durationMs, command: cmdLabel };
           // Retry once with 32-bit if first attempt failed and not already forcing
           continue;
