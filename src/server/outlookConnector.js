@@ -1141,6 +1141,267 @@ class OutlookConnector extends EventEmitter {
       const storeName = matchedStore?.Name || storeHint;
       const smtpAddress = matchedStore?.SmtpAddress || null;
 
+      // --- FAST PATH ---
+      // Résoudre le dossier par chemin (sans énumération globale) puis charger les sous-dossiers en BFS via EntryID.
+      // Cela évite les scans COM complets très lents (plusieurs minutes) observés sur certains stores partagés.
+      const maxDepthOpt = opts?.maxDepth;
+      const maxDepth = (Number.isFinite(maxDepthOpt) && maxDepthOpt >= 0)
+        ? Number(maxDepthOpt)
+        : Number(process.env.FOLDER_ENUM_MAX_DEPTH || 3);
+
+      const resolveByPath = async () => {
+        // Réutilise la logique PowerShell de getSubFolders mais récupère aussi les métadonnées du dossier parent.
+        const ok = await this.ensureConnected();
+        if (!ok) throw new Error('Outlook non connecté');
+
+        const safeStoreId = String(storeId || '').replace(/`/g, '``').replace(/"/g, '\\"');
+        const safeParentPath = String(normalizedPath || '').replace(/`/g, '``').replace(/"/g, '\\"');
+
+        const script = `
+          $enc = New-Object System.Text.UTF8Encoding $false
+          [Console]::OutputEncoding = $enc
+          $OutputEncoding = $enc
+          try {
+            $outlook = New-Object -ComObject Outlook.Application
+            $ns = $outlook.GetNamespace("MAPI")
+            $store = $null
+            foreach ($st in $ns.Stores) { if ($st.StoreID -eq "${safeStoreId}") { $store = $st; break } }
+            if (-not $store) { throw "Store introuvable" }
+            $root = $store.GetRootFolder()
+            $mbName = $store.DisplayName
+            $parent = $null
+
+            # Certaines configurations renvoient une racine "vide"; corriger via Namespace.Folders
+            try {
+              $rootChilds = 0; try { $rootChilds = $root.Folders.Count } catch {}
+              if ($rootChilds -eq 0) {
+                foreach ($tf in $ns.Folders) {
+                  try { if ($tf.Store.StoreID -eq $store.StoreID) { $root = $tf; break } } catch {}
+                }
+              }
+            } catch {}
+
+            function Normalize-Name([string]$s) {
+              if ([string]::IsNullOrEmpty($s)) { return "" }
+              $s2 = $s.Trim().TrimEnd('.')
+              $n = $s2.Normalize([Text.NormalizationForm]::FormD)
+              $sb = New-Object System.Text.StringBuilder
+              foreach ($c in $n.ToCharArray()) {
+                if ([Globalization.CharUnicodeInfo]::GetUnicodeCategory($c) -ne [Globalization.UnicodeCategory]::NonSpacingMark) {
+                  [void]$sb.Append($c)
+                }
+              }
+              return $sb.ToString().Normalize([Text.NormalizationForm]::FormC).ToLowerInvariant().Trim()
+            }
+
+            function Find-ChildByName($parentFolder, [string]$targetName) {
+              $normTarget = Normalize-Name $targetName
+              foreach ($f in $parentFolder.Folders) { if ((Normalize-Name $f.Name) -eq $normTarget) { return $f } }
+              return $null
+            }
+
+            function Find-FolderByNameDeep($startFolder, [string]$targetName) {
+              $norm = Normalize-Name $targetName
+              foreach ($f in $startFolder.Folders) {
+                if ((Normalize-Name $f.Name) -eq $norm) { return $f }
+              }
+              foreach ($f in $startFolder.Folders) {
+                $found = Find-FolderByNameDeep -startFolder $f -targetName $targetName
+                if ($found -ne $null) { return $found }
+              }
+              return $null
+            }
+
+            # Résolution par chemin d'affichage (MB\...)
+            if (-not $parent -and "${safeParentPath}" -ne "") {
+              $parts = "${safeParentPath}" -split "\\"
+              if ($parts.Length -eq 1 -and (Normalize-Name $parts[0]) -eq (Normalize-Name $mbName)) {
+                $parent = $root
+              } elseif ($parts.Length -gt 1) {
+                $cursor = $root
+                for ($i = 1; $i -lt $parts.Length; $i++) {
+                  $name = $parts[$i]
+                  $next = Find-ChildByName -parentFolder $cursor -targetName $name
+                  if ($next -eq $null) { break }
+                  $cursor = $next
+                }
+                if ($cursor -ne $root) { $parent = $cursor }
+              }
+
+              # Fallback: tentative sous Inbox localisée
+              if (-not $parent) {
+                try {
+                  $inbox = $store.GetDefaultFolder(6) # olFolderInbox
+                  if ($inbox -ne $null) {
+                    $cursor = $inbox
+                    $startIndex = 1
+                    try {
+                      if ($parts.Length -gt 1) {
+                        $p1 = $parts[1]
+                        if ((Normalize-Name $p1) -eq (Normalize-Name $inbox.Name)) { $startIndex = 2 }
+                      }
+                    } catch {}
+                    for ($i = $startIndex; $i -lt $parts.Length; $i++) {
+                      $name = $parts[$i]
+                      $next = Find-ChildByName -parentFolder $cursor -targetName $name
+                      if ($next -eq $null) { break }
+                      $cursor = $next
+                    }
+                    if ($cursor -ne $inbox) {
+                      $parent = $cursor
+                    } elseif ($parts.Length -eq 2 -and ((Normalize-Name $parts[1]) -eq (Normalize-Name $inbox.Name))) {
+                      $parent = $inbox
+                    }
+                  }
+                } catch {}
+              }
+
+              # Fallback: recherche profonde sur le dernier segment
+              if (-not $parent) {
+                try {
+                  if ($parts.Length -gt 1) {
+                    $leaf = $parts[$parts.Length - 1]
+                    $candidate = $null
+                    try {
+                      $inbox2 = $store.GetDefaultFolder(6)
+                      if ($inbox2 -ne $null) { $candidate = Find-FolderByNameDeep -startFolder $inbox2 -targetName $leaf }
+                    } catch {}
+                    if ($candidate -eq $null) { $candidate = Find-FolderByNameDeep -startFolder $root -targetName $leaf }
+                    if ($candidate -ne $null) { $parent = $candidate }
+                  }
+                } catch {}
+              }
+            }
+
+            if (-not $parent) { throw "Dossier parent introuvable" }
+
+            function Get-FolderDisplayPath($folder, [string]$mailboxName, $rootFolder) {
+              $segments = New-Object System.Collections.Generic.List[string]
+              $cur = $folder
+              try {
+                while ($cur -ne $null -and $cur.EntryID -ne $rootFolder.EntryID) {
+                  $segments.Add($cur.Name)
+                  $cur = $cur.Parent
+                  if ($segments.Count -gt 50) { break }
+                }
+              } catch {}
+              $segments.Reverse()
+              if ($segments.Count -gt 0) { return ("$mailboxName\\" + ([string]::Join("\\", $segments))) } else { return $mailboxName }
+            }
+
+            $parentChildCount = 0; try { $parentChildCount = [int]$parent.Folders.Count } catch {}
+            $parentPathDisplay = Get-FolderDisplayPath -folder $parent -mailboxName $mbName -rootFolder $root
+            $parentInfo = @{ Name = $parent.Name; FolderPath = $parentPathDisplay; EntryID = $parent.EntryID; ChildCount = $parentChildCount; SubFolders = @() }
+
+            $children = @()
+            foreach ($sf in $parent.Folders) {
+              $childCount = 0; try { $childCount = [int]$sf.Folders.Count } catch {}
+              $path = Get-FolderDisplayPath -folder $sf -mailboxName $mbName -rootFolder $root
+              $children += @{ Name = $sf.Name; FolderPath = $path; EntryID = $sf.EntryID; ChildCount = $childCount; SubFolders = @() }
+            }
+            $res = @{ success = $true; parent = $parentInfo; children = $children } | ConvertTo-Json -Depth 12 -Compress
+            Write-Output $res
+          } catch {
+            $err = $_.Exception.Message
+            $res = @{ success = $false; error = $err; parent = $null; children = @() } | ConvertTo-Json -Depth 4 -Compress
+            Write-Output $res
+          }
+        `;
+
+        let result = await this.executePowerShellScript(script, 20000);
+        if (!result.success) {
+          result = await this.executePowerShellScript(script, 20000, { force32Bit: true });
+        }
+        if (!result.success) throw new Error(result.error || 'Échec résolution dossier');
+        const json = OutlookConnector.parseJsonOutput(result.output) || {};
+        if (!json.success) throw new Error(json.error || 'Résolution dossier impossible');
+        return {
+          parent: json.parent || null,
+          children: Array.isArray(json.children) ? json.children : []
+        };
+      };
+
+      // Tentative rapide. En cas d'échec, on retombera sur l'ancien chemin (scan global) plus bas.
+      try {
+        const resolved = await resolveByPath();
+        const rootInfo = resolved.parent;
+        const rootNode = {
+          Name: rootInfo?.Name || parts[parts.length - 1] || storeName,
+          FolderPath: rootInfo?.FolderPath || normalizedPath,
+          EntryID: rootInfo?.EntryID || '',
+          ChildCount: Number(rootInfo?.ChildCount || 0),
+          SubFolders: []
+        };
+
+        const attachChildren = (parent, kids) => {
+          parent.SubFolders = [];
+          for (const k of kids || []) {
+            if (!k) continue;
+            parent.SubFolders.push({
+              Name: k.Name,
+              FolderPath: k.FolderPath,
+              EntryID: k.EntryID,
+              ChildCount: Number(k.ChildCount || 0),
+              SubFolders: []
+            });
+          }
+          parent.ChildCount = parent.SubFolders.length;
+        };
+
+        attachChildren(rootNode, resolved.children);
+
+        // BFS: enrichir les enfants (et petits-enfants) via EntryID.
+        const depthLimit = Number.isFinite(maxDepth) ? maxDepth : 3;
+        const queue = [];
+        for (const ch of rootNode.SubFolders) queue.push({ node: ch, depth: 1 });
+        const seen = new Set();
+        if (rootNode.EntryID) seen.add(String(rootNode.EntryID).toLowerCase());
+        const safetyStarted = Date.now();
+
+        while (queue.length) {
+          if (Date.now() - safetyStarted > 45_000) break;
+          const { node, depth } = queue.shift();
+          if (!node) continue;
+          if (depthLimit >= 0 && depth > depthLimit) continue;
+          const idKey = String(node.EntryID || '').toLowerCase();
+          if (!idKey || seen.has(idKey)) continue;
+          seen.add(idKey);
+          const hint = Number(node.ChildCount || 0);
+          if (hint === 0) continue;
+          let kids = [];
+          try {
+            kids = await this.getSubFolders(storeId, node.EntryID, node.FolderPath);
+          } catch { kids = []; }
+          if (Array.isArray(kids) && kids.length) {
+            attachChildren(node, kids);
+            for (const ch of node.SubFolders) {
+              queue.push({ node: ch, depth: depth + 1 });
+            }
+          }
+        }
+
+        // Tri stable + recalcul des compteurs
+        const sortAndUpdateCounts = (node) => {
+          if (!node || !Array.isArray(node.SubFolders)) return;
+          node.SubFolders.sort((a, b) => String(a.Name || '').localeCompare(String(b.Name || ''), 'fr', { sensitivity: 'base' }));
+          for (const child of node.SubFolders) sortAndUpdateCounts(child);
+          node.ChildCount = node.SubFolders.length;
+        };
+        sortAndUpdateCounts(rootNode);
+
+        const duration = Date.now() - started;
+        console.log(`📂 getFolderTreeFromRootPath(FAST): path=${normalizedPath} -> children=${rootNode.SubFolders.length} in ${duration}ms`);
+
+        return {
+          success: true,
+          root: rootNode,
+          store: { id: storeId, name: storeName, smtp: smtpAddress },
+          nodes: -1
+        };
+      } catch (fastErr) {
+        console.warn('[COM-REC] Fast folder-tree resolution failed; falling back to global enumeration:', fastErr?.message || fastErr);
+      }
+
       const userStoreSegment = parts[0];
       const sanitizeToken = (value) => {
         if (!value) return '';
@@ -1210,10 +1471,9 @@ class OutlookConnector extends EventEmitter {
         return partsCanon.join('\\');
       };
 
-      const maxDepthOpt = opts?.maxDepth;
-      const maxDepth = (Number.isFinite(maxDepthOpt) && maxDepthOpt >= 0) ? Number(maxDepthOpt) : Number(process.env.FOLDER_ENUM_MAX_DEPTH || -1);
-
-  let flat = await this.listFoldersRecursive(storeId, { maxDepth, pathPrefix: normalizedPath });
+      // --- SLOW PATH (legacy) ---
+      // Ancienne méthode: énumération COM globale puis filtrage. Gardée en secours uniquement.
+      let flat = await this.listFoldersRecursive(storeId, { maxDepth, pathPrefix: normalizedPath });
       if (!Array.isArray(flat) || flat.length === 0) {
         // Fallback: rebuild flat list from getFolderStructure when listFoldersRecursive yields nothing (e.g. PS pipeline issues)
         try {
@@ -2539,15 +2799,14 @@ class OutlookConnector extends EventEmitter {
    * Options: { maxDepth?: number }
    */
   async listFoldersRecursive(targetStoreId, opts = {}) {
-    const rawMaxDepth = Number(opts.maxDepth ?? process.env.FOLDER_ENUM_MAX_DEPTH ?? -1);
-    const maxDepthOpt = Number.isFinite(rawMaxDepth) ? rawMaxDepth : -1;
-    const prefixRaw = String(opts.pathPrefix || '').replace(/\//g, '\\');
-    const prefixLower = prefixRaw.toLowerCase();
-    const prefixLowerWithSep = prefixLower ? `${prefixLower}\\` : '';
-    const prefixSegments = prefixRaw.split('\\').filter(Boolean);
-    const prefixStoreSegment = prefixSegments[0] || '';
-    const depthFromPrefix = prefixSegments.length ? prefixSegments.length + 3 : null;
-    const effectiveMaxDepth = maxDepthOpt >= 0 ? maxDepthOpt : (depthFromPrefix ?? -1);
+    // IMPORTANT: ne pas dériver une profondeur "effective" depuis pathPrefix.
+    // Cela peut déclencher une énumération globale très coûteuse (minutes) quand maxDepth n'est pas fourni.
+    const rawMaxDepth = Number(opts.maxDepth ?? process.env.FOLDER_ENUM_MAX_DEPTH ?? this.settings?.outlook?.maxEnumerationDepth ?? 4);
+    const effectiveMaxDepth = (Number.isFinite(rawMaxDepth) && rawMaxDepth >= 0) ? rawMaxDepth : 4;
+
+    // Note: pathPrefix n'est pas exploité côté PowerShell (filtrage serveur). Il ne sert ici qu'au caller.
+    // Garder la variable pour compat/debug sans impacter la perf.
+    const _prefixRaw = String(opts.pathPrefix || '').replace(/\//g, '\\');
 
     // Cache + single-flight pour éviter les explorations concurrentes et répétées
     this._treeCache = this._treeCache || new Map();
