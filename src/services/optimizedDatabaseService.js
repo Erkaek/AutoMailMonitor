@@ -489,7 +489,7 @@ class OptimizedDatabaseService {
                 SELECT 
                     COUNT(*) as totalEmails,
                     SUM(CASE WHEN is_read = 0 THEN 1 ELSE 0 END) as unreadTotal,
-                    SUM(CASE WHEN DATE(received_time) = DATE('now') THEN 1 ELSE 0 END) as emailsToday,
+                    SUM(CASE WHEN DATE(first_seen_at) = DATE('now') THEN 1 ELSE 0 END) as emailsToday,
             SUM(CASE WHEN DATE(treated_at) = DATE('now') THEN 1 ELSE 0 END) as treatedToday
                 FROM emails
             `),
@@ -652,8 +652,9 @@ class OptimizedDatabaseService {
         const cacheKey = `email_${emailData.outlook_id || emailData.id}`;
         this.cache.del(cacheKey); // Invalider le cache
 
-    // Calculer le week_identifier (semaine ISO)
-        const weekId = this.calculateWeekIdentifier(emailData.received_time);
+        // IMPORTANT (reporting): la semaine d'"arrivée" est basée sur la détection
+        // dans le scope monitoré (et donc sur l'insertion), pas sur received_time.
+        const weekId = this.calculateWeekIdentifier(new Date());
         // Normaliser le sujet par sécurité (si l'amont fournit Subject/ConversationTopic)
         const rawSubject = (emailData.subject ?? emailData.Subject ?? emailData.ConversationTopic ?? '').toString();
         const normalizedSubject = rawSubject.trim() !== '' ? rawSubject : '(Sans objet)';
@@ -691,6 +692,13 @@ class OptimizedDatabaseService {
             // Déterminer treated_at s'il faut le définir
             let treatedAtParam = null;
             const countReadAsTreated = !!this.getAppSetting('count_read_as_treated', false);
+
+            // Traité si déplacé hors du scope monitoré (dossier gestionnaire 11-… + descendants)
+            const prevFolderPath = existed.folder_name || '';
+            const nextFolderPath = emailData.folder_name || '';
+            const prevInScope = this.isInMonitoredScope(prevFolderPath);
+            const nextInScope = this.isInMonitoredScope(nextFolderPath);
+
             if (!existed.treated_at) {
                 if (emailData.is_treated) {
                     treatedAtParam = new Date().toISOString();
@@ -698,6 +706,8 @@ class OptimizedDatabaseService {
                     treatedAtParam = new Date().toISOString();
                 } else if (emailData.deleted_at) {
                     treatedAtParam = emailData.deleted_at;
+                } else if (prevInScope && !nextInScope) {
+                    treatedAtParam = new Date().toISOString();
                 }
             }
             result = this.statements.updateEmailByOutlookId.run(
@@ -796,7 +806,8 @@ class OptimizedDatabaseService {
                         outlookId
                     );
                 } else {
-                    const weekId = this.calculateWeekIdentifier(email.received_time);
+                    // IMPORTANT: semaine d'arrivée = détection (insertion), pas received_time
+                    const weekId = this.calculateWeekIdentifier(new Date());
                     const initialTreatedAt = email.is_treated ? (email.treated_at || new Date().toISOString()) : null;
                     this.statements.insertEmailNew.run(
                         outlookId,
@@ -891,6 +902,90 @@ class OptimizedDatabaseService {
                 category: this.normalizeCategory(r.category)
             }));
         }, 300); // Cache 5 minutes
+    }
+
+    // ==================== MONITORED SCOPE (dossier gestionnaire 11-… + descendants) ====================
+    _normalizeFolderPathForScope(p) {
+        return String(p || '')
+            .replace(/\//g, '\\')
+            .replace(/\\+/g, '\\')
+            .trim()
+            .toLowerCase();
+    }
+
+    _extractManagerRootFromPath(folderPath) {
+        const raw = String(folderPath || '').replace(/\//g, '\\');
+        const parts = raw.split('\\').map(s => s.trim()).filter(Boolean);
+        const isManagerSeg = (seg) => /^\d{2,}\s*-\s*.+/.test(seg);
+        for (let i = 0; i < parts.length; i++) {
+            if (isManagerSeg(parts[i])) {
+                return parts.slice(0, i + 1).join('\\');
+            }
+        }
+        return null;
+    }
+
+    getMonitoredScopeRoots() {
+        const cacheKey = 'monitored_scope_roots_v1';
+        const cached = this.cache.get(cacheKey);
+        if (Array.isArray(cached)) return cached;
+
+        let rows = [];
+        try {
+            rows = this.db.prepare(`SELECT folder_path FROM folder_configurations`).all();
+        } catch {
+            rows = [];
+        }
+
+        const roots = new Map();
+        const addRoot = (p) => {
+            const k = this._normalizeFolderPathForScope(p);
+            if (!k) return;
+            if (!roots.has(k)) roots.set(k, String(p || '').replace(/\//g, '\\'));
+        };
+
+        for (const r of rows) {
+            const p = r?.folder_path;
+            if (!p) continue;
+            addRoot(p);
+            const managerRoot = this._extractManagerRootFromPath(p);
+            if (managerRoot) addRoot(managerRoot);
+        }
+
+        const result = Array.from(roots.values());
+        this.cache.set(cacheKey, result, 60);
+        return result;
+    }
+
+    isInMonitoredScope(folderPath) {
+        const p = this._normalizeFolderPathForScope(folderPath);
+        if (!p) return false;
+
+        const roots = this.getMonitoredScopeRoots();
+        if (!roots || roots.length === 0) return false;
+
+        const pathSegs = p.split('\\').filter(Boolean);
+        for (const root of roots) {
+            const rNorm = this._normalizeFolderPathForScope(root);
+            if (!rNorm) continue;
+
+            // Match direct (prefix) pour couvrir le dossier racine + descendants
+            if (p === rNorm) return true;
+            if (p.startsWith(rNorm + '\\')) return true;
+
+            // Fallback: match sur séquence de segments (utile si préfixe mailbox varie)
+            const rSegs = rNorm.split('\\').filter(Boolean);
+            if (rSegs.length === 0) continue;
+            for (let i = 0; i <= pathSegs.length - rSegs.length; i++) {
+                let ok = true;
+                for (let j = 0; j < rSegs.length; j++) {
+                    if (pathSegs[i + j] !== rSegs[j]) { ok = false; break; }
+                }
+                if (ok) return true;
+            }
+        }
+
+        return false;
     }
 
     /**
@@ -2057,15 +2152,15 @@ class OptimizedDatabaseService {
             const compterLuCommeTraite = !!this.getAppSetting('count_read_as_treated', false);
             
             // Récupérer tous les emails ARRIVÉS de la semaine actuelle groupés par dossier
-            // IMPORTANT: on base la semaine sur received_time (date réelle) et non created_at
-            // afin d'éviter qu'un import initial ne compte tout comme "reçu" cette semaine.
+            // IMPORTANT (reporting): arrivés = première détection dans le scope monitoré => first_seen_at.
             const emailStats = this.db.prepare(`
                 SELECT 
                     folder_name,
                     COUNT(*) as total_emails,
                     SUM(CASE WHEN is_read = 0 THEN 1 ELSE 0 END) as unread_emails
                 FROM emails 
-                WHERE DATE(received_time) BETWEEN ? AND ?
+                WHERE first_seen_at IS NOT NULL
+                  AND DATE(first_seen_at) BETWEEN ? AND ?
                 GROUP BY folder_name
             `).all(weekInfo.startDate, weekInfo.endDate);
 
@@ -2699,6 +2794,22 @@ class OptimizedDatabaseService {
             
             const deleteTime = deletedAt || new Date().toISOString();
             const result = stmt.run(deleteTime, outlookId);
+
+            // Définition "traité": supprimé => traité (si dans scope monitoré), sans écraser un treated_at existant
+            if (result.changes > 0 && emailInfo && !emailInfo.treated_at) {
+                const wasInScope = this.isInMonitoredScope(emailInfo.folder_name || '');
+                if (wasInScope) {
+                    try {
+                        this.db.prepare(`
+                            UPDATE emails
+                            SET treated_at = COALESCE(treated_at, ?),
+                                is_treated = 1,
+                                updated_at = CURRENT_TIMESTAMP
+                            WHERE outlook_id = ?
+                        `).run(deleteTime, outlookId);
+                    } catch {}
+                }
+            }
             
             if (result.changes > 0 && emailInfo) {
                 // Recalculer les stats de la semaine (déterministe)
@@ -2790,18 +2901,39 @@ class OptimizedDatabaseService {
      */
     getWeeklyArrivals(weekIdentifier) {
         try {
+            // Arrivées = first_seen_at dans la semaine (détection dans scope)
+            const weekRow = this.db.prepare(`
+                SELECT week_start_date, week_end_date
+                FROM weekly_stats
+                WHERE week_identifier = ?
+                LIMIT 1
+            `).get(weekIdentifier);
+
+            let startDate;
+            let endDate;
+            if (weekRow && weekRow.week_start_date && weekRow.week_end_date) {
+                startDate = weekRow.week_start_date;
+                endDate = weekRow.week_end_date;
+            } else {
+                const [week, year] = String(weekIdentifier || '').split('-');
+                const weekNum = parseInt(String(week || '').substring(1), 10);
+                startDate = this.getWeekStartDate(weekNum, parseInt(year, 10)).split('T')[0];
+                endDate = this.getWeekEndDate(weekNum, parseInt(year, 10)).split('T')[0];
+            }
+
             const stmt = this.db.prepare(`
                 SELECT 
                     folder_name,
                     category,
                     COUNT(*) as arrivals
                 FROM emails 
-                WHERE week_identifier = ?
+                WHERE first_seen_at IS NOT NULL
+                  AND DATE(first_seen_at) BETWEEN ? AND ?
                 GROUP BY folder_name, category
                 ORDER BY folder_name, category
             `);
-            
-            return stmt.all(weekIdentifier);
+
+            return stmt.all(startDate, endDate);
         } catch (error) {
             console.error('❌ [VBA-LOGIC] Erreur stats arrivées:', error);
             return [];

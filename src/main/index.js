@@ -30,6 +30,29 @@ global.cacheService = cacheService;
 global.logService = logService;
 
 // ========================================================================
+// Snapshot hebdo (reporting): à la fermeture, forcer un dernier calcul et
+// enregistrer un marqueur (semaine + date) afin de figer l'état persisté.
+// ========================================================================
+try {
+  app.on('before-quit', async () => {
+    try {
+      await global.databaseService?.initialize?.();
+      global.databaseService?.updateCurrentWeekStats?.();
+      const weekInfo = global.databaseService?.getISOWeekInfo?.();
+      if (weekInfo?.identifier) {
+        global.databaseService?.setAppSetting?.('last_weekly_snapshot', {
+          week_identifier: weekInfo.identifier,
+          snapshot_at: new Date().toISOString()
+        });
+      }
+    } catch (e) {
+      // Ne jamais bloquer la fermeture
+      console.warn('⚠️ [WEEKLY] Snapshot before-quit ignoré:', e?.message || e);
+    }
+  });
+} catch {}
+
+// ========================================================================
 // Windows: forcer les données (Roaming) dans Documents
 // Objectif: éviter AppData\Roaming pour userData/logs/crashDumps.
 // IMPORTANT: doit être exécuté très tôt, avant toute écriture disque.

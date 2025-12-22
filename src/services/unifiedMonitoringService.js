@@ -259,6 +259,47 @@ class UnifiedMonitoringService extends EventEmitter {
                     }
                     return mapped;
                 });
+
+                // IMPORTANT (reporting): inclure automatiquement le dossier racine "gestionnaire" (ex: 11- Tanguy)
+                // pour compter les arrivées dès qu'un mail est détecté dans ce dossier (même non trié).
+                const normalize = (p) => String(p || '').replace(/\//g, '\\').replace(/\\+/g, '\\').trim().toLowerCase();
+                const isManagerSeg = (seg) => /^\d{2,}\s*-\s*.+/.test(String(seg || '').trim());
+                const extractManagerRoot = (fullPath) => {
+                    const raw = String(fullPath || '').replace(/\//g, '\\');
+                    const parts = raw.split('\\').map(s => s.trim()).filter(Boolean);
+                    for (let i = 0; i < parts.length; i++) {
+                        if (isManagerSeg(parts[i])) {
+                            return parts.slice(0, i + 1).join('\\');
+                        }
+                    }
+                    return null;
+                };
+
+                const existing = new Set(this.monitoredFolders.map(f => normalize(f.path)));
+                const toAdd = [];
+
+                for (const f of this.monitoredFolders) {
+                    const root = extractManagerRoot(f.path);
+                    if (!root) continue;
+                    const key = normalize(root);
+                    if (!key || existing.has(key)) continue;
+                    existing.add(key);
+                    toAdd.push({
+                        path: root,
+                        category: 'Mails simples',
+                        name: root.split('\\').pop() || root,
+                        storeId: null,
+                        entryId: null,
+                        storeName: null,
+                        enabled: true,
+                        _autoScopeRoot: true
+                    });
+                }
+
+                if (toAdd.length > 0) {
+                    this.monitoredFolders = [...toAdd, ...this.monitoredFolders];
+                    this.log(`📁 +${toAdd.length} dossier(s) racine gestionnaire ajouté(s) automatiquement pour le scope`, 'CONFIG');
+                }
             } else {
                 this.log('⚠️ Format de configuration inattendu, utilisation tableau vide', 'WARNING');
                 this.monitoredFolders = [];
