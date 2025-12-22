@@ -804,7 +804,7 @@ class OutlookConnector extends EventEmitter {
         # Timeout interne pour éviter blocages infinis
         $global:timeoutReached = $false
         $timeoutTimer = [System.Diagnostics.Stopwatch]::StartNew()
-        $maxExecutionMs = 25000  # 25s max pour éviter timeout externe à 30s
+        $maxExecutionMs = 55000  # 55s max pour éviter timeout externe à 60s
         
         try {
           # Création COM sans Add-Type pour éviter les cast 32/64 bits
@@ -894,7 +894,51 @@ class OutlookConnector extends EventEmitter {
           $smtp = $null
           try { $accounts = $outlook.Session.Accounts; foreach ($acc in $accounts) { if ($acc.SmtpAddress -and ($acc.DisplayName -eq $mailboxName -or $mailboxName -like "*$($acc.DisplayName)*")) { $smtp = $acc.SmtpAddress; break } } } catch {}
 
-          # Construire un arbre minimal: Inbox et ses enfants directs, sans compter les Items
+          # Fonction récursive pour explorer l'arborescence complète
+          function Get-FolderTreeRecursive {
+            param($folder, $parentPath, $depth = 0, $maxDepth = 5)
+            
+            # Vérifier timeout
+            if ($timeoutTimer.ElapsedMilliseconds -gt $maxExecutionMs) {
+              Write-Warning "Timeout during recursive folder enumeration at depth $depth"
+              return $null
+            }
+            
+            # Limiter la profondeur pour éviter les récursions infinies
+            if ($depth -gt $maxDepth) {
+              return $null
+            }
+            
+            try {
+              $folderPath = if ($parentPath) { "$parentPath\\$($folder.Name)" } else { $folder.Name }
+              $childCount = 0
+              try { $childCount = $folder.Folders.Count } catch {}
+              
+              $subFolders = @()
+              if ($childCount -gt 0 -and $depth -lt $maxDepth) {
+                try {
+                  foreach ($subf in $folder.Folders) {
+                    $childNode = Get-FolderTreeRecursive -folder $subf -parentPath $folderPath -depth ($depth + 1) -maxDepth $maxDepth
+                    if ($childNode) {
+                      $subFolders += $childNode
+                    }
+                  }
+                } catch {}
+              }
+              
+              return @{
+                Name = $folder.Name
+                FolderPath = $folderPath
+                EntryID = $folder.EntryID
+                ChildCount = $childCount
+                SubFolders = $subFolders
+              }
+            } catch {
+              return $null
+            }
+          }
+
+          # Construire l'arbre complet avec récursion
           $tree = @()
           try {
             $inbox = $null
@@ -925,46 +969,30 @@ class OutlookConnector extends EventEmitter {
             }
 
             if ($inbox) {
-              $children = @()
-              foreach ($sf in $inbox.Folders) {
-                $childCount = 0; try { $childCount = $sf.Folders.Count } catch {}
-                $children += @{ Name = $sf.Name; FolderPath = "$mailboxName\\$($inbox.Name)\\$($sf.Name)"; EntryID = $sf.EntryID; ChildCount = $childCount; SubFolders = @() }
+              # Utiliser la fonction récursive pour explorer complètement l'arbre
+              $inboxNode = Get-FolderTreeRecursive -folder $inbox -parentPath $mailboxName -depth 0 -maxDepth 5
+              if ($inboxNode) {
+                $tree += $inboxNode
               }
-              $tree += @{ Name = $inbox.Name; FolderPath = "$mailboxName\\$($inbox.Name)"; EntryID = $inbox.EntryID; ChildCount = ($inbox.Folders.Count); SubFolders = $children }
-              # Si l'inbox ne semble pas avoir d'enfants (compte 0 et enumeration vide), ajouter aussi les dossiers racine
+              
+              # Si l'inbox ne semble pas avoir d'enfants, ajouter aussi les dossiers racine
               $inboxChilds = 0; try { $inboxChilds = $inbox.Folders.Count } catch {}
-              if ($inboxChilds -eq 0 -and $children.Count -eq 0) {
+              if ($inboxChilds -eq 0 -and (!$inboxNode -or $inboxNode.SubFolders.Count -eq 0)) {
                 foreach ($sf in $root.Folders) {
-                  $childCount = 0; try { $childCount = $sf.Folders.Count } catch {}
-                  $tree += @{ Name = $sf.Name; FolderPath = "$mailboxName\\$($sf.Name)"; EntryID = $sf.EntryID; ChildCount = $childCount; SubFolders = @() }
+                  $rootNode = Get-FolderTreeRecursive -folder $sf -parentPath $mailboxName -depth 0 -maxDepth 5
+                  if ($rootNode) {
+                    $tree += $rootNode
+                  }
                 }
               }
             } else {
-              # 3) Dernier fallback: exposer les dossiers de premier niveau de la racine
-              $children = @()
+              # 3) Dernier fallback: exposer les dossiers de premier niveau de la racine avec récursion
               foreach ($sf in $root.Folders) {
-                $childCount = 0; try { $childCount = $sf.Folders.Count } catch {}
-                # Récupérer automatiquement les sous-dossiers si c'est la Boîte de réception
-                $subFolders = @()
-                
-                # Détection spécifique pour boîtes partagées Exchange
-                if ($sf.Name -eq "Boîte de réception" -and $mailboxName -eq "testboitepartagee") {
-                  # Ajouter manuellement les dossiers connus depuis la DB
-                  $subFolders += @{ Name = "test1"; FolderPath = "$mailboxName\\$($sf.Name)\\test1"; EntryID = "$($sf.EntryID)-test1-manual"; ChildCount = 0; SubFolders = @() }
-                  $subFolders += @{ Name = "test2"; FolderPath = "$mailboxName\\$($sf.Name)\\test2"; EntryID = "$($sf.EntryID)-test2-manual"; ChildCount = 0; SubFolders = @() }
+                $rootNode = Get-FolderTreeRecursive -folder $sf -parentPath $mailboxName -depth 0 -maxDepth 5
+                if ($rootNode) {
+                  $tree += $rootNode
                 }
-                elseif ($sf.Name -like "*Boîte de réception*" -or $sf.Name -like "*Bo*te de r*ception*" -or $sf.Name -like "*Inbox*" -or $sf.Name -like "*Courrier entrant*") {
-                  try {
-                    foreach ($subf in $sf.Folders) {
-                      $subChildCount = 0; try { $subChildCount = $subf.Folders.Count } catch {}
-                      $subFolders += @{ Name = $subf.Name; FolderPath = "$mailboxName\\$($sf.Name)\\$($subf.Name)"; EntryID = $subf.EntryID; ChildCount = $subChildCount; SubFolders = @() }
-                    }
-                  } catch {}
-                }
-                $children += @{ Name = $sf.Name; FolderPath = "$mailboxName\\$($sf.Name)"; EntryID = $sf.EntryID; ChildCount = $childCount; SubFolders = $subFolders }
               }
-              # Dans ce mode, on n'ajoute pas un noeud 'Inbox' parent; on renvoie directement les enfants de la racine
-              foreach ($c in $children) { $tree += $c }
             }
           } catch {}
 

@@ -443,8 +443,9 @@ class MailMonitor {
   const refreshBtn = document.getElementById('logs-refresh');
     const exportBtn = document.getElementById('logs-export');
   const openFolderBtn = document.getElementById('logs-open-folder');
+    const copyAllBtn = document.getElementById('logs-copy-all');
     const container = view?.parentElement;
-  if (!view || !countEl || !bufferedEl || !statusEl || !searchEl || !levelEl || !refreshBtn || !exportBtn || !openFolderBtn) return;
+  if (!view || !countEl || !bufferedEl || !statusEl || !searchEl || !levelEl || !refreshBtn || !exportBtn || !openFolderBtn || !copyAllBtn) return;
 
     // Update autoScroll based on user scroll position
     container.addEventListener('scroll', () => {
@@ -530,6 +531,32 @@ class MailMonitor {
     openFolderBtn.addEventListener('click', async () => {
       const res = await window.electronAPI.openLogsFolder();
       if (!(res && res.success)) this.showNotification('Dossier de logs', 'Impossible d\'ouvrir le dossier', 'warning');
+    });
+    copyAllBtn.addEventListener('click', async () => {
+      try {
+        // Récupérer le contenu texte de tous les logs affichés
+        const logsText = view.textContent || '';
+        if (!logsText.trim()) {
+          this.showNotification('Copie des logs', 'Aucun log à copier', 'warning');
+          return;
+        }
+        // Copier dans le presse-papier
+        await navigator.clipboard.writeText(logsText);
+        // Feedback visuel temporaire
+        const originalHTML = copyAllBtn.innerHTML;
+        copyAllBtn.innerHTML = '<i class="bi bi-check-lg me-1"></i>Copié!';
+        copyAllBtn.classList.remove('btn-outline-success');
+        copyAllBtn.classList.add('btn-success');
+        setTimeout(() => {
+          copyAllBtn.innerHTML = originalHTML;
+          copyAllBtn.classList.remove('btn-success');
+          copyAllBtn.classList.add('btn-outline-success');
+        }, 2000);
+        this.showNotification('Copie des logs', `${logsText.split('\n').length} lignes copiées dans le presse-papier`, 'success');
+      } catch (err) {
+        console.error('Erreur lors de la copie:', err);
+        this.showNotification('Copie des logs', 'Erreur lors de la copie dans le presse-papier', 'danger');
+      }
     });
 
     // Stream new entries in real-time (will be additionally fetched by delta for filters)
