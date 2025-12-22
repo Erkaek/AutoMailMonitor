@@ -88,6 +88,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onNewEmail: (callback) => ipcRenderer.on('new-email', (event, ...args) => callback(...args)),
   onMonitoringCycleComplete: (callback) => ipcRenderer.on('monitoring-cycle-complete', (event, ...args) => callback(...args)),
   onMonitoringStatus: (callback) => ipcRenderer.on('monitoring-status', (event, ...args) => callback(...args)),
+  onFolderCountUpdated: (callback) => ipcRenderer.on('folder-count-updated', (event, ...args) => callback(...args)),
   
   // NOUVEAU: Événements COM Outlook temps réel
   onCOMListeningStarted: (callback) => ipcRenderer.on('com-listening-started', (event, ...args) => callback(...args)),

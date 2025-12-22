@@ -29,6 +29,47 @@ global.databaseService = databaseService;
 global.cacheService = cacheService;
 global.logService = logService;
 
+// ========================================================================
+// Windows: forcer les données (Roaming) dans Documents
+// Objectif: éviter AppData\Roaming pour userData/logs/crashDumps.
+// IMPORTANT: doit être exécuté très tôt, avant toute écriture disque.
+// ========================================================================
+try {
+  if (process.platform === 'win32') {
+    let documentsDir = null;
+    try {
+      documentsDir = app.getPath('documents');
+    } catch (_) {
+      // Fallback si getPath indisponible trop tôt
+      const userProfile = process.env.USERPROFILE || process.env.HOMEPATH || null;
+      documentsDir = userProfile ? path.join(userProfile, 'Documents') : null;
+    }
+
+    if (documentsDir) {
+      const productName = (typeof app.getName === 'function' ? app.getName() : app.name) || 'Mail Monitor';
+      const baseDir = path.join(documentsDir, productName);
+
+      // Structure volontairement simple et explicite
+      const userDataDir = path.join(baseDir, 'userData');
+      const logsDir = path.join(baseDir, 'logs');
+      const crashDir = path.join(baseDir, 'crashDumps');
+
+      fs.mkdirSync(userDataDir, { recursive: true });
+      fs.mkdirSync(logsDir, { recursive: true });
+      fs.mkdirSync(crashDir, { recursive: true });
+
+      app.setPath('userData', userDataDir);
+      app.setPath('logs', logsDir);
+      app.setPath('crashDumps', crashDir);
+
+      console.log(`📁 [PATHS] userData/logs/crashDumps redirigés vers Documents: ${baseDir}`);
+    }
+  }
+} catch (e) {
+  // Ne jamais bloquer le démarrage si la redirection échoue
+  console.warn('⚠️ [PATHS] Redirection vers Documents impossible:', e?.message || e);
+}
+
 // Initialize logging early
 try { mainLogger.init(); mainLogger.hookConsole(); } catch {}
 console.log('⚡ QUICK WINS: Better-SQLite3 + Cache intelligent activés');
@@ -545,7 +586,7 @@ function setupRealtimeEventForwarding() {
       global.unifiedMonitoringService.setMaxListeners(50);
     }
     // Nettoyer d'éventuels anciens écouteurs (sécurité)
-    const events = ['emailUpdated','newEmail','syncCompleted','monitoringCycleComplete','monitoring-status','com-listening-started','com-listening-failed','realtime-email-update','realtime-new-email'];
+    const events = ['emailUpdated','newEmail','syncCompleted','monitoringCycleComplete','monitoring-status','com-listening-started','com-listening-failed','realtime-email-update','realtime-new-email','folderCountUpdated'];
     for (const evt of events) {
       try { global.unifiedMonitoringService.removeAllListeners(evt); } catch {}
     }
@@ -615,6 +656,14 @@ function setupRealtimeEventForwarding() {
     if (mainWindow && !mainWindow.isDestroyed()) {
       console.log('📬 [IPC] Transfert nouvel email temps réel COM');
       mainWindow.webContents.send('realtime-new-email', emailData);
+    }
+  });
+
+  // NOUVEAU: changements de compteur dossier (déclenche une sync partielle côté service)
+  global.unifiedMonitoringService.on('folderCountUpdated', (data) => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      // Payload attendu: { folderPath, oldCount, newCount, ... }
+      mainWindow.webContents.send('folder-count-updated', data);
     }
   });
 
@@ -2591,6 +2640,52 @@ ipcMain.handle('api-settings-count-read-as-treated', async (event, { value } = {
       success: false,
       error: error.message
     };
+  }
+});
+
+// API pour obtenir/modifier les ajustements de lancement (stock initial) par catégorie
+ipcMain.handle('api-settings-startup-adjustments', async (event, { value } = {}) => {
+  try {
+    if (!global.unifiedMonitoringService || !global.unifiedMonitoringService.dbService) {
+      return { success: false, error: 'Service de base de données non disponible' };
+    }
+
+    const db = global.unifiedMonitoringService.dbService;
+
+    if (value !== undefined) {
+      const cleaned = {
+        declarations: Number.parseInt(value?.declarations ?? 0, 10) || 0,
+        reglements: Number.parseInt(value?.reglements ?? 0, 10) || 0,
+        mails_simples: Number.parseInt(value?.mails_simples ?? 0, 10) || 0
+      };
+      const success = db.saveStartupAdjustments
+        ? !!db.saveStartupAdjustments(cleaned)
+        : !!db.saveAppSetting('startup_adjustments', cleaned);
+
+      // Notifier le frontend (impact sur les stocks/carry)
+      if (success && mainWindow && !mainWindow.isDestroyed()) {
+        try {
+          mainWindow.webContents.send('weekly-stats-updated', {
+            reason: 'startup-adjustments-changed',
+            value: cleaned,
+            timestamp: new Date().toISOString()
+          });
+        } catch (e) {
+          console.warn('[IPC] Impossible d\'émettre weekly-stats-updated (startup):', e?.message || e);
+        }
+      }
+
+      return { success, value: cleaned };
+    }
+
+    const current = db.getStartupAdjustments
+      ? db.getStartupAdjustments()
+      : (db.getAppSetting ? db.getAppSetting('startup_adjustments', { declarations: 0, reglements: 0, mails_simples: 0 }) : { declarations: 0, reglements: 0, mails_simples: 0 });
+
+    return { success: true, value: current };
+  } catch (error) {
+    console.error('❌ [IPC] Erreur api-settings-startup-adjustments:', error);
+    return { success: false, error: error.message };
   }
 });
 

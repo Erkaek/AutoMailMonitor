@@ -2056,14 +2056,16 @@ class OptimizedDatabaseService {
             // Vérifier le paramètre compterLuCommeTraite depuis la config
             const compterLuCommeTraite = !!this.getAppSetting('count_read_as_treated', false);
             
-            // Récupérer tous les emails ARRIVÉS (ajoutés en BDD) de la semaine actuelle groupés par dossier
+            // Récupérer tous les emails ARRIVÉS de la semaine actuelle groupés par dossier
+            // IMPORTANT: on base la semaine sur received_time (date réelle) et non created_at
+            // afin d'éviter qu'un import initial ne compte tout comme "reçu" cette semaine.
             const emailStats = this.db.prepare(`
                 SELECT 
                     folder_name,
                     COUNT(*) as total_emails,
                     SUM(CASE WHEN is_read = 0 THEN 1 ELSE 0 END) as unread_emails
                 FROM emails 
-                WHERE DATE(created_at) BETWEEN ? AND ?
+                WHERE DATE(received_time) BETWEEN ? AND ?
                 GROUP BY folder_name
             `).all(weekInfo.startDate, weekInfo.endDate);
 
@@ -2081,18 +2083,10 @@ class OptimizedDatabaseService {
 
             console.log(`📊 [WEEKLY] Mise à jour stats semaine ${weekInfo.identifier}:`, { emailStats, treatedStats, compterLuCommeTraite });
 
-            // Mapping des folders vers les types VBA
-            const folderTypeMapping = {
-                'erkaekanon@outlook.com\\Boîte de réception\\testA': 'Réglements',
-                'erkaekanon@outlook.com\\Boîte de réception\\test': 'Déclarations', 
-                'erkaekanon@outlook.com\\Boîte de réception\\test\\test-1': 'Déclarations',
-                'erkaekanon@outlook.com\\Boîte de réception\\testA\\test-c': 'Mails simples'
-            };
-
             // Grouper les emails reçus par type de folder
             const statsByType = {};
             emailStats.forEach(stat => {
-                const folderType = folderTypeMapping[stat.folder_name] || 'Mails simples';
+                const folderType = this.mapFolderToCategory(stat.folder_name) || 'Mails simples';
                 if (!statsByType[folderType]) {
                     statsByType[folderType] = { received: 0, treated: 0 };
                 }
@@ -2101,7 +2095,7 @@ class OptimizedDatabaseService {
 
             // Grouper les emails traités par type de folder
             treatedStats.forEach(stat => {
-                const folderType = folderTypeMapping[stat.folder_name] || 'Mails simples';
+                const folderType = this.mapFolderToCategory(stat.folder_name) || 'Mails simples';
                 if (!statsByType[folderType]) {
                     statsByType[folderType] = { received: 0, treated: 0 };
                 }
@@ -2186,6 +2180,43 @@ class OptimizedDatabaseService {
             console.error(`❌ [MAP] Erreur mapping dossier ${folderPath}:`, error.message);
             return 'Mails simples'; // Valeur par défaut
         }
+    }
+
+    /**
+     * Ajustements de lancement (stock initial) par catégorie.
+     * Stockés dans app_settings sous la clé "startup_adjustments".
+     * @returns {{declarations:number, reglements:number, mails_simples:number}}
+     */
+    getStartupAdjustments() {
+        const defaults = { declarations: 0, reglements: 0, mails_simples: 0 };
+        try {
+            const raw = this.getAppSetting('startup_adjustments', defaults);
+            const obj = (raw && typeof raw === 'object') ? raw : defaults;
+            const toInt = (v) => {
+                const n = Number.parseInt(v, 10);
+                return Number.isFinite(n) ? n : 0;
+            };
+            return {
+                declarations: toInt(obj.declarations),
+                reglements: toInt(obj.reglements),
+                mails_simples: toInt(obj.mails_simples)
+            };
+        } catch (e) {
+            return defaults;
+        }
+    }
+
+    saveStartupAdjustments(values) {
+        const toInt = (v) => {
+            const n = Number.parseInt(v, 10);
+            return Number.isFinite(n) ? n : 0;
+        };
+        const payload = {
+            declarations: toInt(values?.declarations),
+            reglements: toInt(values?.reglements),
+            mails_simples: toInt(values?.mails_simples)
+        };
+        return this.saveAppSetting('startup_adjustments', payload);
     }
 
     /**
@@ -2370,8 +2401,13 @@ class OptimizedDatabaseService {
             `;
             const rows = this.db.prepare(sql).all({ year: weekYear, number: weekNumber });
 
-            // Accumulate per week, applying clamp to 0 at each step
-            const carry = { declarations: 0, reglements: 0, mails_simples: 0 };
+            // Stock initial (ajustements de lancement) + accumulation semaine par semaine
+            const startup = this.getStartupAdjustments();
+            const carry = {
+                declarations: startup.declarations || 0,
+                reglements: startup.reglements || 0,
+                mails_simples: startup.mails_simples || 0
+            };
             let currentKey = null;
             let weekAgg = {
                 declarations: { rec: 0, trt: 0, adj: 0 },

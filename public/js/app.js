@@ -405,6 +405,16 @@ class MailMonitor {
     }, Math.max(0, delayMs));
   }
 
+  // Debounced folders refresh to reflect count changes quickly
+  scheduleFoldersStatsRefresh(delayMs = 250) {
+    if (this._foldersStatsRefreshTimer) clearTimeout(this._foldersStatsRefreshTimer);
+    this._foldersStatsRefreshTimer = setTimeout(async () => {
+      try {
+        await this.loadFoldersStats();
+      } catch (_) {}
+    }, Math.max(0, delayMs));
+  }
+
   /**
    * Configuration des listeners d'événements temps réel
    */
@@ -444,6 +454,14 @@ class MailMonitor {
         // Cycle monitoring - log désactivé pour réduire le spam
         // console.log('🔄 Cycle de monitoring terminé:', cycleData);
         this.handleMonitoringCycleComplete(cycleData);
+      });
+    }
+
+    // Changements de compteur dossiers (déclenche généralement une sync partielle)
+    if (window.electronAPI.onFolderCountUpdated) {
+      window.electronAPI.onFolderCountUpdated((payload) => {
+        // On rafraîchit les stats dossiers avec un debounce (évite de spammer getFoldersTree)
+        this.scheduleFoldersStatsRefresh(400);
       });
     }
 
@@ -857,6 +875,8 @@ class MailMonitor {
     // Actualisation légère après chaque cycle
     this.performStatsRefresh();
     this.updateLastRefreshTime();
+    // Rafraîchir aussi les compteurs dossiers (dashboard) après cycle
+    try { this.scheduleFoldersStatsRefresh(600); } catch (_) {}
     // Rafraîchir aussi le suivi hebdomadaire à chaque cycle (traitements/reçus évoluent)
     // On ne spamme pas: appels idempotents et peu coûteux côté IPC
     try {
@@ -1511,47 +1531,120 @@ class MailMonitor {
           </div>
         `;
       } else {
-        // Préparer données triées selon préférence utilisateur (par défaut: alphabétique)
-        const safeFolders = folders.map(f => ({
+        // Préparer données (restants = non lus)
+        const safeFolders = (folders || []).map(f => ({
           name: f.name || 'Dossier',
           path: f.path || '',
           category: f.category || '',
           total: Number.isFinite(+f.total) ? +f.total : 0,
           unread: Number.isFinite(+f.unread) ? +f.unread : 0
         }));
-        const sortMode = this.state?.ui?.foldersSort || 'alpha';
-        const sorted = safeFolders.sort((a, b) => {
-          if (sortMode === 'unread') {
-            const du = (b.unread || 0) - (a.unread || 0);
-            if (du !== 0) return du;
-          }
-          const an = (a.name || '').toString();
-          const bn = (b.name || '').toString();
-          return an.localeCompare(bn, 'fr', { sensitivity: 'base', numeric: true });
+
+        const normalizeCategoryKey = (category) => {
+          const v = String(category || '').toLowerCase();
+          if (v.includes('déclar') || v.includes('declar') || v === 'declarations') return 'declarations';
+          if (v.includes('règle') || v.includes('regle') || v.includes('reglement') || v === 'reglements') return 'reglements';
+          if (v.includes('mail')) return 'mails';
+          return 'mails';
+        };
+
+        const categoryMeta = {
+          declarations: { label: 'Déclarations', icon: 'bi-file-earmark-text', color: 'text-danger' },
+          mails: { label: 'Mails simples', icon: 'bi-envelope', color: 'text-info' },
+          reglements: { label: 'Règlements', icon: 'bi-credit-card', color: 'text-success' }
+        };
+
+        // Totaux par catégorie
+        const totalsByCategory = { declarations: 0, mails: 0, reglements: 0 };
+        for (const f of safeFolders) {
+          const k = normalizeCategoryKey(f.category);
+          totalsByCategory[k] += (f.unread || 0);
+        }
+
+        // Regroupement par client (les clients sont les noms de dossiers)
+        const byClient = new Map();
+        for (const f of safeFolders) {
+          const clientName = this.extractClientNameFromFolder?.(f) || f.name;
+          const key = String(clientName || 'Client').trim() || 'Client';
+          if (!byClient.has(key)) byClient.set(key, { declarations: 0, mails: 0, reglements: 0 });
+          const bucket = byClient.get(key);
+          const k = normalizeCategoryKey(f.category);
+          bucket[k] += (f.unread || 0);
+        }
+
+        const clients = Array.from(byClient.entries()).map(([client, counts]) => {
+          const total = (counts.declarations || 0) + (counts.mails || 0) + (counts.reglements || 0);
+          return { client, ...counts, total };
         });
-        // Rendu compact: éléments légers en grille
-        const html = sorted.map(f => {
-          const domId = `fold-${(f.path || f.name).toString().replace(/[^a-zA-Z0-9_-]/g, '')}`;
-          const catIcon = this.getCategoryIcon(f.category);
-          const catClass = this.getCategoryColor(f.category);
-          return `
-            <div class="col-12 col-md-6 col-lg-4">
-              <div class="d-flex justify-content-between align-items-center p-2 rounded border bg-surface" 
-                   id="${domId}" data-folder-key="${this.escapeHtml(f.path || f.name)}">
-                <div class="d-flex align-items-center text-truncate" style="max-width: 70%;">
-                  <span class="me-2 ${catClass}">${catIcon.startsWith('bi ') ? `<i class=\"bi ${catIcon}\"></i>` : this.escapeHtml(catIcon)}</span>
-                  <div class="text-truncate">
-                    <div class="fw-semibold text-truncate" title="${this.escapeHtml(f.name)}">${this.escapeHtml(f.name)}</div>
-                    ${f.category ? `<small class="text-muted">${this.escapeHtml(f.category)}</small>` : ''}
+
+        const sortMode = this.state?.ui?.foldersSort || 'alpha';
+        clients.sort((a, b) => {
+          if (sortMode === 'unread') {
+            const d = (b.total || 0) - (a.total || 0);
+            if (d !== 0) return d;
+          }
+          return String(a.client).localeCompare(String(b.client), 'fr', { sensitivity: 'base', numeric: true });
+        });
+
+        const fmt = new Intl.NumberFormat('fr-FR');
+        const totalAll = clients.reduce((s, c) => s + Number(c.total || 0), 0);
+
+        const summaryHtml = `
+          <div class="col-12">
+            <div class="d-flex flex-wrap gap-2 align-items-center">
+              <span class="small text-muted me-2">Restants:</span>
+              ${['declarations','mails','reglements'].map(k => {
+                const m = categoryMeta[k];
+                const val = totalsByCategory[k] || 0;
+                return `
+                  <div class="d-flex align-items-center gap-2 px-2 py-1 rounded border bg-surface">
+                    <span class="${m.color}"><i class="bi ${m.icon}"></i></span>
+                    <span class="small">${m.label}</span>
+                    <span class="badge bg-warning text-dark" title="Non lus">${fmt.format(val)}</span>
                   </div>
-                </div>
-                <div class="d-flex align-items-center gap-2 ms-2">
-                  <span class="badge bg-warning text-dark" title="Non lus">${f.unread}</span>
-                </div>
-              </div>
-            </div>`;
-        }).join('');
-        grid.innerHTML = html;
+                `;
+              }).join('')}
+              <div class="ms-auto small text-muted">Total: <span class="fw-semibold">${fmt.format(totalAll)}</span></div>
+            </div>
+          </div>
+        `;
+
+        const tableHtml = `
+          <div class="col-12">
+            <div class="table-responsive">
+              <table class="table table-sm align-middle mb-0">
+                <thead class="table-light">
+                  <tr>
+                    <th>Client</th>
+                    <th class="text-end">Déclarations</th>
+                    <th class="text-end">Mails</th>
+                    <th class="text-end">Règlements</th>
+                    <th class="text-end">Total</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${clients.length ? clients.map(c => {
+                    const cell = (n) => (n > 0 ? `<span class="badge bg-warning text-dark">${fmt.format(n)}</span>` : `<span class="text-muted">0</span>`);
+                    return `
+                      <tr>
+                        <td class="fw-semibold">${this.escapeHtml(c.client)}</td>
+                        <td class="text-end">${cell(c.declarations || 0)}</td>
+                        <td class="text-end">${cell(c.mails || 0)}</td>
+                        <td class="text-end">${cell(c.reglements || 0)}</td>
+                        <td class="text-end fw-semibold">${fmt.format(c.total || 0)}</td>
+                      </tr>
+                    `;
+                  }).join('') : `<tr><td colspan="5" class="text-center text-muted py-3">Aucune donnée</td></tr>`}
+                </tbody>
+              </table>
+            </div>
+            <div class="mt-2 small text-muted">
+              Tri: ${sortMode === 'unread' ? 'non lus (total) décroissant' : 'A→Z'}
+            </div>
+          </div>
+        `;
+
+        grid.innerHTML = summaryHtml + tableHtml;
       }
     }
     // Onglet monitoring : arborescence
@@ -1596,6 +1689,39 @@ class MailMonitor {
       'test': 'bi-folder'
     };
     return icons[category] || 'bi-folder';
+  }
+
+  // Déduire un "client" à partir d'un dossier (heuristique légère)
+  extractClientNameFromFolder(folder) {
+    const name = String(folder?.name || '').trim();
+    const category = String(folder?.category || '').trim();
+    const path = String(folder?.path || '').trim();
+
+    const knownCats = new Set(['déclarations', 'declarations', 'règlements', 'reglements', 'mails simples', 'mails_simples', 'mails', 'mail']);
+    const looksLikeCategoryName = (s) => {
+      const v = String(s || '').toLowerCase();
+      if (!v) return false;
+      if (knownCats.has(v)) return true;
+      if (v.includes('déclar') || v.includes('declar')) return true;
+      if (v.includes('règle') || v.includes('regle') || v.includes('reglement')) return true;
+      if (v.includes('mail')) return true;
+      return false;
+    };
+
+    // Si le nom du dossier ressemble à une catégorie, on prend le parent dans le chemin
+    if (path) {
+      const parts = path.split(/\\|\//).map(p => p.trim()).filter(Boolean);
+      if (parts.length >= 2) {
+        const last = parts[parts.length - 1];
+        const prev = parts[parts.length - 2];
+        if (looksLikeCategoryName(last) || looksLikeCategoryName(name) || looksLikeCategoryName(category)) {
+          return prev || name || last;
+        }
+      }
+    }
+
+    // Fallback: nom du dossier
+    return name || 'Client';
   }
 
   // Calcule les compteurs d'un dossier (total / non lus) avec fallback sur les emails récents
@@ -5723,6 +5849,17 @@ class MailMonitor {
           checkbox.checked = !!response.value;
         }
       }
+
+      const startupRes = await window.electronAPI.invoke('api-settings-startup-adjustments');
+      if (startupRes?.success) {
+        const v = startupRes.value || {};
+        const decl = document.getElementById('startup-adjust-declarations');
+        const regl = document.getElementById('startup-adjust-reglements');
+        const mails = document.getElementById('startup-adjust-mails');
+        if (decl) decl.value = Number.isFinite(Number(v.declarations)) ? String(parseInt(v.declarations, 10)) : '0';
+        if (regl) regl.value = Number.isFinite(Number(v.reglements)) ? String(parseInt(v.reglements, 10)) : '0';
+        if (mails) mails.value = Number.isFinite(Number(v.mails_simples)) ? String(parseInt(v.mails_simples, 10)) : '0';
+      }
     } catch (error) {
       console.error('Erreur lors du chargement des paramètres:', error);
     }
@@ -5736,11 +5873,24 @@ class MailMonitor {
       const checkbox = document.getElementById('count-read-as-treated');
       const countReadAsTreated = checkbox ? checkbox.checked : false;
 
+      const decl = document.getElementById('startup-adjust-declarations');
+      const regl = document.getElementById('startup-adjust-reglements');
+      const mails = document.getElementById('startup-adjust-mails');
+      const startupValue = {
+        declarations: parseInt(decl?.value || '0', 10) || 0,
+        reglements: parseInt(regl?.value || '0', 10) || 0,
+        mails_simples: parseInt(mails?.value || '0', 10) || 0
+      };
+
       const response = await window.electronAPI.invoke('api-settings-count-read-as-treated', {
   value: countReadAsTreated
       });
 
-      if (response.success) {
+      const startupRes = await window.electronAPI.invoke('api-settings-startup-adjustments', {
+        value: startupValue
+      });
+
+      if (response.success && startupRes?.success) {
         this.showNotification('Paramètres sauvegardés', 
           'Les paramètres du suivi hebdomadaire ont été mis à jour', 
           'success'
@@ -5754,9 +5904,11 @@ class MailMonitor {
         
         // Recharger les statistiques pour appliquer les nouveaux paramètres
         await this.loadCurrentWeekStats();
+        await this.loadWeeklyHistory();
+        await this.loadPersonalPerformance?.();
         
       } else {
-        this.showNotification('Erreur', response.error, 'danger');
+        this.showNotification('Erreur', response.error || startupRes?.error || 'Impossible de sauvegarder les paramètres', 'danger');
       }
     } catch (error) {
       console.error('Erreur lors de la sauvegarde des paramètres:', error);
