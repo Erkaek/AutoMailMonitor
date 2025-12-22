@@ -198,6 +198,10 @@ class OptimizedDatabaseService {
                 // this.ensureDeletedColumn(); // supprimé, colonne gérée dans la migration
             // Nouvelle colonne: treated_at (date de traitement)
             this.ensureTreatedAtColumn();
+            // Tracking: internet_message_id + last_modified_time + first/last seen
+            this.ensureEmailTrackingColumns();
+            // Curseur par dossier
+            this.ensureFolderSyncStateTable();
             this.ensureWeeklyStatsTable();
             // Assurer la table des commentaires hebdomadaires
             this.ensureWeeklyCommentsTable();
@@ -257,9 +261,11 @@ class OptimizedDatabaseService {
             CREATE TABLE IF NOT EXISTS emails (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 outlook_id TEXT UNIQUE NOT NULL,
+                internet_message_id TEXT NULL,
                 subject TEXT NOT NULL,
                 sender_email TEXT,
                 received_time DATETIME,
+                last_modified_time DATETIME NULL,
                 folder_name TEXT,
                 category TEXT,
                 is_read BOOLEAN DEFAULT 0,
@@ -267,6 +273,8 @@ class OptimizedDatabaseService {
                 deleted_at DATETIME NULL,
         treated_at DATETIME NULL,
                 week_identifier TEXT,
+                first_seen_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                last_seen_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
             )
@@ -297,16 +305,36 @@ class OptimizedDatabaseService {
             )
         `);
 
+        // Table d'état de synchronisation par dossier (curseur persistant)
+        this.db.exec(`
+            CREATE TABLE IF NOT EXISTS folder_sync_state (
+                folder_path TEXT PRIMARY KEY,
+                store_id TEXT NULL,
+                entry_id TEXT NULL,
+                store_name TEXT NULL,
+                last_modified_cursor DATETIME NULL,
+                last_full_scan_at DATETIME NULL,
+                baseline_done INTEGER DEFAULT 0,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        `);
+
         // Index optimisés pour les requêtes fréquentes
         this.db.exec(`
             CREATE INDEX IF NOT EXISTS idx_emails_outlook_id ON emails(outlook_id);
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_emails_internet_message_id ON emails(internet_message_id);
             CREATE INDEX IF NOT EXISTS idx_emails_folder_name ON emails(folder_name);
             CREATE INDEX IF NOT EXISTS idx_emails_received_time ON emails(received_time);
+            CREATE INDEX IF NOT EXISTS idx_emails_last_modified_time ON emails(last_modified_time);
+            CREATE INDEX IF NOT EXISTS idx_emails_last_seen_at ON emails(last_seen_at);
             CREATE INDEX IF NOT EXISTS idx_emails_is_read ON emails(is_read);
             CREATE INDEX IF NOT EXISTS idx_emails_category ON emails(category);
             CREATE INDEX IF NOT EXISTS idx_emails_week_identifier ON emails(week_identifier);
             CREATE INDEX IF NOT EXISTS idx_emails_deleted_at ON emails(deleted_at);
             CREATE INDEX IF NOT EXISTS idx_emails_is_treated ON emails(is_treated);
+            CREATE INDEX IF NOT EXISTS idx_folder_sync_store_entry ON folder_sync_state(store_id, entry_id);
+            CREATE INDEX IF NOT EXISTS idx_folder_sync_baseline_done ON folder_sync_state(baseline_done);
         `);
     }
 
@@ -364,6 +392,63 @@ class OptimizedDatabaseService {
     }
 
     /**
+     * Migration: ajoute colonnes de tracking email si absentes
+     */
+    ensureEmailTrackingColumns() {
+        try {
+            const cols = this.db.prepare(`PRAGMA table_info(emails)`).all();
+            const have = (name) => cols.some(c => String(c.name).toLowerCase() === name);
+            if (!have('internet_message_id')) {
+                this.db.exec(`ALTER TABLE emails ADD COLUMN internet_message_id TEXT NULL`);
+            }
+            if (!have('last_modified_time')) {
+                this.db.exec(`ALTER TABLE emails ADD COLUMN last_modified_time DATETIME NULL`);
+            }
+            if (!have('first_seen_at')) {
+                this.db.exec(`ALTER TABLE emails ADD COLUMN first_seen_at DATETIME NULL`);
+            }
+            if (!have('last_seen_at')) {
+                this.db.exec(`ALTER TABLE emails ADD COLUMN last_seen_at DATETIME NULL`);
+            }
+            // Index idempotents
+            try { this.db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_emails_internet_message_id ON emails(internet_message_id)`); } catch {}
+            try { this.db.exec(`CREATE INDEX IF NOT EXISTS idx_emails_last_modified_time ON emails(last_modified_time)`); } catch {}
+            try { this.db.exec(`CREATE INDEX IF NOT EXISTS idx_emails_last_seen_at ON emails(last_seen_at)`); } catch {}
+
+            // Backfill léger
+            this.db.exec(`UPDATE emails SET first_seen_at = COALESCE(first_seen_at, created_at, CURRENT_TIMESTAMP) WHERE first_seen_at IS NULL`);
+            this.db.exec(`UPDATE emails SET last_seen_at = COALESCE(last_seen_at, updated_at, CURRENT_TIMESTAMP) WHERE last_seen_at IS NULL`);
+        } catch (e) {
+            console.warn('⚠️ Migration emails tracking ignorée:', e.message);
+        }
+    }
+
+    /**
+     * Migration: s'assurer que la table folder_sync_state existe
+     */
+    ensureFolderSyncStateTable() {
+        try {
+            this.db.exec(`
+                CREATE TABLE IF NOT EXISTS folder_sync_state (
+                    folder_path TEXT PRIMARY KEY,
+                    store_id TEXT NULL,
+                    entry_id TEXT NULL,
+                    store_name TEXT NULL,
+                    last_modified_cursor DATETIME NULL,
+                    last_full_scan_at DATETIME NULL,
+                    baseline_done INTEGER DEFAULT 0,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            `);
+            this.db.exec(`CREATE INDEX IF NOT EXISTS idx_folder_sync_store_entry ON folder_sync_state(store_id, entry_id)`);
+            this.db.exec(`CREATE INDEX IF NOT EXISTS idx_folder_sync_baseline_done ON folder_sync_state(baseline_done)`);
+        } catch (e) {
+            console.warn('⚠️ Migration folder_sync_state ignorée:', e.message);
+        }
+    }
+
+    /**
      * Préparation des statements pour performance maximale (schéma optimisé final 13 colonnes)
      */
     prepareStatements() {
@@ -374,8 +459,9 @@ class OptimizedDatabaseService {
             insertEmailNew: this.db.prepare(`
                 INSERT INTO emails 
                 (outlook_id, subject, sender_email, received_time, folder_name, 
-                 category, is_read, is_treated, deleted_at, treated_at, week_identifier, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                 category, is_read, is_treated, deleted_at, treated_at, week_identifier,
+                 internet_message_id, last_modified_time, first_seen_at, last_seen_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
             `),
             // Mise à jour par outlook_id (sans toucher received_time ni week_identifier)
             updateEmailByOutlookId: this.db.prepare(`
@@ -387,6 +473,9 @@ class OptimizedDatabaseService {
                     is_read = ?,
                     -- Keep legacy is_treated in sync only if explicitly provided
                     is_treated = ?,
+                    internet_message_id = COALESCE(?, internet_message_id),
+                    last_modified_time = COALESCE(?, last_modified_time),
+                    last_seen_at = CURRENT_TIMESTAMP,
                     -- Do not overwrite treated_at unless a non-null value is provided
                     treated_at = COALESCE(?, treated_at),
                     updated_at = CURRENT_TIMESTAMP
@@ -442,11 +531,50 @@ class OptimizedDatabaseService {
             getEmailByEntryId: this.db.prepare(`
                 SELECT * FROM emails WHERE outlook_id = ?
             `),
+
+            getEmailByInternetMessageId: this.db.prepare(`
+                SELECT * FROM emails WHERE internet_message_id = ?
+            `),
+
+            updateEmailOutlookIdByInternetMessageId: this.db.prepare(`
+                UPDATE emails
+                SET outlook_id = ?,
+                    folder_name = ?,
+                    category = ?,
+                    is_read = ?,
+                    last_seen_at = CURRENT_TIMESTAMP,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE internet_message_id = ?
+            `),
             
             getEmailByEntryIdAndFolder: this.db.prepare(`
                 SELECT * FROM emails WHERE outlook_id = ? AND folder_name = ?
             `)
         };
+
+        // Folder sync state
+        this.statements.getFolderSyncState = this.db.prepare(`
+            SELECT * FROM folder_sync_state WHERE folder_path = ?
+        `);
+        this.statements.upsertFolderSyncState = this.db.prepare(`
+            INSERT INTO folder_sync_state (
+                folder_path, store_id, entry_id, store_name,
+                last_modified_cursor, last_full_scan_at, baseline_done,
+                updated_at
+            ) VALUES (
+                @folder_path, @store_id, @entry_id, @store_name,
+                @last_modified_cursor, @last_full_scan_at, COALESCE(@baseline_done, 0),
+                CURRENT_TIMESTAMP
+            )
+            ON CONFLICT(folder_path) DO UPDATE SET
+                store_id=excluded.store_id,
+                entry_id=excluded.entry_id,
+                store_name=excluded.store_name,
+                last_modified_cursor=COALESCE(excluded.last_modified_cursor, folder_sync_state.last_modified_cursor),
+                last_full_scan_at=COALESCE(excluded.last_full_scan_at, folder_sync_state.last_full_scan_at),
+                baseline_done=CASE WHEN excluded.baseline_done > folder_sync_state.baseline_done THEN excluded.baseline_done ELSE folder_sync_state.baseline_done END,
+                updated_at=CURRENT_TIMESTAMP
+        `);
 
     // (activity_weekly statements supprimés)
 
@@ -535,7 +663,30 @@ class OptimizedDatabaseService {
 
         // Id unique
         const outlookId = emailData.outlook_id || emailData.id || '';
-        const existed = this.statements.getEmailByEntryId.get(outlookId);
+        const internetMessageId = (emailData.internet_message_id || emailData.internetMessageId || emailData.InternetMessageId || '').toString().trim() || null;
+        const lastModifiedTime = (emailData.last_modified_time || emailData.lastModifiedTime || emailData.LastModificationTime || '').toString().trim() || null;
+
+        // Dedupe/re-key si EntryID change (mails déplacés entre dossiers, surtout boîtes partagées)
+        let existed = this.statements.getEmailByEntryId.get(outlookId);
+        if (!existed && internetMessageId) {
+            try {
+                const byImid = this.statements.getEmailByInternetMessageId.get(internetMessageId);
+                if (byImid && byImid.outlook_id && byImid.outlook_id !== outlookId) {
+                    // Ne pas écraser un éventuel mail déjà présent avec le même outlook_id
+                    const collision = this.statements.getEmailByEntryId.get(outlookId);
+                    if (!collision) {
+                        this.statements.updateEmailOutlookIdByInternetMessageId.run(
+                            outlookId,
+                            emailData.folder_name || byImid.folder_name || '',
+                            emailData.category || byImid.category || 'Mails simples',
+                            emailData.is_read ? 1 : 0,
+                            internetMessageId
+                        );
+                        existed = this.statements.getEmailByEntryId.get(outlookId);
+                    }
+                }
+            } catch {}
+        }
 
         let result;
         if (existed) {
@@ -559,6 +710,8 @@ class OptimizedDatabaseService {
                 emailData.category || 'Mails simples',
                 emailData.is_read ? 1 : 0,
                 emailData.is_treated ? 1 : 0,
+                internetMessageId,
+                lastModifiedTime,
                 treatedAtParam,
                 outlookId
             );
@@ -577,7 +730,9 @@ class OptimizedDatabaseService {
                 emailData.is_treated ? 1 : 0,
                 emailData.deleted_at || null,
                 initialTreatedAt,
-                weekId
+                weekId,
+                internetMessageId,
+                lastModifiedTime
             );
         }
 
@@ -606,7 +761,28 @@ class OptimizedDatabaseService {
         const transaction = this.db.transaction((emails) => {
             for (const email of emails) {
                 const outlookId = email.outlook_id || email.id || '';
-                const existed = this.statements.getEmailByEntryId.get(outlookId);
+                const internetMessageId = (email.internet_message_id || email.internetMessageId || email.InternetMessageId || '').toString().trim() || null;
+                const lastModifiedTime = (email.last_modified_time || email.lastModifiedTime || email.LastModificationTime || '').toString().trim() || null;
+
+                let existed = this.statements.getEmailByEntryId.get(outlookId);
+                if (!existed && internetMessageId) {
+                    try {
+                        const byImid = this.statements.getEmailByInternetMessageId.get(internetMessageId);
+                        if (byImid && byImid.outlook_id && byImid.outlook_id !== outlookId) {
+                            const collision = this.statements.getEmailByEntryId.get(outlookId);
+                            if (!collision) {
+                                this.statements.updateEmailOutlookIdByInternetMessageId.run(
+                                    outlookId,
+                                    email.folder_name || byImid.folder_name || '',
+                                    email.category || byImid.category || 'Mails simples',
+                                    email.is_read ? 1 : 0,
+                                    internetMessageId
+                                );
+                                existed = this.statements.getEmailByEntryId.get(outlookId);
+                            }
+                        }
+                    } catch {}
+                }
                 const rawSubject = (email.subject ?? email.Subject ?? email.ConversationTopic ?? '').toString();
                 const normalizedSubject = rawSubject.trim() !== '' ? rawSubject : '(Sans objet)';
                 if (existed) {
@@ -617,6 +793,8 @@ class OptimizedDatabaseService {
                         email.category || 'Mails simples',
                         email.is_read ? 1 : 0,
                         email.is_treated ? 1 : 0,
+                        internetMessageId,
+                        lastModifiedTime,
                         null,
                         outlookId
                     );
@@ -634,7 +812,9 @@ class OptimizedDatabaseService {
                         email.is_treated ? 1 : 0,
                         null,
                         initialTreatedAt,
-                        weekId
+                        weekId,
+                        internetMessageId,
+                        lastModifiedTime
                     );
                 }
             }
@@ -649,6 +829,26 @@ class OptimizedDatabaseService {
         this.invalidateUICache();
         
         return result;
+    }
+
+    // ==================== FOLDER SYNC STATE ====================
+    getFolderSyncState(folderPath) {
+        try {
+            if (!folderPath) return null;
+            return this.statements.getFolderSyncState.get(folderPath);
+        } catch {
+            return null;
+        }
+    }
+
+    upsertFolderSyncState(row) {
+        try {
+            if (!row || !row.folder_path) return null;
+            return this.statements.upsertFolderSyncState.run(row);
+        } catch (e) {
+            console.warn('⚠️ [DB] upsertFolderSyncState failed:', e.message);
+            return null;
+        }
     }
 
     /**

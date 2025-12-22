@@ -36,6 +36,7 @@ class UnifiedMonitoringService extends EventEmitter {
         this.foldersConfigHash = null;
         this.configCheckInterval = null;
         this.lastConfigCheck = null;
+        this._hasLoggedMonitoredFoldersCount = false;
         
         // NOUVEAU: Service d'écoute événements COM moderne
         this.outlookEventsService = new OutlookEventsService();
@@ -45,18 +46,18 @@ class UnifiedMonitoringService extends EventEmitter {
         // Configuration
         this.config = {
             syncBatchSize: 50, // Réduction pour plus de réactivité
-            enableDetailedLogging: process.env.NODE_ENV !== 'production',
+            enableDetailedLogging: process.env.ENABLE_DETAILED_LOGGING === '1',
             autoStartMonitoring: true, // Démarrage automatique du monitoring
             skipInitialSync: false, // CRITIQUE: Sync PowerShell complète au démarrage
             useComEvents: true, // Utiliser les événements COM au lieu du polling
             useCaching: true, // Cache intelligent activé
             cacheExpiry: 5000, // 5 secondes seulement
-            maxConcurrentBatches: 3, // Traitement parallèle
+            maxConcurrentBatches: 1, // Traitement parallèle (CPU-friendly)
             partialSyncInterval: 1000, // 1 seconde entre sync partielles
             preferNativeComEvents: true, // Préférer FFI-NAPI COM si disponible
             forcePowerShellInitialSync: true, // NOUVEAU: Forcer sync PowerShell au démarrage
             enableRealtimeComAfterSync: true, // NOUVEAU: Activer COM après sync initiale
-            configCheckInterval: 3000, // Vérifier la config des dossiers toutes les 3 secondes
+            configCheckInterval: 30000, // Vérifier la config des dossiers toutes les 30 secondes
             // Throttling démarrage monitoring
             monitorStartBatchSize: 5, // démarrer par paquets de 5 dossiers
             monitorStartDelayMs: 300 // délai entre démarrages d'items au sein d'un batch
@@ -194,7 +195,9 @@ class UnifiedMonitoringService extends EventEmitter {
      */
     async loadMonitoredFolders() {
         try {
-            this.log('📁 Chargement des dossiers configurés...', 'CONFIG');
+            if (this.config.enableDetailedLogging) {
+                this.log('📁 Chargement des dossiers configurés...', 'CONFIG');
+            }
             const foldersConfig = await this.dbService.getFoldersConfiguration();
             
             // Calculer le hash de la nouvelle configuration
@@ -239,8 +242,11 @@ class UnifiedMonitoringService extends EventEmitter {
             // Détecter les changements de configuration
             const configChanged = this.foldersConfigHash !== newConfigHash;
             this.foldersConfigHash = newConfigHash;
-            
-            this.log(`📁 ${this.monitoredFolders.length} dossiers configurés pour le monitoring`, 'CONFIG');
+
+            if (configChanged || !this._hasLoggedMonitoredFoldersCount || this.config.enableDetailedLogging) {
+                this.log(`📁 ${this.monitoredFolders.length} dossiers configurés pour le monitoring`, 'CONFIG');
+                this._hasLoggedMonitoredFoldersCount = true;
+            }
             
             // Si la configuration a changé et qu'on est en cours de monitoring, redémarrer
             if (configChanged && this.isMonitoring) {
@@ -1143,23 +1149,139 @@ class UnifiedMonitoringService extends EventEmitter {
                 await this.syncFolder(folder);
             }
 
-            this.stats.lastSyncTime = new Date();
-            const duration = Date.now() - startTime;
+                        const inc = await this.incrementalSyncFolder(folder);
+                        const count = inc?.count || 0;
+                        if (count > 0) {
+                            this.log(`📧 ${count} changement(s) détecté(s)`, 'INFO');
+                        }
+            return this.dbService.getFolderSyncState(folder.path);
+        } catch {
+            return null;
+        }
+    }
 
-            this.log(`✅ Synchronisation complète terminée en ${duration}ms`, 'SYNC');
-            this.log(`📊 Résumé: ${this.stats.emailsAdded} ajoutés, ${this.stats.emailsUpdated} mis à jour`, 'STATS');
+    safeUpsertFolderSyncState(folder, patch) {
+        try {
+            const base = this.getFolderSyncIdentity(folder);
+            return this.dbService.upsertFolderSyncState({ ...base, ...(patch || {}) });
+        } catch (e) {
+            this.log(`⚠️ Impossible d'upsert folder_sync_state pour ${folder?.name || folder?.path}: ${e.message}`, 'WARNING');
+            return null;
+        }
+    }
 
-            this.emit('sync-completed', {
-                duration,
-                emailsAdded: this.stats.emailsAdded,
-                emailsUpdated: this.stats.emailsUpdated,
-                folders: this.monitoredFolders.length
+    async baselineSyncFolder(folder) {
+        // Baseline = scan complet (tous les items) paginé via ModifiedBefore.
+        const pageSize = Math.max(50, Number(this.config.syncBatchSize) || 50);
+        const psPageSize = Math.max(100, Math.min(1000, pageSize * 10));
+
+        let before = null;
+        let maxCursor = null;
+        let totalFetched = 0;
+        let page = 0;
+
+        this.log(`🧱 Baseline scan: ${folder.name}`, 'SYNC');
+
+        while (true) {
+            page++;
+            const res = await this.outlookConnector.getFolderEmails(folder.path, {
+                limit: psPageSize,
+                allItems: true,
+                useLastModificationTime: true,
+                modifiedBefore: before,
+                storeId: folder.storeId || folder.store_id,
+                storeName: folder.storeName || folder.store_name,
+                folderEntryId: folder.entryId || folder.entry_id
             });
 
-        } catch (error) {
-            this.log(`❌ Erreur synchronisation complète: ${error.message}`, 'ERROR');
-            throw error;
+            if (!res || res.success === false) {
+                throw new Error(res?.error || 'Baseline scan PowerShell échoué');
+            }
+
+            const emails = Array.isArray(res.emails) ? res.emails : [];
+            if (emails.length === 0) {
+                break;
+            }
+
+            // Cursor = dernière date de modification max observée (ISO UTC)
+            const batchMax = res.maxLastModificationTime || emails[0]?.LastModificationTime || '';
+            if (batchMax) {
+                const batchMaxMs = Date.parse(batchMax);
+                const curMs = maxCursor ? Date.parse(maxCursor) : NaN;
+                if (!maxCursor || (Number.isFinite(batchMaxMs) && (!Number.isFinite(curMs) || batchMaxMs > curMs))) {
+                    maxCursor = batchMax;
+                }
+            }
+
+            // Traiter en batch “app-level”
+            for (let i = 0; i < emails.length; i += this.config.syncBatchSize) {
+                const chunk = emails.slice(i, i + this.config.syncBatchSize);
+                await this.processBatch(chunk, folder);
+            }
+
+            totalFetched += emails.length;
+
+            // Préparer la page suivante
+            const minLmt = res.minLastModificationTime || emails[emails.length - 1]?.LastModificationTime || '';
+            if (!res.hasMore || !minLmt) {
+                break;
+            }
+
+            const minMs = Date.parse(minLmt);
+            if (!Number.isFinite(minMs)) {
+                break;
+            }
+            // -1s pour éviter de boucler sur la même frontière
+            before = new Date(Math.max(0, minMs - 1000)).toISOString();
+
+            // Sécurité: ne pas boucler indéfiniment
+            if (page > 10000) {
+                throw new Error('Baseline scan interrompu (trop de pages)');
+            }
         }
+
+        this.safeUpsertFolderSyncState(folder, {
+            last_modified_cursor: maxCursor,
+            last_full_scan_at: new Date().toISOString(),
+            baseline_done: 1
+        });
+
+        this.log(`✅ Baseline terminé: ${folder.name} (${totalFetched} items traités)`, 'SUCCESS');
+    }
+
+    async incrementalSyncFolder(folder) {
+        const state = this.safeGetFolderSyncState(folder);
+        const cursorStr = state?.last_modified_cursor || null;
+        const cursor = cursorStr ? new Date(cursorStr) : null;
+
+        const res = await this.outlookConnector.getFolderEmails(folder.path, {
+            limit: 1000,
+            allItems: true,
+            useLastModificationTime: true,
+            modifiedSince: cursor && !Number.isNaN(cursor.getTime()) ? cursor : null,
+            storeId: folder.storeId || folder.store_id,
+            storeName: folder.storeName || folder.store_name,
+            folderEntryId: folder.entryId || folder.entry_id
+        });
+
+        if (!res || res.success === false) {
+            throw new Error(res?.error || 'Sync incrémentale PowerShell échouée');
+        }
+
+        const emails = Array.isArray(res.emails) ? res.emails : [];
+        if (emails.length > 0) {
+            for (let i = 0; i < emails.length; i += this.config.syncBatchSize) {
+                const chunk = emails.slice(i, i + this.config.syncBatchSize);
+                await this.processBatch(chunk, folder);
+            }
+        }
+
+        const nextCursor = res.maxLastModificationTime || emails[0]?.LastModificationTime || null;
+        if (nextCursor) {
+            this.safeUpsertFolderSyncState(folder, { last_modified_cursor: nextCursor });
+        }
+
+        return { count: emails.length, cursor: nextCursor };
     }
 
     /**
@@ -1169,63 +1291,21 @@ class UnifiedMonitoringService extends EventEmitter {
         try {
             this.log(`📁 Synchronisation du dossier: ${folder.name}`, 'SYNC');
             
-            // DEBUG: Afficher les valeurs exactes
-            console.log(`🔍 DEBUG folder.path: "${folder.path}"`);
-            console.log(`🔍 DEBUG folder.name: "${folder.name}"`);
-
-            // Récupérer tous les emails du dossier avec gestion d'erreur (inclure IDs pour meilleure résolution)
-            let emails = [];
-            try {
-                const emailsResult = await this.outlookConnector.getFolderEmails(folder.path, {
-                    storeId: folder.storeId || folder.store_id,
-                    storeName: folder.storeName || folder.store_name,
-                    folderEntryId: folder.entryId || folder.entry_id
-                });
-                
-                // getFolderEmails retourne un objet avec une propriété emails ou Emails
-                if (emailsResult && emailsResult.success && emailsResult.emails && Array.isArray(emailsResult.emails)) {
-                    emails = emailsResult.emails;
-                } else if (emailsResult && emailsResult.Emails && Array.isArray(emailsResult.Emails)) {
-                    emails = emailsResult.Emails;
-                } else if (Array.isArray(emailsResult)) {
-                    emails = emailsResult;
-                } else if (emailsResult && emailsResult.error) {
-                    // Dossier inexistant ou erreur d'accès - ne pas spam les logs
-                    if (emailsResult.error.includes('non trouve') || emailsResult.error.includes('not found')) {
-                        this.log(`ℹ️ Dossier "${folder.name}" non trouvé dans Outlook`, 'INFO');
-                    } else {
-                        this.log(`⚠️ Erreur accès dossier ${folder.name}: ${emailsResult.error}`, 'WARNING');
-                    }
-                    emails = [];
-                } else {
-                    this.log(`⚠️ Format de retour inattendu pour ${folder.name}: ${typeof emailsResult}`, 'WARNING');
-                    this.log(`⚠️ Structure reçue:`, 'WARNING', emailsResult ? Object.keys(emailsResult) : 'null');
-                    emails = [];
-                }
-            } catch (error) {
-                this.log(`⚠️ Erreur récupération emails pour ${folder.name}: ${error.message}`, 'WARNING');
-                emails = [];
+            if (this.config.enableDetailedLogging) {
+                console.log(`🔍 DEBUG folder.path: "${folder.path}"`);
+                console.log(`🔍 DEBUG folder.name: "${folder.name}"`);
             }
-            
-            this.log(`📧 ${emails.length} emails trouvés dans ${folder.name}`, 'INFO');
 
-            // Traiter les emails par batch si on en a
-            if (emails.length > 0) {
-                const batchSize = this.config.syncBatchSize;
-                for (let i = 0; i < emails.length; i += batchSize) {
-                    const batch = emails.slice(i, i + batchSize);
-                    await this.processBatch(batch, folder);
-                    
-                    // Émettre un événement de progression
-                    this.emit('sync-progress', {
-                        folder: folder.name,
-                        processed: Math.min(i + batchSize, emails.length),
-                        total: emails.length,
-                        percentage: Math.round((Math.min(i + batchSize, emails.length) / emails.length) * 100)
-                    });
-                }
+            const state = this.safeGetFolderSyncState(folder);
+            const baselineDone = state && Number(state.baseline_done) === 1;
+
+            if (!baselineDone) {
+                await this.baselineSyncFolder(folder);
             } else {
-                this.log(`ℹ️ Aucun email à traiter pour ${folder.name}`, 'INFO');
+                const inc = await this.incrementalSyncFolder(folder);
+                if (inc && inc.count > 0) {
+                    this.log(`📧 ${inc.count} changement(s) appliqué(s) dans ${folder.name}`, 'INFO');
+                }
             }
 
             this.log(`✅ Dossier ${folder.name} synchronisé`, 'SUCCESS');
@@ -1338,7 +1418,7 @@ class UnifiedMonitoringService extends EventEmitter {
             }
             
             // Traiter les batches en parallèle (max 3 en même temps)
-            const concurrency = 3;
+            const concurrency = Math.max(1, Number(this.config.maxConcurrentBatches) || 1);
             for (let i = 0; i < batches.length; i += concurrency) {
                 const currentBatches = batches.slice(i, i + concurrency);
                 await Promise.all(
@@ -1405,7 +1485,9 @@ class UnifiedMonitoringService extends EventEmitter {
                         folder_name: folder.path,
                         category: folder.category || folder.type,
                         is_read: emailData.UnRead !== undefined ? !emailData.UnRead : (emailData.isRead ?? existingEmail.is_read ?? false),
-                        is_treated: existingEmail.is_treated || 0
+                        is_treated: existingEmail.is_treated || 0,
+                        internet_message_id: emailData.InternetMessageId || emailData.internet_message_id || emailData.internetMessageId || '',
+                        last_modified_time: emailData.LastModificationTime || emailData.last_modified_time || emailData.lastModifiedTime || ''
                     };
                     await this.dbService.saveEmail(saveRecord);
                     this.stats.emailsUpdated++;
@@ -1489,7 +1571,9 @@ class UnifiedMonitoringService extends EventEmitter {
                 is_read: emailData.UnRead !== undefined ? !emailData.UnRead : (emailData.isRead || false),
                 folder_name: folder.path,
                 category: folder.category || folder.type,
-                is_treated: false
+                is_treated: false,
+                internet_message_id: emailData.InternetMessageId || emailData.internet_message_id || emailData.internetMessageId || '',
+                last_modified_time: emailData.LastModificationTime || emailData.last_modified_time || emailData.lastModifiedTime || ''
             };
             
             await this.dbService.insertEmail(emailRecord);

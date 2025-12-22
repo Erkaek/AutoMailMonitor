@@ -61,6 +61,9 @@ class OutlookConnector extends EventEmitter {
     // Cache dédié aux structures (Store -> arbre inbox) pour éviter les PowerShell répétés
     this._folderStructCache = new Map();
     this._folderStructureTtlMs = 600000; // 10 minutes
+
+    // Anti-duplication des récupérations d'emails (évite des PowerShell doublés)
+    this._inflightFolderEmails = new Map();
     
     // Détection de blocage Outlook
     this._outlookHealthy = true;
@@ -2064,9 +2067,23 @@ class OutlookConnector extends EventEmitter {
       }
       
       console.log(`🎧 [REALTIME] Activation monitoring PowerShell pour: ${folderPath}`);
+
+      const monitoringIntervalMs = Number.isFinite(options.monitoringIntervalMs)
+        ? Math.max(10000, Number(options.monitoringIntervalMs))
+        : 60000; // 60s par défaut pour réduire la charge CPU
+
+      const monitoringMaxItems = Number.isFinite(options.monitoringMaxItems)
+        ? Math.max(10, Number(options.monitoringMaxItems))
+        : 200;
+
+      // Fenêtre initiale: raisonnable pour détecter du nouveau sans rebalayer 365j
+      const initialSince = new Date(Date.now() - (48 * 3600000));
       
       // Stocker l'état initial du dossier pour détecter les changements
       const initialEmails = await this.getFolderEmails(folderPath, {
+        limit: monitoringMaxItems,
+        since: initialSince,
+        expressMode: true,
         storeId: options.storeId,
         storeName: options.storeName,
         folderEntryId: options.folderEntryId
@@ -2079,13 +2096,15 @@ class OutlookConnector extends EventEmitter {
       // Créer un état de base pour ce dossier
       const folderState = {
         path: folderPath,
-        lastCount: initialEmails.count,
+        lastCount: Number.isFinite(initialEmails.totalInFolder) ? Number(initialEmails.totalInFolder) : initialEmails.count,
         lastCheck: new Date(),
         emails: new Map(), // EntryID -> email info
         opts: {
           storeId: options.storeId,
           storeName: options.storeName,
-          folderEntryId: options.folderEntryId
+          folderEntryId: options.folderEntryId,
+          monitoringIntervalMs,
+          monitoringMaxItems
         }
       };
       
@@ -2111,7 +2130,7 @@ class OutlookConnector extends EventEmitter {
         } catch (error) {
           console.error(`❌ Erreur monitoring ${folderPath}:`, error.message);
         }
-      }, 30000); // Vérifier toutes les 30 secondes
+      }, monitoringIntervalMs);
       
       // Stocker l'interval pour pouvoir l'arrêter plus tard
       if (!this.monitoringIntervals) {
@@ -2122,7 +2141,7 @@ class OutlookConnector extends EventEmitter {
       const result = {
         success: true,
         folderPath: folderPath,
-        message: `Monitoring temps réel activé (vérification toutes les 30s)`,
+        message: `Monitoring temps réel activé (vérification toutes les ${Math.round(monitoringIntervalMs / 1000)}s)`,
         timestamp: new Date().toISOString(),
         initialCount: initialEmails.count
       };
@@ -2157,7 +2176,18 @@ class OutlookConnector extends EventEmitter {
       }
       
       const folderState = this.monitoringStates.get(folderPath);
+
+      // Ne récupérer que du récent pour le monitoring (évite gros CPU + PowerShell longs)
+      const lastCheckMs = folderState.lastCheck instanceof Date ? folderState.lastCheck.getTime() : Date.now();
+      const since = new Date(Math.max(0, lastCheckMs - 5 * 60 * 1000)); // marge 5 min
+      const monitoringMaxItems = Number.isFinite(folderState?.opts?.monitoringMaxItems)
+        ? Math.max(10, Number(folderState.opts.monitoringMaxItems))
+        : 200;
+
       const currentEmails = await this.getFolderEmails(folderPath, {
+        limit: monitoringMaxItems,
+        since,
+        expressMode: true,
         storeId: folderState?.opts?.storeId,
         storeName: folderState?.opts?.storeName,
         folderEntryId: folderState?.opts?.folderEntryId
@@ -2168,18 +2198,19 @@ class OutlookConnector extends EventEmitter {
         return;
       }
       
-      // Détecter les changements de nombre
-      if (currentEmails.count !== folderState.lastCount) {
-        console.log(`📊 [MONITORING] Changement détecté ${folderPath}: ${folderState.lastCount} -> ${currentEmails.count}`);
+      // Détecter les changements de nombre global (utiliser totalInFolder, indépendant du filtre)
+      const currentTotal = Number.isFinite(currentEmails.totalInFolder) ? Number(currentEmails.totalInFolder) : currentEmails.count;
+      if (currentTotal !== folderState.lastCount) {
+        console.log(`📊 [MONITORING] Changement détecté ${folderPath}: ${folderState.lastCount} -> ${currentTotal}`);
         
         this.emit('folderCountChanged', {
           folderPath: folderPath,
           oldCount: folderState.lastCount,
-          newCount: currentEmails.count,
+          newCount: currentTotal,
           timestamp: new Date().toISOString()
         });
         
-        folderState.lastCount = currentEmails.count;
+        folderState.lastCount = currentTotal;
       }
       
       // Détecter les nouveaux emails
@@ -2221,23 +2252,17 @@ class OutlookConnector extends EventEmitter {
           }
         }
       });
-      
-      // Détecter les emails supprimés
-      for (const [entryId, oldEmail] of folderState.emails) {
-        if (!currentEmailMap.has(entryId)) {
-          console.log(`🗑️ [MONITORING] Email supprimé: ${oldEmail.subject}`);
-          
-          this.emit('emailDeleted', {
-            folderPath: folderPath,
-            entryId: entryId,
-            subject: oldEmail.subject,
-            timestamp: new Date().toISOString()
-          });
-        }
+
+      // Mettre à jour l'état (borner la mémoire: on garde un historique récent)
+      // On merge l'ancien + le récent, puis on limite à 1000 IDs.
+      const merged = new Map(folderState.emails);
+      for (const [k, v] of currentEmailMap) { merged.set(k, v); }
+      if (merged.size > 1000) {
+        const keys = Array.from(merged.keys());
+        const toDrop = keys.slice(0, merged.size - 1000);
+        for (const k of toDrop) { merged.delete(k); }
       }
-      
-      // Mettre à jour l'état
-      folderState.emails = currentEmailMap;
+      folderState.emails = merged;
       folderState.lastCheck = new Date();
       
     } catch (error) {
@@ -2306,21 +2331,39 @@ class OutlookConnector extends EventEmitter {
    * EMAILS: Récupération des emails d'un dossier
    */
   async getFolderEmails(folderPath, options = {}) {
-    try {
-      console.log(`📧 Récupération emails du dossier: ${folderPath}`);
+    const doFetch = async () => {
+      try {
+        if (this.config?.enableDetailedLogs) {
+          console.log(`📧 Récupération emails du dossier: ${folderPath}`);
+        }
 
       if (!folderPath || typeof folderPath !== 'string') {
         throw new Error('Chemin de dossier invalide');
       }
 
       const opts = (typeof options === 'object' && !Array.isArray(options)) ? options : { limit: options };
-      const limit = Number.isFinite(opts.limit) ? Math.max(1, Number(opts.limit)) : (Number.isFinite(options) ? Math.max(1, Number(options)) : 200);
+      const defaultLimit = 1000;
+      const limit = Number.isFinite(opts.limit) ? Math.max(1, Number(opts.limit)) : (Number.isFinite(options) ? Math.max(1, Number(options)) : defaultLimit);
 
-      let hoursBack = 72;
+      const useLastModificationTime = Boolean(
+        opts.useLastModificationTime ||
+        opts.useModifiedTime ||
+        opts.modifiedSince ||
+        opts.modifiedBefore
+      );
+      const allItems = Boolean(opts.allItems || opts.includeAll || opts.fullScan);
+
+      // Par défaut: 365 jours (8760 heures)
+      let hoursBack = 365 * 24;
       if (opts.since instanceof Date && !Number.isNaN(opts.since.getTime())) {
         hoursBack = Math.max(1, Math.ceil((Date.now() - opts.since.getTime()) / 3600000));
       } else if (opts.expressMode) {
         hoursBack = 48;
+      }
+
+      // Mode baseline/incrémental (LastModificationTime) ou full scan: ignorer ReceivedTime.
+      if (useLastModificationTime || allItems) {
+        hoursBack = 0;
       }
 
       const unreadOnly = Boolean(opts.unreadOnly || opts.onlyUnread);
@@ -2335,7 +2378,21 @@ class OutlookConnector extends EventEmitter {
       if (opts.storeName) { args.push('-StoreName', String(opts.storeName)); }
       if (opts.folderEntryId) { args.push('-FolderEntryId', String(opts.folderEntryId)); }
 
-      const raw = await this.execPowerShellFile(psPath, args, 120000);
+      if (allItems) { args.push('-AllItems'); }
+      if (useLastModificationTime) { args.push('-UseLastModificationTime'); }
+      if (opts.modifiedSince instanceof Date && !Number.isNaN(opts.modifiedSince.getTime())) {
+        args.push('-ModifiedSince', opts.modifiedSince.toISOString());
+      } else if (typeof opts.modifiedSince === 'string' && opts.modifiedSince.trim()) {
+        args.push('-ModifiedSince', opts.modifiedSince.trim());
+      }
+      if (opts.modifiedBefore instanceof Date && !Number.isNaN(opts.modifiedBefore.getTime())) {
+        args.push('-ModifiedBefore', opts.modifiedBefore.toISOString());
+      } else if (typeof opts.modifiedBefore === 'string' && opts.modifiedBefore.trim()) {
+        args.push('-ModifiedBefore', opts.modifiedBefore.trim());
+      }
+
+      const timeoutMs = Number.isFinite(this.settings?.exchange?.timeoutMs) ? Number(this.settings.exchange.timeoutMs) : 240000;
+      const raw = await this.execPowerShellFile(psPath, args, timeoutMs);
       const parsed = OutlookConnector.parseJsonOutput(raw) || {};
 
       if (!parsed.success) {
@@ -2344,20 +2401,60 @@ class OutlookConnector extends EventEmitter {
 
       const emails = Array.isArray(parsed.emails) ? parsed.emails : (Array.isArray(parsed.Emails) ? parsed.Emails : []);
       const count = emails.length;
-      try { console.log(`✅ [OUTLOOK] ${count} emails récupérés pour ${folderPath} (limit=${limit}, hoursBack=${hoursBack}${unreadOnly ? ', unreadOnly' : ''})`); } catch {}
+      if (this.config?.enableDetailedLogs) {
+        try { console.log(`✅ [OUTLOOK] ${count} emails récupérés pour ${folderPath} (limit=${limit}, hoursBack=${hoursBack}${unreadOnly ? ', unreadOnly' : ''})`); } catch {}
+      }
       return Object.assign({ emails, count }, parsed);
 
-    } catch (error) {
-      console.error(`❌ Erreur récupération emails ${folderPath}:`, error.message);
-      return {
-        success: false,
-        folderPath,
-        emails: [],
-        count: 0,
-        error: error.message,
-        message: 'Erreur récupération emails',
-        timestamp: new Date().toISOString()
-      };
+      } catch (error) {
+        console.error(`❌ Erreur récupération emails ${folderPath}:`, error.message);
+        return {
+          success: false,
+          folderPath,
+          emails: [],
+          count: 0,
+          error: error.message,
+          message: 'Erreur récupération emails',
+          timestamp: new Date().toISOString()
+        };
+      }
+    };
+
+    // Dedupe in-flight (même dossier / mêmes paramètres)
+    const safeOpts = (typeof options === 'object' && options && !Array.isArray(options)) ? options : {};
+    const unreadOnly = Boolean(safeOpts.unreadOnly || safeOpts.onlyUnread);
+    const limitKey = Number.isFinite(safeOpts.limit) ? String(safeOpts.limit) : '';
+    const sinceKey = (safeOpts.since instanceof Date && !Number.isNaN(safeOpts.since.getTime())) ? String(safeOpts.since.getTime()) : '';
+    const expressKey = safeOpts.expressMode ? '1' : '0';
+    const allKey = (safeOpts.allItems || safeOpts.includeAll || safeOpts.fullScan) ? '1' : '0';
+    const useModKey = (safeOpts.useLastModificationTime || safeOpts.useModifiedTime || safeOpts.modifiedSince || safeOpts.modifiedBefore) ? '1' : '0';
+    const modSinceKey = (safeOpts.modifiedSince instanceof Date && !Number.isNaN(safeOpts.modifiedSince.getTime())) ? String(safeOpts.modifiedSince.getTime()) : (typeof safeOpts.modifiedSince === 'string' ? safeOpts.modifiedSince : '');
+    const modBeforeKey = (safeOpts.modifiedBefore instanceof Date && !Number.isNaN(safeOpts.modifiedBefore.getTime())) ? String(safeOpts.modifiedBefore.getTime()) : (typeof safeOpts.modifiedBefore === 'string' ? safeOpts.modifiedBefore : '');
+    const key = [
+      safeOpts.storeId || '',
+      safeOpts.folderEntryId || '',
+      safeOpts.storeName || '',
+      folderPath || '',
+      unreadOnly ? '1' : '0',
+      limitKey,
+      sinceKey,
+      expressKey,
+      allKey,
+      useModKey,
+      modSinceKey,
+      modBeforeKey
+    ].join('|');
+
+    if (this._inflightFolderEmails.has(key)) {
+      return await this._inflightFolderEmails.get(key);
+    }
+
+    const promise = doFetch();
+    this._inflightFolderEmails.set(key, promise);
+    try {
+      return await promise;
+    } finally {
+      this._inflightFolderEmails.delete(key);
     }
   }
 

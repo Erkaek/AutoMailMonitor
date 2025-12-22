@@ -1246,6 +1246,23 @@ async function apiFoldersAddImpl({ folderPath, category, storeId: payloadStoreId
       throw e;
     }
 
+    // Marquer le dossier comme nécessitant un baseline scan (cursor persistent)
+    try {
+      if (typeof dbRef.upsertFolderSyncState === 'function') {
+        dbRef.upsertFolderSyncState({
+          folder_path: folderPath,
+          store_id: payloadStoreId || null,
+          entry_id: payloadEntryId || null,
+          store_name: payloadStoreName || null,
+          baseline_done: 0,
+          last_modified_cursor: null,
+          last_full_scan_at: null
+        });
+      }
+    } catch (e) {
+      console.warn('⚠️ [ADD] upsertFolderSyncState failed:', e?.message || e);
+    }
+
     try { cacheService.invalidateFoldersConfig(); } catch {}
 
     console.log(`✅ [ADD] ${inserted} dossier sélectionné ajouté`);
@@ -1320,6 +1337,27 @@ ipcMain.handle('api-folders-add-bulk', async (_event, payload) => {
     const resBatch = (typeof dbRef.addFolderConfigurationsBatch === 'function')
       ? dbRef.addFolderConfigurationsBatch(rows)
       : { inserted: 0, unique: 0, error: 'addFolderConfigurationsBatch indisponible' };
+
+    // Préparer folder_sync_state pour baseline scan
+    try {
+      if (typeof dbRef.upsertFolderSyncState === 'function') {
+        for (const r of rows) {
+          try {
+            dbRef.upsertFolderSyncState({
+              folder_path: r.folder_path,
+              store_id: r.store_id || null,
+              entry_id: r.entry_id || null,
+              store_name: r.store_name || null,
+              baseline_done: 0,
+              last_modified_cursor: null,
+              last_full_scan_at: null
+            });
+          } catch {}
+        }
+      }
+    } catch (e) {
+      console.warn('⚠️ [BULK-ADD] upsertFolderSyncState failed:', e?.message || e);
+    }
 
     try { cacheService.invalidateFoldersConfig(); } catch {}
 

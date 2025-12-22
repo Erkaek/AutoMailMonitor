@@ -3,9 +3,13 @@ param(
     [string]$StoreName = "",
     [string]$FolderEntryId = "",
     [string]$FolderPath = "",
-    [int]$MaxItems = 200,
-    [int]$HoursBack = 72,
-    [switch]$UnreadOnly
+    [int]$MaxItems = 1000,
+    [int]$HoursBack = 8760,
+    [switch]$UnreadOnly,
+    [switch]$AllItems,
+    [switch]$UseLastModificationTime,
+    [string]$ModifiedSince = "",
+    [string]$ModifiedBefore = ""
 )
 
 $enc = New-Object System.Text.UTF8Encoding $false
@@ -143,13 +147,33 @@ try {
     $items = $targetFolder.Items
     $totalCount = 0; try { $totalCount = [int]$items.Count } catch {}
 
-    # Filtre temporel / unread
+    # Filtrage / tri
     $filters = @()
-    if ($HoursBack -gt 0) {
-        $from = (Get-Date).ToUniversalTime().AddHours(-1 * [double]$HoursBack)
-        $fromStr = $from.ToString("yyyy-MM-dd HH:mm")
-        $filters += "[ReceivedTime] >= '$fromStr'"
+
+    $useModified = $false
+    if ($UseLastModificationTime.IsPresent) { $useModified = $true }
+    if ($ModifiedSince -and $ModifiedSince.Trim() -ne '') { $useModified = $true }
+    if ($ModifiedBefore -and $ModifiedBefore.Trim() -ne '') { $useModified = $true }
+
+    if ($useModified) {
+        $sinceDt = Try-ParseDate $ModifiedSince
+        $beforeDt = Try-ParseDate $ModifiedBefore
+        if ($sinceDt) {
+            $sinceStr = $sinceDt.ToString("yyyy-MM-dd HH:mm")
+            $filters += "[LastModificationTime] >= '$sinceStr'"
+        }
+        if ($beforeDt) {
+            $beforeStr = $beforeDt.ToString("yyyy-MM-dd HH:mm")
+            $filters += "[LastModificationTime] < '$beforeStr'"
+        }
+    } else {
+        if (-not $AllItems.IsPresent -and $HoursBack -gt 0) {
+            $from = (Get-Date).AddHours(-1 * [double]$HoursBack)
+            $fromStr = $from.ToString("yyyy-MM-dd HH:mm")
+            $filters += "[ReceivedTime] >= '$fromStr'"
+        }
     }
+
     if ($UnreadOnly.IsPresent) {
         $filters += "[Unread] = True"
     }
@@ -159,25 +183,42 @@ try {
         try { $items = $items.Restrict($filter) } catch {}
     }
 
-    try { $items.Sort("[ReceivedTime]", $true) } catch {}
+    if ($useModified) {
+        try { $items.Sort("[LastModificationTime]", $true) } catch {}
+    } else {
+        try { $items.Sort("[ReceivedTime]", $true) } catch {}
+    }
 
     $upper = $MaxItems
     try { if ($items.Count -lt $upper) { $upper = [int]$items.Count } } catch {}
     if ($upper -lt 0) { $upper = 0 }
 
     $list = @()
+    $maxLmt = $null
+    $minLmt = $null
     for ($i = 1; $i -le $upper; $i++) {
         try {
             $m = $items.Item($i)
             if ($m -and $m.Class -eq 43) {
                 $received = $null
                 try { $received = $m.ReceivedTime.ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ") } catch { $received = "" }
+                $lmt = $null
+                try { $lmt = $m.LastModificationTime.ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ") } catch { $lmt = "" }
+                $imid = $null
+                try { $imid = [string]$m.InternetMessageID } catch { $imid = "" }
+
+                if ($lmt -and $lmt.Trim() -ne '') {
+                    if (-not $maxLmt) { $maxLmt = $lmt }
+                    $minLmt = $lmt
+                }
                 $list += @([ordered]@{
                     Subject = if($m.Subject){$m.Subject}else{""}
                     SenderName = if($m.SenderName){$m.SenderName}else{""}
                     SenderEmailAddress = if($m.SenderEmailAddress){$m.SenderEmailAddress}else{""}
                     ReceivedTime = $received
+                    LastModificationTime = $lmt
                     EntryID = $m.EntryID
+                    InternetMessageId = if($imid){$imid}else{""}
                     UnRead = $m.UnRead
                     Importance = $m.Importance
                     Categories = if($m.Categories){$m.Categories}else{""}
@@ -202,6 +243,9 @@ try {
         emails = $list
         count = $list.Count
         totalInFolder = $totalCount
+        hasMore = $false
+        maxLastModificationTime = $maxLmt
+        minLastModificationTime = $minLmt
         folderName = $folderNameOut
         folderPath = $folderPathOut
         storeName = $storeNameOut
@@ -209,9 +253,26 @@ try {
         timestamp = (Get-Date).ToString("yyyy-MM-ddTHH:mm:ssZ")
     }
 
+    try {
+        $filteredCount = 0
+        try { $filteredCount = [int]$items.Count } catch { $filteredCount = 0 }
+        if ($filteredCount -gt $upper) { $res.hasMore = $true }
+    } catch {}
+
     $res | ConvertTo-Json -Depth 6 -Compress | Write-Output
 
 } catch {
     $err = $_.Exception.Message
     @{ success = $false; error = $err; emails = @(); count = 0; totalInFolder = 0 } | ConvertTo-Json -Depth 4 -Compress | Write-Output
+}
+
+function Try-ParseDate([string]$s) {
+    try {
+        if (-not $s) { return $null }
+        $t = $s.Trim()
+        if ($t -eq '') { return $null }
+        return [DateTime]::Parse($t, [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::AssumeUniversal).ToLocalTime()
+    } catch {
+        return $null
+    }
 }
