@@ -11,15 +11,12 @@
 !macro customInit
   !define _cid ${__LINE__}
 
-  ; Only for per-user installs (requested: C:\Users\%username%\Documents)
-  StrCmp $installMode "CurrentUser" 0 customInitDone_${_cid}
-
-  ; If a previous per-user install exists, keep that location.
-  ; (Variable comes from multiUser.nsh)
+  ; Si une ancienne installation "CurrentUser" existe, conserver son emplacement.
   StrCmp $perUserInstallationFolder "" 0 customInitDone_${_cid}
 
-  ; Set default to Documents\<ProductName>
-  StrCpy $INSTDIR "$DOCUMENTS\\${PRODUCT_NAME}"
+  ; Sinon, forcer le dossier par défaut dans Documents (pas AppData\Local\Programs).
+  ; On utilise APP_FILENAME pour rester cohérent avec la logique NSIS (et éviter les doubles sous-dossiers).
+  StrCpy $INSTDIR "$DOCUMENTS\\${APP_FILENAME}"
 
 customInitDone_${_cid}:
   !undef _cid

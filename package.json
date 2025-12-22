@@ -1,6 +1,6 @@
 {
   "name": "mailmonitor",
-  "version": "0.10.4",
+  "version": "0.10.5",
   "description": "Application de monitoring des emails Outlook avec interface moderne",
   "main": "src/main/index.js",
   "scripts": { 
@@ -95,7 +95,8 @@
     },
     "nsis": {
       "oneClick": false,
-      "allowToChangeInstallationDirectory": true
+      "allowToChangeInstallationDirectory": true,
+      "include": "build/installer.nsh"
     }
   }
 }
