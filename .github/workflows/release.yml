@@ -12,9 +12,6 @@ jobs:
     env:
       ELECTRON_BUILDER_DEBUG: true
       NPM_CONFIG_LOGLEVEL: info
-      # Caches pour éviter de re-télécharger Electron / artefacts builder à chaque run
-      ELECTRON_CACHE: ${{ runner.temp }}/electron-cache
-      ELECTRON_BUILDER_CACHE: ${{ runner.temp }}/electron-builder-cache
       CODE_SIGNING_CERT_BASE64: ${{ secrets.CODE_SIGNING_CERT_BASE64 }}
       CODE_SIGNING_CERT_PASSWORD: ${{ secrets.CODE_SIGNING_CERT_PASSWORD }}
       PRIVATE_UPDATER_TOKEN: ${{ secrets.PRIVATE_UPDATER_TOKEN }}
@@ -29,6 +26,17 @@ jobs:
         with:
           node-version: 20
           cache: 'npm'
+
+      - name: Set Electron cache paths
+        shell: powershell
+        run: |
+          # RUNNER_TEMP est fourni par GitHub Actions sur Windows
+          $electronCache = Join-Path $env:RUNNER_TEMP 'electron-cache'
+          $builderCache = Join-Path $env:RUNNER_TEMP 'electron-builder-cache'
+          "ELECTRON_CACHE=$electronCache" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "ELECTRON_BUILDER_CACHE=$builderCache" | Out-File -FilePath $env:GITHUB_ENV -Append
+          Write-Host "ELECTRON_CACHE=$electronCache"
+          Write-Host "ELECTRON_BUILDER_CACHE=$builderCache"
 
       - name: Cache Electron downloads
         uses: actions/cache@v4
