@@ -877,6 +877,62 @@
         <div class="tab-pane fade" id="personal-performance">
           <div class="pane-scroll">
 
+          <!-- Filtres / Personnalisation -->
+          <div class="card border-0 shadow-sm mb-4">
+            <div class="card-body">
+              <div class="row g-3 align-items-end">
+                <div class="col-12 col-lg-3">
+                  <label class="form-label">Période</label>
+                  <select class="form-select" id="pp-period-mode">
+                    <option value="last-6">6 dernières semaines</option>
+                    <option value="last-13">13 dernières semaines</option>
+                    <option value="last-26">26 dernières semaines</option>
+                    <option value="last-52">52 dernières semaines</option>
+                    <option value="year">Année</option>
+                  </select>
+                </div>
+
+                <div class="col-12 col-lg-2" id="pp-year-wrap" style="display:none;">
+                  <label class="form-label">Année</label>
+                  <select class="form-select" id="pp-year">
+                    <option value="">--</option>
+                  </select>
+                </div>
+
+                <div class="col-12 col-lg-5">
+                  <label class="form-label">Catégories</label>
+                  <div class="d-flex flex-wrap gap-3">
+                    <div class="form-check">
+                      <input class="form-check-input" type="checkbox" id="pp-cat-declarations" checked>
+                      <label class="form-check-label" for="pp-cat-declarations">Déclarations</label>
+                    </div>
+                    <div class="form-check">
+                      <input class="form-check-input" type="checkbox" id="pp-cat-reglements" checked>
+                      <label class="form-check-label" for="pp-cat-reglements">Règlements</label>
+                    </div>
+                    <div class="form-check">
+                      <input class="form-check-input" type="checkbox" id="pp-cat-mails" checked>
+                      <label class="form-check-label" for="pp-cat-mails">Mails simples</label>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="col-12 col-lg-2">
+                  <label class="form-label">Options</label>
+                  <div class="form-check form-switch">
+                    <input class="form-check-input" type="checkbox" id="pp-include-adg">
+                    <label class="form-check-label" for="pp-include-adg">Inclure ADG</label>
+                  </div>
+                </div>
+              </div>
+
+              <div class="mt-3 d-flex align-items-center justify-content-between">
+                <div class="small text-muted">Astuce: utilise “Année” pour préparer un rapport annuel (KPI + graphiques + tableau filtrés).</div>
+                <span class="badge bg-secondary" id="pp-period-badge">--</span>
+              </div>
+            </div>
+          </div>
+
           <!-- KPIs principaux -->
           <div class="row g-3 mb-4">
             <div class="col-md-4">
@@ -930,7 +986,7 @@
                         </tr>
                       </thead>
                       <tbody id="personal-history-body">
-                        <tr><td colspan="4" class="text-center text-muted py-3">Chargement...</td></tr>
+                        <tr><td colspan="5" class="text-center text-muted py-3">Chargement...</td></tr>
                       </tbody>
                     </table>
                   </div>

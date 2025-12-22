@@ -57,6 +57,79 @@ class MailMonitor {
     this.init();
   }
 
+  // ---------- Performances personnelles: filtres ----------
+  getPersonalPerformanceFilters() {
+    const defaults = {
+      periodMode: 'last-6',
+      year: null,
+      categories: {
+        declarations: true,
+        reglements: true,
+        mails: true
+      },
+      includeAdg: false
+    };
+
+    let stored = null;
+    try {
+      stored = JSON.parse(localStorage.getItem('ppFilters') || 'null');
+    } catch (_) {
+      stored = null;
+    }
+
+    const merged = {
+      ...defaults,
+      ...(stored || {}),
+      categories: {
+        ...defaults.categories,
+        ...((stored && stored.categories) || {})
+      }
+    };
+
+    const periodModeEl = document.getElementById('pp-period-mode');
+    const yearEl = document.getElementById('pp-year');
+    const decEl = document.getElementById('pp-cat-declarations');
+    const regEl = document.getElementById('pp-cat-reglements');
+    const mailEl = document.getElementById('pp-cat-mails');
+    const includeAdgEl = document.getElementById('pp-include-adg');
+
+    const periodMode = periodModeEl?.value || merged.periodMode;
+    const year = (yearEl?.value && String(yearEl.value).trim() !== '') ? Number(yearEl.value) : (merged.year || null);
+    const categories = {
+      declarations: decEl ? !!decEl.checked : !!merged.categories.declarations,
+      reglements: regEl ? !!regEl.checked : !!merged.categories.reglements,
+      mails: mailEl ? !!mailEl.checked : !!merged.categories.mails
+    };
+    const includeAdg = includeAdgEl ? !!includeAdgEl.checked : !!merged.includeAdg;
+
+    return { periodMode, year, categories, includeAdg };
+  }
+
+  applyPersonalPerformanceFiltersToUI(filters) {
+    const periodModeEl = document.getElementById('pp-period-mode');
+    const yearEl = document.getElementById('pp-year');
+    const yearWrapEl = document.getElementById('pp-year-wrap');
+    const decEl = document.getElementById('pp-cat-declarations');
+    const regEl = document.getElementById('pp-cat-reglements');
+    const mailEl = document.getElementById('pp-cat-mails');
+    const includeAdgEl = document.getElementById('pp-include-adg');
+
+    if (periodModeEl && filters.periodMode) periodModeEl.value = filters.periodMode;
+    const isYear = (filters.periodMode === 'year');
+    if (yearWrapEl) yearWrapEl.style.display = isYear ? '' : 'none';
+    if (yearEl && filters.year) yearEl.value = String(filters.year);
+    if (decEl) decEl.checked = !!filters.categories?.declarations;
+    if (regEl) regEl.checked = !!filters.categories?.reglements;
+    if (mailEl) mailEl.checked = !!filters.categories?.mails;
+    if (includeAdgEl) includeAdgEl.checked = !!filters.includeAdg;
+  }
+
+  persistPersonalPerformanceFilters(filters) {
+    try {
+      localStorage.setItem('ppFilters', JSON.stringify(filters));
+    } catch (_) {}
+  }
+
   // === INITIALISATION ===
   async init() {
     console.log('🚀 Initialisation de Mail Monitor...');
@@ -983,6 +1056,28 @@ class MailMonitor {
         }
       });
     });
+
+    // Performances personnelles - filtres
+    const ppPeriod = document.getElementById('pp-period-mode');
+    const ppYear = document.getElementById('pp-year');
+    const ppDec = document.getElementById('pp-cat-declarations');
+    const ppReg = document.getElementById('pp-cat-reglements');
+    const ppMail = document.getElementById('pp-cat-mails');
+    const ppAdg = document.getElementById('pp-include-adg');
+    const onPPChange = async () => {
+      const filters = this.getPersonalPerformanceFilters();
+      // Toggle year selector visibility immediately
+      const yearWrapEl = document.getElementById('pp-year-wrap');
+      if (yearWrapEl) yearWrapEl.style.display = (filters.periodMode === 'year') ? '' : 'none';
+      this.persistPersonalPerformanceFilters(filters);
+      await this.loadPersonalPerformance?.();
+    };
+    ppPeriod?.addEventListener('change', onPPChange);
+    ppYear?.addEventListener('change', onPPChange);
+    ppDec?.addEventListener('change', onPPChange);
+    ppReg?.addEventListener('change', onPPChange);
+    ppMail?.addEventListener('change', onPPChange);
+    ppAdg?.addEventListener('change', onPPChange);
     
     // Emails - Event listeners améliorés
     document.getElementById('refresh-emails')?.addEventListener('click', () => this.loadRecentEmails());
@@ -5126,31 +5221,101 @@ class MailMonitor {
    */
   async loadPersonalPerformance() {
     try {
-      // Récupérer les 6 dernières semaines (page 1, pageSize 6)
-      const response = await window.electronAPI.invoke('api-weekly-history', { page: 1, pageSize: 6, limit: 6 });
+      // Appliquer filtres persistés au chargement (si UI présente)
+      const stored = (() => {
+        try { return JSON.parse(localStorage.getItem('ppFilters') || 'null'); } catch (_) { return null; }
+      })();
+      if (stored) this.applyPersonalPerformanceFiltersToUI({
+        periodMode: stored.periodMode || 'last-6',
+        year: stored.year || null,
+        categories: stored.categories || { declarations: true, reglements: true, mails: true },
+        includeAdg: !!stored.includeAdg
+      });
+
+      const filters = this.getPersonalPerformanceFilters();
+
+      // Charger assez de semaines pour couvrir une année complète (et quelques années si besoin)
+      const fetchSize = (filters.periodMode === 'year') ? 260 : 80;
+      const response = await window.electronAPI.invoke('api-weekly-history', { page: 1, pageSize: fetchSize, limit: fetchSize });
       if (!response?.success) return;
 
-      const weeks = Array.isArray(response.data) ? response.data : [];
+      const allWeeks = Array.isArray(response.data) ? response.data : [];
+
+      // Remplir la liste d'années disponibles
+      const yearEl = document.getElementById('pp-year');
+      const yearWrapEl = document.getElementById('pp-year-wrap');
+      if (yearWrapEl) yearWrapEl.style.display = (filters.periodMode === 'year') ? '' : 'none';
+      if (yearEl) {
+        const years = Array.from(new Set(allWeeks.map(w => Number(w.week_year)).filter(Boolean))).sort((a, b) => b - a);
+        const currentSelected = (yearEl.value && String(yearEl.value).trim() !== '') ? Number(yearEl.value) : (filters.year || null);
+        yearEl.innerHTML = years.map(y => `<option value="${y}">${y}</option>`).join('') || '<option value="">--</option>';
+        const fallbackYear = years[0] || null;
+        const finalYear = currentSelected && years.includes(currentSelected) ? currentSelected : fallbackYear;
+        if (finalYear) {
+          yearEl.value = String(finalYear);
+          if (filters.periodMode === 'year' && (!filters.year || filters.year !== finalYear)) {
+            const updated = { ...filters, year: finalYear };
+            this.persistPersonalPerformanceFilters(updated);
+          }
+        }
+      }
+
+      // Sélectionner les semaines selon la période
+      let weeks = allWeeks;
+      if (filters.periodMode === 'year') {
+        const y = (document.getElementById('pp-year')?.value && String(document.getElementById('pp-year').value).trim() !== '')
+          ? Number(document.getElementById('pp-year').value)
+          : (filters.year || null);
+        weeks = y ? allWeeks.filter(w => Number(w.week_year) === y) : [];
+      } else {
+        const m = String(filters.periodMode || 'last-6').match(/^last-(\d+)$/);
+        const count = m ? Math.max(1, Math.min(104, parseInt(m[1], 10))) : 6;
+        weeks = allWeeks.slice(0, count);
+      }
+
+      const selectedCategories = new Set([
+        filters.categories?.declarations ? 'Déclarations' : null,
+        filters.categories?.reglements ? 'Règlements' : null,
+        filters.categories?.mails ? 'Mails simples' : null
+      ].filter(Boolean));
       const tableBody = document.getElementById('personal-history-body');
       const weekTitleEl = document.getElementById('personal-week-title');
       const arrivalsEl = document.getElementById('personal-arrivals');
       const treatedEl = document.getElementById('personal-treated');
       const stockEl = document.getElementById('personal-stock');
       const trendEl = document.getElementById('personal-trend');
+      const periodBadgeEl = document.getElementById('pp-period-badge');
 
       if (!tableBody) return;
 
       if (weeks.length === 0) {
-        tableBody.innerHTML = '<tr><td colspan="4" class="text-center text-muted py-3">Aucune donnée</td></tr>';
+        tableBody.innerHTML = '<tr><td colspan="5" class="text-center text-muted py-3">Aucune donnée</td></tr>';
         if (trendEl) { trendEl.className = 'badge bg-secondary'; trendEl.textContent = '--'; }
+        if (periodBadgeEl) periodBadgeEl.textContent = '--';
         return;
+      }
+
+      // Badge période
+      try {
+        const label = (filters.periodMode === 'year')
+          ? `Année ${Number(document.getElementById('pp-year')?.value || filters.year || '') || ''}`.trim()
+          : `${weeks.length} sem.`;
+        const catsLabel = Array.from(selectedCategories);
+        const catsShort = catsLabel.length === 3 ? 'Toutes catégories' : (catsLabel.length ? catsLabel.join(', ') : 'Aucune catégorie');
+        const adgLabel = filters.includeAdg ? 'ADG inclus' : 'ADG exclu';
+        if (periodBadgeEl) periodBadgeEl.textContent = `${label} • ${catsShort} • ${adgLabel}`;
+      } catch (_) {
+        if (periodBadgeEl) periodBadgeEl.textContent = '--';
       }
 
       // Construire lignes et extraire S0/S-1
       const rowsHtml = weeks.map(w => {
         const sums = (w.categories || []).reduce((acc, c) => {
+          if (!selectedCategories.has(c.name)) return acc;
           acc.received += Number(c.received || 0);
-          acc.treated += Number(c.treated || 0);
+          const treatedBase = Number(c.treated || 0);
+          const adg = Number(c.adjustments || 0);
+          acc.treated += (filters.includeAdg ? (treatedBase + adg) : treatedBase);
           acc.stockEnd += Number(c.stockEndWeek || 0);
           return acc;
         }, { received: 0, treated: 0, stockEnd: 0 });
@@ -5192,12 +5357,14 @@ class MailMonitor {
         });
       });
 
-  // Semaine courante = première ligne de l'historique (plus récente)
+  // KPIs (période): totaux sur la période, et stock fin sur la semaine la plus récente
       const current = rowsHtml[0];
       const previous = rowsHtml[1];
       if (weekTitleEl && current) weekTitleEl.textContent = current.display;
-      if (arrivalsEl && current) arrivalsEl.textContent = current.received;
-      if (treatedEl && current) treatedEl.textContent = current.treated;
+  const totalReceivedPeriod = rowsHtml.reduce((s, r) => s + Number(r.received || 0), 0);
+  const totalTreatedPeriod = rowsHtml.reduce((s, r) => s + Number(r.treated || 0), 0);
+  if (arrivalsEl) arrivalsEl.textContent = String(totalReceivedPeriod);
+  if (treatedEl) treatedEl.textContent = String(totalTreatedPeriod);
       if (stockEl && current) stockEl.textContent = current.stockEnd;
 
       // Tendance vs S-1 sur le stock fin de semaine
@@ -5220,11 +5387,22 @@ class MailMonitor {
 
       // Graphiques
       try {
-        const labels = weeks.map(w => w.weekDisplay).slice(0, 6).reverse(); // oldest→newest for nicer reading
-        const receivedData = weeks.map(w => (w.categories||[]).reduce((s,c)=>s+Number(c.received||0),0)).slice(0,6).reverse();
-        const treatedData = weeks.map(w => (w.categories||[]).reduce((s,c)=>s+Number(c.treated||0),0)).slice(0,6).reverse();
-        const stockData = weeks.map(w => (w.categories||[]).reduce((s,c)=>s+Number(c.stockEndWeek||0),0)).slice(0,6).reverse();
-  const rateData = receivedData.map((rec, i) => rec > 0 ? Math.round((treatedData[i]/rec)*1000)/10 : 0);
+        const labels = weeks.map(w => w.weekDisplay).reverse(); // oldest→newest
+        const receivedData = weeks.map(w => (w.categories || []).reduce((s, c) => {
+          if (!selectedCategories.has(c.name)) return s;
+          return s + Number(c.received || 0);
+        }, 0)).reverse();
+        const treatedData = weeks.map(w => (w.categories || []).reduce((s, c) => {
+          if (!selectedCategories.has(c.name)) return s;
+          const treatedBase = Number(c.treated || 0);
+          const adg = Number(c.adjustments || 0);
+          return s + (filters.includeAdg ? (treatedBase + adg) : treatedBase);
+        }, 0)).reverse();
+        const stockData = weeks.map(w => (w.categories || []).reduce((s, c) => {
+          if (!selectedCategories.has(c.name)) return s;
+          return s + Number(c.stockEndWeek || 0);
+        }, 0)).reverse();
+        const rateData = receivedData.map((rec, i) => rec > 0 ? Math.round((treatedData[i] / rec) * 1000) / 10 : 0);
 
         // Theme-aware colors
         const isDark = (document.body?.getAttribute('data-theme') === 'dark');

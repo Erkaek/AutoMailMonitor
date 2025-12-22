@@ -2197,10 +2197,9 @@ ipcMain.handle('api-weekly-history', async (event, { limit = 5, page = 1, pageSi
         const end = Math.max(0, start + rec - (trt + adj));
         running[name] = end;
 
-        // Debug ciblé pour vérification du calcul S-1 (désactivable en commentant)
+        // Debug ciblé pour vérification du calcul S-1 (activable via WEEKLY_DEBUG=1)
         try {
-          if (weekData.week_year && weekData.week_number && name === 'Déclarations') {
-            // Journaux compacts pour diagnostiquer les écarts de stock
+          if (process.env.WEEKLY_DEBUG === '1' && weekData.week_year && weekData.week_number && name === 'Déclarations') {
             console.log(`🔎 [WEEKLY][${weekData.week_year}-S${weekData.week_number}] ${name}: start=${start} rec=${rec} trt=${trt} adj=${adj} => end=${end}`);
           }
         } catch (_) {}
