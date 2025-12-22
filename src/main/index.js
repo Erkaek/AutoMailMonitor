@@ -1541,12 +1541,6 @@ ipcMain.handle('api-force-full-resync', async (event) => {
     throw error;
   }
 });
-    return {
-      success: false,
-      error: error.message
-    };
-  }
-});
 
 // === FONCTIONS UTILITAIRES POUR LES DOSSIERS ===
 
