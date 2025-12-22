@@ -18,6 +18,17 @@ $OutputEncoding = $enc
 $ErrorActionPreference = 'SilentlyContinue'
 $ProgressPreference = 'SilentlyContinue'
 
+function Try-ParseDate([string]$s) {
+    try {
+        if (-not $s) { return $null }
+        $t = $s.Trim()
+        if ($t -eq '') { return $null }
+        return [DateTime]::Parse($t, [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::AssumeUniversal).ToLocalTime()
+    } catch {
+        return $null
+    }
+}
+
 function Normalize-Name([string]$s) {
     if ([string]::IsNullOrEmpty($s)) { return "" }
     $s2 = $s.Trim().TrimEnd('.')
@@ -264,15 +275,4 @@ try {
 } catch {
     $err = $_.Exception.Message
     @{ success = $false; error = $err; emails = @(); count = 0; totalInFolder = 0 } | ConvertTo-Json -Depth 4 -Compress | Write-Output
-}
-
-function Try-ParseDate([string]$s) {
-    try {
-        if (-not $s) { return $null }
-        $t = $s.Trim()
-        if ($t -eq '') { return $null }
-        return [DateTime]::Parse($t, [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::AssumeUniversal).ToLocalTime()
-    } catch {
-        return $null
-    }
 }
