@@ -58,7 +58,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // Logs API
   getLogs: (opts) => ipcRenderer.invoke('api-logs-list', opts || {}),
-  exportLogs: () => ipcRenderer.invoke('api-logs-export'),
+  // Compat: ancien export => nouvel export filtré (par défaut: tout)
+  exportLogs: () => ipcRenderer.invoke('api-export-log-history', { level: 'ALL', category: 'ALL', search: '', limit: 2000 }),
   openLogsFolder: () => ipcRenderer.invoke('api-logs-open-folder'),
   onLogEntry: (callback) => ipcRenderer.on('log-entry', (event, ...args) => callback(...args)),
 

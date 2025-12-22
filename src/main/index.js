@@ -140,7 +140,17 @@ ipcMain.handle('api-logs-list', async (event, opts) => {
 
 ipcMain.handle('api-logs-export', async () => {
   try {
-    const content = mainLogger.exportAllAsString();
+    const history = logService.getHistory({ level: 'ALL', category: 'ALL', search: '', limit: 2000 }) || [];
+    const content = history
+      .map((e) => {
+        const ts = e.timestamp || '';
+        const lvl = e.level || '';
+        const cat = e.category || '';
+        const msg = e.message || '';
+        const data = e.data ? `\n${e.data}` : '';
+        return `[${ts}] [${lvl}] [${cat}] ${msg}${data}`;
+      })
+      .join('\n');
     const { canceled, filePath } = await electronDialog.showSaveDialog({
       title: 'Exporter les logs',
       defaultPath: `MailMonitor-logs-${new Date().toISOString().slice(0,19).replace(/[:T]/g,'-')}.txt`,
@@ -148,7 +158,7 @@ ipcMain.handle('api-logs-export', async () => {
     });
     if (canceled || !filePath) return { success: false, canceled: true };
     fs.writeFileSync(filePath, content, 'utf8');
-    return { success: true, filePath };
+    return { success: true, filePath, exported: history.length };
   } catch (e) {
     return { success: false, error: e.message };
   }
@@ -176,6 +186,44 @@ ipcMain.handle('api-get-log-history', async (event, filters) => {
   } catch (e) {
     console.error('Erreur récupération historique logs:', e);
     return [];
+  }
+});
+
+// Exporter l'historique des logs (nouveau système) en respectant les filtres
+ipcMain.handle('api-export-log-history', async (event, filters) => {
+  try {
+    const effectiveFilters = { ...(filters || {}) };
+    // Par défaut, exporter le maximum du buffer mémoire
+    if (!effectiveFilters.limit) effectiveFilters.limit = 2000;
+    const history = logService.getHistory(effectiveFilters) || [];
+
+    const content = history
+      .map((e) => {
+        const ts = e.timestamp || '';
+        const lvl = e.level || '';
+        const cat = e.category || '';
+        const msg = e.message || '';
+        const data = e.data ? `\n${e.data}` : '';
+        return `[${ts}] [${lvl}] [${cat}] ${msg}${data}`;
+      })
+      .join('\n');
+
+    const suffixParts = [];
+    if (effectiveFilters.level && effectiveFilters.level !== 'ALL') suffixParts.push(`lvl-${effectiveFilters.level}`);
+    if (effectiveFilters.category && effectiveFilters.category !== 'ALL') suffixParts.push(`cat-${effectiveFilters.category}`);
+    const suffix = suffixParts.length ? `-${suffixParts.join('-')}` : '';
+
+    const { canceled, filePath } = await electronDialog.showSaveDialog({
+      title: 'Exporter les logs (filtrés)',
+      defaultPath: `MailMonitor-logs-filtrees${suffix}-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}.txt`,
+      filters: [{ name: 'Fichiers texte', extensions: ['txt', 'log'] }]
+    });
+    if (canceled || !filePath) return { success: false, canceled: true };
+
+    fs.writeFileSync(filePath, content, 'utf8');
+    return { success: true, filePath, exported: history.length };
+  } catch (e) {
+    return { success: false, error: e.message };
   }
 });
 

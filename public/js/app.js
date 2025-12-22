@@ -561,12 +561,13 @@ class MailMonitor {
     const statusEl = document.getElementById('logs-status');
     const searchEl = document.getElementById('logs-search');
     const levelEl = document.getElementById('logs-level');
+    const categoryEl = document.getElementById('logs-category');
   const refreshBtn = document.getElementById('logs-refresh');
     const exportBtn = document.getElementById('logs-export');
   const openFolderBtn = document.getElementById('logs-open-folder');
     const copyAllBtn = document.getElementById('logs-copy-all');
     const container = view?.parentElement;
-  if (!view || !countEl || !bufferedEl || !statusEl || !searchEl || !levelEl || !refreshBtn || !exportBtn || !openFolderBtn || !copyAllBtn) return;
+  if (!view || !countEl || !bufferedEl || !statusEl || !searchEl || !levelEl || !categoryEl || !refreshBtn || !exportBtn || !openFolderBtn || !copyAllBtn) return;
 
     // Update autoScroll based on user scroll position
     container.addEventListener('scroll', () => {
@@ -574,80 +575,101 @@ class MailMonitor {
       this.logsState.autoScroll = nearBottom;
     });
 
-    const render = (entries, totalBuffered) => {
-      // Render compact lines with colors via CSS classes
-      const lines = entries.map(e => {
-        const cls = e.level === 'error' ? 'text-danger' : e.level === 'warn' ? 'text-warning' : e.level === 'debug' ? 'text-secondary' : 'text-body';
-        const msg = (e.message || '').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-        return `<div class="${cls}">[${e.ts}] [${e.level.toUpperCase()}] ${msg}</div>`;
-      });
-      view.innerHTML = lines.join('');
-      countEl.textContent = String(entries.length);
-      bufferedEl.textContent = String(totalBuffered);
-      if (this.logsState.autoScroll) container.scrollTop = container.scrollHeight;
-    };
-
-    const fetchInitial = async () => {
-      try {
-        statusEl.textContent = 'Chargement...';
-        const res = await window.electronAPI.getLogs({ limit: 1000, level: this.logsState.level, search: this.logsState.search });
-        if (res && res.success) {
-          this.logsState.lastId = res.lastId || 0;
-          render(res.entries || [], res.totalBuffered || 0);
-          statusEl.textContent = `Dernière mise à jour: ${new Date().toLocaleTimeString()}`;
-        } else {
-          statusEl.textContent = 'Erreur de chargement';
-        }
-      } catch (e) {
-        statusEl.textContent = 'Erreur de chargement';
+    const levelToClass = (level) => {
+      switch (String(level || '').toUpperCase()) {
+        case 'ERROR':
+          return 'text-danger';
+        case 'WARN':
+          return 'text-warning';
+        case 'DEBUG':
+          return 'text-secondary';
+        case 'SUCCESS':
+          return 'text-success';
+        default:
+          return 'text-body';
       }
     };
 
-    const fetchDelta = async () => {
+    const formatTime = (iso) => {
       try {
-        const res = await window.electronAPI.getLogs({ sinceId: this.logsState.lastId, level: this.logsState.level, search: this.logsState.search });
-        if (res && res.success) {
-          if (res.entries && res.entries.length) {
-            // Append incrementally
-            const frag = document.createDocumentFragment();
-            for (const e of res.entries) {
-              const div = document.createElement('div');
-              const cls = e.level === 'error' ? 'text-danger' : e.level === 'warn' ? 'text-warning' : e.level === 'debug' ? 'text-secondary' : 'text-body';
-              div.className = cls;
-              div.textContent = `[${e.ts}] [${e.level.toUpperCase()}] ${e.message || ''}`;
-              frag.appendChild(div);
-            }
-            view.appendChild(frag);
-            countEl.textContent = String((Number(countEl.textContent) || 0) + res.entries.length);
-            bufferedEl.textContent = String(res.totalBuffered || 0);
-            if (this.logsState.autoScroll) container.scrollTop = container.scrollHeight;
-          }
-          this.logsState.lastId = res.lastId || this.logsState.lastId;
-          statusEl.textContent = `Dernière mise à jour: ${new Date().toLocaleTimeString()}`;
-        }
-      } catch {}
+        return new Date(iso).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+      } catch {
+        return String(iso || '--');
+      }
+    };
+
+    const escapeHtml = (text) => String(text || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+    const renderHistory = (entries) => {
+      const lines = (entries || []).map((e) => {
+        const lvl = String(e.level || '').toUpperCase();
+        const cls = levelToClass(lvl);
+        const ts = formatTime(e.timestamp);
+        const cat = escapeHtml(e.categoryLabel || e.category || '—');
+        const msg = escapeHtml(e.message || '');
+        const data = e.data ? `<div class="text-muted" style="white-space: pre-wrap; margin-left: 1.2rem;">${escapeHtml(e.data)}</div>` : '';
+        return `<div class="${cls}">[${ts}] [${cat}] [${lvl}] ${msg}${data}</div>`;
+      });
+      view.innerHTML = lines.join('');
+      countEl.textContent = String((entries || []).length);
+      bufferedEl.textContent = '—';
+      if (this.logsState.autoScroll) container.scrollTop = container.scrollHeight;
+    };
+
+    const buildFilters = () => {
+      const level = levelEl.value || 'ALL';
+      const category = categoryEl.value || 'ALL';
+      const search = (searchEl.value || '').trim();
+      return { level, category, search, limit: 1000 };
+    };
+
+    const fetchHistory = async () => {
+      try {
+        statusEl.textContent = 'Chargement...';
+        const filters = buildFilters();
+        const history = await window.electronAPI.invoke('api-get-log-history', filters);
+        renderHistory(history || []);
+        statusEl.textContent = `Dernière mise à jour: ${new Date().toLocaleTimeString()}`;
+      } catch (e) {
+        statusEl.textContent = 'Erreur de chargement';
+        view.textContent = `Erreur lors du chargement des logs: ${e?.message || String(e)}`;
+        countEl.textContent = '0';
+        bufferedEl.textContent = '—';
+      }
     };
 
     // Bind filters
     levelEl.addEventListener('change', async () => {
-      this.logsState.level = levelEl.value || 'all';
-      this.logsState.lastId = 0;
-      await fetchInitial();
+      this.logsState.level = levelEl.value || 'ALL';
+      await fetchHistory();
+    });
+    categoryEl.addEventListener('change', async () => {
+      this.logsState.category = categoryEl.value || 'ALL';
+      await fetchHistory();
     });
     let searchTimer = null;
     searchEl.addEventListener('input', () => {
       clearTimeout(searchTimer);
       searchTimer = setTimeout(async () => {
         this.logsState.search = searchEl.value || '';
-        this.logsState.lastId = 0;
-        await fetchInitial();
+        await fetchHistory();
       }, 250);
     });
-    refreshBtn.addEventListener('click', () => fetchInitial());
+    refreshBtn.addEventListener('click', () => fetchHistory());
     exportBtn.addEventListener('click', async () => {
-      const res = await window.electronAPI.exportLogs();
-      if (res && res.success) this.showNotification('Export des logs', 'Fichier enregistré', 'success');
-      else if (!(res && res.canceled)) this.showNotification('Export des logs', 'Erreur lors de l\'export', 'danger');
+      try {
+        const filters = buildFilters();
+        // Pour l'export, on préfère le maximum du buffer mémoire
+        filters.limit = 2000;
+        const res = await window.electronAPI.invoke('api-export-log-history', filters);
+        if (res && res.success) {
+          this.showNotification('Export des logs', `Fichier enregistré (${res.exported || 0} entrées)`, 'success');
+        } else if (!(res && res.canceled)) {
+          this.showNotification('Export des logs', 'Erreur lors de l\'export', 'danger');
+        }
+      } catch (e) {
+        this.showNotification('Export des logs', 'Erreur lors de l\'export', 'danger');
+      }
     });
     openFolderBtn.addEventListener('click', async () => {
       const res = await window.electronAPI.openLogsFolder();
@@ -680,29 +702,47 @@ class MailMonitor {
       }
     });
 
-    // Stream new entries in real-time (will be additionally fetched by delta for filters)
+    // Stream en temps réel: on accepte uniquement les entrées logService (avec timestamp ISO)
     if (window.electronAPI.onLogEntry) {
       window.electronAPI.onLogEntry(async (entry) => {
-        // Only show if passes current filters
-        const passLevel = this.logsState.level === 'all' || entry.level === this.logsState.level;
-        const passSearch = !this.logsState.search || (entry.message || '').toLowerCase().includes(this.logsState.search.toLowerCase());
-        if (passLevel && passSearch) {
-          const div = document.createElement('div');
-          const cls = entry.level === 'error' ? 'text-danger' : entry.level === 'warn' ? 'text-warning' : entry.level === 'debug' ? 'text-secondary' : 'text-body';
-          div.className = cls;
-          div.textContent = `[${entry.ts}] [${entry.level.toUpperCase()}] ${entry.message || ''}`;
-          view.appendChild(div);
-          countEl.textContent = String((Number(countEl.textContent) || 0) + 1);
-          if (this.logsState.autoScroll) container.scrollTop = container.scrollHeight;
+        if (!entry || !entry.timestamp || !entry.level) return;
+
+        const currentLevel = (levelEl.value || 'ALL').toUpperCase();
+        const currentCategory = (categoryEl.value || 'ALL').toUpperCase();
+        const currentSearch = (searchEl.value || '').trim().toLowerCase();
+
+        const lvl = String(entry.level).toUpperCase();
+        const cat = String(entry.category || '').toUpperCase();
+
+        // Niveau
+        if (currentLevel !== 'ALL') {
+          const levelValues = { DEBUG: 0, INFO: 1, SUCCESS: 1, WARN: 2, ERROR: 3 };
+          if ((levelValues[lvl] ?? -1) < (levelValues[currentLevel] ?? 0)) return;
         }
+        // Catégorie
+        if (currentCategory !== 'ALL' && cat !== currentCategory) return;
+        // Recherche
+        if (currentSearch) {
+          const hay = `${entry.message || ''}\n${entry.data || ''}`.toLowerCase();
+          if (!hay.includes(currentSearch)) return;
+        }
+
+        const ts = formatTime(entry.timestamp);
+        const catLabel = escapeHtml(entry.categoryLabel || entry.category || '—');
+        const msg = escapeHtml(entry.message || '');
+        const data = entry.data ? `\n${entry.data}` : '';
+
+        const div = document.createElement('div');
+        div.className = levelToClass(lvl);
+        div.textContent = `[${ts}] [${catLabel}] [${lvl}] ${entry.message || ''}${data ? `\n${data}` : ''}`;
+        view.appendChild(div);
+        countEl.textContent = String((Number(countEl.textContent) || 0) + 1);
+        if (this.logsState.autoScroll) container.scrollTop = container.scrollHeight;
       });
     }
 
-    // Poll for missed entries that didn't match filters previously
-    this.logsPollInterval = setInterval(fetchDelta, 1500);
-
     // Load initial content
-    fetchInitial();
+    fetchHistory();
   }
 
   /**

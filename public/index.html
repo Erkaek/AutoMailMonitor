@@ -83,7 +83,7 @@
         </a>
       </li>
       <li class="nav-item mb-2" id="nav-item-logs">
-        <a class="nav-link text-white" href="logs.html" id="nav-logs">
+        <a class="nav-link text-white" href="#" id="nav-logs" data-bs-toggle="pill" data-bs-target="#logs">
           <i class="bi bi-journal-text me-2"></i>Logs
         </a>
       </li>
@@ -282,11 +282,30 @@
                 <div class="d-flex gap-2">
                   <input type="text" class="form-control form-control-sm" id="logs-search" placeholder="Rechercher...">
                   <select id="logs-level" class="form-select form-select-sm" style="width:auto;">
-                    <option value="all">Tous</option>
-                    <option value="info">Info</option>
-                    <option value="warn">Warn</option>
-                    <option value="error">Error</option>
-                    <option value="debug">Debug</option>
+                    <option value="ALL">Tous</option>
+                    <option value="INFO">Info</option>
+                    <option value="SUCCESS">Succès</option>
+                    <option value="WARN">Warn</option>
+                    <option value="ERROR">Error</option>
+                    <option value="DEBUG">Debug</option>
+                  </select>
+                  <select id="logs-category" class="form-select form-select-sm" style="width:auto;">
+                    <option value="ALL">Toutes catégories</option>
+                    <option value="INIT">🚀 Init</option>
+                    <option value="SYNC">🔄 Sync</option>
+                    <option value="COM">📡 COM</option>
+                    <option value="DB">💾 DB</option>
+                    <option value="PS">⚙️ PowerShell</option>
+                    <option value="IPC">📱 IPC</option>
+                    <option value="CONFIG">⚙️ Config</option>
+                    <option value="WEEKLY">📅 Weekly</option>
+                    <option value="EMAIL">📧 Email</option>
+                    <option value="PERF">⚡ Performance</option>
+                    <option value="SECURITY">🔒 Security</option>
+                    <option value="CACHE">💨 Cache</option>
+                    <option value="START">▶️ Start</option>
+                    <option value="STOP">⏹️ Stop</option>
+                    <option value="AUTO">🤖 Auto</option>
                   </select>
                   <button class="btn btn-outline-secondary btn-sm" id="logs-refresh"><i class="bi bi-arrow-clockwise"></i></button>
                   <button class="btn btn-outline-secondary btn-sm" id="logs-open-folder" title="Ouvrir le dossier de logs"><i class="bi bi-folder2-open"></i></button>
