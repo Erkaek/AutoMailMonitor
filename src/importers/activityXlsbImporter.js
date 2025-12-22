@@ -9,6 +9,7 @@
 const path = require('path');
 const fs = require('fs');
 const { execFileSync, spawnSync } = require('child_process');
+const { resolveResource } = require('../server/scriptPathResolver');
 
 const CATS = [
   { key: 'Declarations', row: 7 },
@@ -162,10 +163,22 @@ function importActivityFromXlsb(filePath, options = {}) {
   }
   const year = options.year || inferYearFromFilename(filePath);
 
+  const resolveScript = (fileName) => {
+    // En build, `scripts/` est copié via extraResources => process.resourcesPath/scripts/<file>
+    const resolved = resolveResource(['scripts'], fileName);
+    if (resolved?.path) return { path: resolved.path, tried: resolved.tried };
+    // Dev fallback
+    return {
+      path: path.join(__dirname, '..', '..', 'scripts', fileName),
+      tried: resolved?.tried || []
+    };
+  };
+
   // 1) Try secure PowerShell + Excel COM path (no JS parsing of untrusted binary)
   try {
-    const psPath = path.join(__dirname, '..', '..', 'scripts', 'import-xlsb.ps1');
-    if (fs.existsSync(psPath)) {
+    const psResolved = resolveScript('import-xlsb.ps1');
+    const psPath = psResolved.path;
+    if (psPath && fs.existsSync(psPath)) {
       const args = ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', psPath, '-Path', filePath, '-Year', String(year)];
       if (options.weeks) {
         args.push('-Weeks', String(options.weeks));
@@ -178,10 +191,20 @@ function importActivityFromXlsb(filePath, options = {}) {
       if (res.status === 0 && res.stdout) {
         const parsed = JSON.parse(res.stdout.trim());
         if (parsed && Array.isArray(parsed.rows)) return parsed;
-      } else if (res.stderr) {
+      } else {
         // Fall through to sandboxed JS fallback
-        // console.warn('[XLSB PS] stderr:', res.stderr);
+        // Garder une trace utile si PS/Excel échoue (ex: Excel absent)
+        const stderr = (res.stderr || '').trim();
+        const out = (res.stdout || '').trim();
+        const hint = stderr || out || (res.error?.message || '');
+        if (hint) {
+          // eslint-disable-next-line no-console
+          console.warn('[XLSB] PowerShell import failed, fallback to JS:', hint);
+        }
       }
+    } else {
+      // eslint-disable-next-line no-console
+      console.warn('[XLSB] import-xlsb.ps1 introuvable. Résolution tentée:', (psResolved?.tried || []).slice(0, 5));
     }
   } catch (_) {
     // ignore and fallback
@@ -193,9 +216,30 @@ function importActivityFromXlsb(filePath, options = {}) {
     throw new Error('Échec import XLSB via PowerShell et fallback JS désactivé (XLSB_IMPORT_DISABLE_JS=1)');
   }
   try {
-    const reader = path.join(__dirname, '..', '..', 'scripts', 'xlsb-safe-reader.js');
+    const readerResolved = resolveScript('xlsb-safe-reader.js');
+    const reader = readerResolved.path;
+    if (!reader || !fs.existsSync(reader)) {
+      throw new Error(`Reader sandbox introuvable: ${reader || 'null'}`);
+    }
+
+    // Important en build: le reader est hors asar (extraResources) et peut ne pas trouver `xlsx`.
+    // On force NODE_PATH vers les node_modules packagés.
+    const nodePathSep = process.platform === 'win32' ? ';' : ':';
+    const packagedNodeModules = process.resourcesPath
+      ? path.join(process.resourcesPath, 'app.asar', 'node_modules')
+      : null;
+    const existingNodePath = String(process.env.NODE_PATH || '').trim();
+    const nextNodePath = [packagedNodeModules, existingNodePath].filter(Boolean).join(nodePathSep);
+
     const args = [reader, filePath, String(options.weeks || ''), String(year)];
-    const out = execFileSync(process.execPath, args, { encoding: 'utf8', env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' } });
+    const out = execFileSync(process.execPath, args, {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        ELECTRON_RUN_AS_NODE: '1',
+        NODE_PATH: nextNodePath
+      }
+    });
     const parsed = JSON.parse(out.trim());
     if (parsed && Array.isArray(parsed.rows)) return parsed;
   } catch (e) {
