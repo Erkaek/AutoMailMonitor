@@ -1490,7 +1490,10 @@ class MailMonitor {
               </div>
               <div class="modal-footer">
                 <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Annuler</button>
-                <button type="button" class="btn btn-primary" id="save-folder-config">Ajouter</button>
+                <button type="button" class="btn btn-primary" id="save-folder-config">
+                  <span class="save-text">Ajouter</span>
+                  <span class="spinner-border spinner-border-sm d-none ms-2" role="status" aria-hidden="true"></span>
+                </button>
               </div>
             </div>
           </div>
@@ -1790,6 +1793,7 @@ class MailMonitor {
               <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
             </div>
             <div class="modal-body">
+              <div id="folder-modal-alert" class="alert alert-danger d-none" role="alert"></div>
               <form id="add-folder-form">
                 <div class="mb-3">
                   <label class="form-label">Boîte mail</label>
@@ -2386,49 +2390,132 @@ class MailMonitor {
       const spinner = btn?.querySelector('.spinner-border');
       const text = btn?.querySelector('.save-text');
       const alertBox = document.getElementById('folder-modal-alert');
-      if (alertBox) { alertBox.classList.add('d-none'); alertBox.textContent = ''; }
-      try { spinner?.classList.remove('d-none'); if (text) text.textContent = 'Ajout...'; if (btn) btn.disabled = true; } catch(_) {}
+      const logBox = document.getElementById('folder-log-box');
+      const pushLog = (msg) => {
+        if (!logBox) return;
+        const line = document.createElement('div');
+        line.textContent = msg;
+        logBox.appendChild(line);
+        while (logBox.children.length > 200) logBox.removeChild(logBox.firstChild);
+        logBox.scrollTop = logBox.scrollHeight;
+      };
 
-      // Ajouter tous les dossiers sélectionnés
-      const results = await Promise.allSettled(selectionList.map(sel => {
-        return window.electronAPI.addFolderToMonitoring({
-          folderPath: sel.path,
-          category: sel.category,
-          entryId: sel.entryId || '',
+      const setInlineStatus = (message, variant = 'info') => {
+        if (!alertBox) return;
+        alertBox.textContent = message || '';
+        alertBox.classList.remove('d-none', 'alert-danger', 'alert-info', 'alert-warning', 'alert-success');
+        alertBox.classList.add(`alert-${variant}`);
+      };
+
+      // Démarrer l'ajout en mode séquentiel (évite les timeouts et la saturation PowerShell/IPC)
+      const total = selectionList.length;
+      let succeeded = 0;
+      let failed = 0;
+      const errors = [];
+
+      try {
+        if (alertBox) { alertBox.classList.add('d-none'); alertBox.textContent = ''; }
+        spinner?.classList.remove('d-none');
+        if (text) text.textContent = 'Ajout...';
+        if (btn) btn.disabled = true;
+      } catch(_) {}
+
+      setInlineStatus(`Ajout en cours… 0/${total}`, 'info');
+      pushLog(`[SAVE] Début ajout: ${total} dossier(s)`);
+
+      // Optimisation: si l'IPC bulk est dispo et qu'on ajoute plusieurs dossiers,
+      // déléguer au main process (un seul restart monitoring + moins d'aller-retours IPC).
+      if (total > 1 && window.electronAPI?.addFoldersToMonitoringBulk) {
+        setInlineStatus(`Ajout en cours… ${total} dossier(s) (voir logs)`, 'info');
+        const bulkRes = await window.electronAPI.addFoldersToMonitoringBulk({
+          items: selectionList.map(sel => ({
+            folderPath: sel.path,
+            category: sel.category,
+            entryId: sel.entryId || '',
+            storeId,
+            storeName
+          })),
           storeId,
           storeName
         });
-      }));
 
-      const succeeded = results.filter(r => r.status === 'fulfilled' && r.value?.success).length;
-      const failed = results.filter(r => r.status === 'fulfilled' && r.value?.success === false);
-      const rejected = results.filter(r => r.status === 'rejected');
+        const bulkResults = Array.isArray(bulkRes?.results) ? bulkRes.results : [];
+        succeeded = bulkResults.filter(r => r && r.success).length;
+        failed = bulkResults.length - succeeded;
 
+        if (failed > 0) {
+          const firstErr = bulkResults.find(r => r && r.success === false);
+          const msg = firstErr?.message || firstErr?.error || 'Certains dossiers n\'ont pas pu être ajoutés';
+          errors.push(msg);
+          pushLog(`[BULK] ${succeeded} OK, ${failed} échec(s)`);
+        } else {
+          pushLog(`[BULK] ${succeeded} OK`);
+        }
+      } else {
+
+      for (let i = 0; i < total; i++) {
+        // Si le modal est fermé pendant l'opération, arrêter proprement
+        if (!document.getElementById('folderModal')) {
+          pushLog('[SAVE] Modal fermé: arrêt de l\'ajout');
+          break;
+        }
+
+        const sel = selectionList[i];
+        const label = `${i + 1}/${total}`;
+        setInlineStatus(`Ajout en cours… ${label}`, 'info');
+        pushLog(`[ADD ${label}] ${sel.path}  |  catégorie=${sel.category}`);
+
+        try {
+          const res = await window.electronAPI.addFolderToMonitoring({
+            folderPath: sel.path,
+            category: sel.category,
+            entryId: sel.entryId || '',
+            storeId,
+            storeName,
+            suppressRestart: i < (total - 1)
+          });
+          if (res && res.success) {
+            succeeded++;
+            pushLog(`[OK  ${label}] ajouté`);
+          } else {
+            failed++;
+            const msg = (res && (res.error || res.message)) || 'Échec de l\'ajout';
+            errors.push(msg);
+            pushLog(`[ERR ${label}] ${msg}`);
+          }
+        } catch (e) {
+          failed++;
+          const msg = e?.message || 'Erreur inconnue';
+          errors.push(msg);
+          pushLog(`[ERR ${label}] ${msg}`);
+        }
+      }
+      }
+
+      // Rafraîchir l'UI si au moins un dossier a été ajouté
       if (succeeded > 0) {
         await this.loadFoldersConfiguration();
         this.updateFolderConfigDisplay();
-        // Forcer l'actualisation de l'arborescence Monitoring immédiatement
         if (window.foldersTree && typeof window.foldersTree.loadFolders === 'function') {
           try { await window.foldersTree.loadFolders(true); } catch (_) {}
         }
-        
-  // Fermer le modal correctement avec Bootstrap
+      }
+
+      if (failed === 0 && succeeded > 0) {
+        // Fermer le modal seulement si tout est OK
         const modalElement = document.getElementById('folderModal');
         if (modalElement) {
           const modal = bootstrap.Modal.getInstance(modalElement);
-          if (modal) {
-            modal.hide();
-          }
+          modal?.hide?.();
         }
-        
-        const count = succeeded;
-        // Afficher un feedback discret dans la console (les toasts sont désactivés)
-        console.log(`✅ Configuration sauvegardée: ${count} dossier(s) ajouté(s)`);
-        console.log('✅ Configuration de dossier sauvegardée (avec sous-dossiers)');
-      } else {
-        const msg = failed[0]?.value?.error || failed[0]?.reason?.message || rejected[0]?.reason?.message || 'Impossible de sauvegarder la configuration';
+        console.log(`✅ Configuration sauvegardée: ${succeeded} dossier(s) ajouté(s)`);
+      } else if (succeeded === 0) {
+        const msg = errors[0] || 'Impossible de sauvegarder la configuration';
         console.warn('Erreur de sauvegarde', msg);
-        if (alertBox) { alertBox.textContent = msg; alertBox.classList.remove('d-none'); }
+        setInlineStatus(msg, 'danger');
+      } else {
+        // Succès partiel: laisser le modal ouvert et afficher un résumé
+        setInlineStatus(`Ajout terminé: ${succeeded} OK, ${failed} en échec.`, 'warning');
       }
     } catch (error) {
       console.error('❌ Erreur sauvegarde configuration:', error);

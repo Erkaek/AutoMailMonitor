@@ -41,6 +41,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // API Gestion hiérarchique des dossiers (nouveau)
   getFoldersTree: () => ipcRenderer.invoke('api-folders-tree'),
   addFolderToMonitoring: (data) => ipcRenderer.invoke('api-folders-add', data),
+  addFoldersToMonitoringBulk: (data) => ipcRenderer.invoke('api-folders-add-bulk', data),
   updateFolderCategory: (data) => ipcRenderer.invoke('api-folders-update-category', data),
   removeFolderFromMonitoring: (data) => ipcRenderer.invoke('api-folders-remove', data),
   

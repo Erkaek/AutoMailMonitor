@@ -1,6 +1,6 @@
 {
   "name": "mailmonitor",
-  "version": "0.9.86",
+  "version": "0.9.9",
   "description": "Application de monitoring des emails Outlook avec interface moderne",
   "main": "src/main/index.js",
   "scripts": { 

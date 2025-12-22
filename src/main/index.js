@@ -78,6 +78,34 @@ let mainWindow = null;
 let loadingWindow = null;
 let tray = null;
 
+// Debounce: éviter de redémarrer le monitoring N fois lors d'ajouts en masse.
+let monitoringRestartTimer = null;
+let monitoringRestartInFlight = false;
+function scheduleUnifiedMonitoringRestart(reason = 'config-change') {
+  try {
+    if (!global.unifiedMonitoringService) return;
+    if (monitoringRestartTimer) clearTimeout(monitoringRestartTimer);
+    monitoringRestartTimer = setTimeout(async () => {
+      monitoringRestartTimer = null;
+      if (monitoringRestartInFlight) return;
+      monitoringRestartInFlight = true;
+      try {
+        if (global.unifiedMonitoringService.isMonitoring) {
+          await global.unifiedMonitoringService.stopMonitoring();
+        }
+        await global.unifiedMonitoringService.initialize();
+        console.log(`🔄 Service unifié redémarré (${reason})`);
+      } catch (error) {
+        console.error('⚠️ Erreur redémarrage monitoring:', error);
+      } finally {
+        monitoringRestartInFlight = false;
+      }
+    }, 600);
+  } catch (e) {
+    console.warn('⚠️ scheduleUnifiedMonitoringRestart failed:', e?.message || e);
+  }
+}
+
 // Configuration de l'application
 const APP_CONFIG = {
   width: 1200,
@@ -1034,19 +1062,8 @@ ipcMain.handle('api-settings-folders', async (event, data) => {
                    (typeof data === 'object' && Object.keys(data).length > 0);
                    
     if (global.unifiedMonitoringService && hasData) {
-      console.log('🔄 Programmation du redémarrage du service unifié en arrière-plan...');
-      // Redémarrer en arrière-plan pour ne pas bloquer la réponse IPC
-      setTimeout(async () => {
-        try {
-          if (global.unifiedMonitoringService.isMonitoring) {
-            await global.unifiedMonitoringService.stopMonitoring();
-          }
-          await global.unifiedMonitoringService.initialize();
-          console.log('✅ Service unifié redémarré (arrière-plan)');
-        } catch (error) {
-          console.error('❌ Erreur redémarrage service unifié (arrière-plan):', error);
-        }
-      }, 0);
+      console.log('🔄 Programmation du redémarrage du service unifié (debounce)...');
+      scheduleUnifiedMonitoringRestart('settings-folders');
     }
     
   return { success: true, result: res };
@@ -1145,8 +1162,7 @@ ipcMain.handle('api-database-folder-stats', async () => {
   }
 });
 
-// Ajouter un dossier au monitoring
-ipcMain.handle('api-folders-add', async (event, { folderPath, category, storeId: payloadStoreId, entryId: payloadEntryId, storeName: payloadStoreName }) => {
+async function apiFoldersAddImpl({ folderPath, category, storeId: payloadStoreId, entryId: payloadEntryId, storeName: payloadStoreName, suppressRestart }) {
   const startedAt = Date.now();
   let debugPhases = [];
   let toInsertDebugSample = [];
@@ -1942,19 +1958,9 @@ ipcMain.handle('api-folders-add', async (event, { folderPath, category, storeId:
 
   console.log(`✅ [ADD] ${inserted} dossier(s) ajouté(s) (initial=${initialInsertedCount}, fallback=${inserted-initialInsertedCount})`);
 
-    // Redémarrer le monitoring en arrière-plan pour prendre en compte le nouveau dossier
-    if (global.unifiedMonitoringService) {
-      setTimeout(async () => {
-        try {
-          if (global.unifiedMonitoringService.isMonitoring) {
-            await global.unifiedMonitoringService.stopMonitoring();
-          }
-          await global.unifiedMonitoringService.initialize();
-          console.log('🔄 Service unifié redémarré pour le nouveau dossier (arrière-plan)');
-        } catch (error) {
-          console.error('⚠️ Erreur redémarrage monitoring (arrière-plan):', error);
-        }
-      }, 0);
+    // Redémarrage debouncé (un seul restart pour une rafale d'ajouts)
+    if (!suppressRestart) {
+      scheduleUnifiedMonitoringRestart('folder-add');
     }
 
     return {
@@ -1982,6 +1988,61 @@ ipcMain.handle('api-folders-add', async (event, { folderPath, category, storeId:
   // Outer errors already handled internally; surface generic failure if essential data missing
   if (!folderPath || !category) {
     return { success: false, message: 'Paramètres invalides' };
+  }
+
+  return { success: false, message: 'Échec inattendu' };
+}
+
+// Ajouter un dossier au monitoring (compat)
+ipcMain.handle('api-folders-add', async (_event, payload) => {
+  return apiFoldersAddImpl(payload || {});
+});
+
+// Ajouter plusieurs dossiers au monitoring en une seule opération (optimisé)
+ipcMain.handle('api-folders-add-bulk', async (_event, payload) => {
+  const startedAt = Date.now();
+  try {
+    const items = Array.isArray(payload?.items) ? payload.items : [];
+    if (!items.length) return { success: false, error: 'Aucun dossier à ajouter', results: [] };
+
+    console.log(`📝 [BULK-ADD] Début: ${items.length} élément(s)`);
+
+    const results = [];
+    let succeeded = 0;
+    let failed = 0;
+
+    for (let i = 0; i < items.length; i++) {
+      const it = items[i] || {};
+      const label = `${i + 1}/${items.length}`;
+      const p = String(it.folderPath || it.path || '');
+      console.log(`📝 [BULK-ADD ${label}] ${p}`);
+      const res = await apiFoldersAddImpl({
+        folderPath: it.folderPath || it.path,
+        category: it.category,
+        entryId: it.entryId || it.entryID || '',
+        storeId: it.storeId || payload?.storeId || '',
+        storeName: it.storeName || payload?.storeName || '',
+        suppressRestart: true
+      });
+      results.push(res);
+      if (res && res.success) succeeded++;
+      else failed++;
+    }
+
+    // Un seul redémarrage debouncé pour toute la rafale
+    scheduleUnifiedMonitoringRestart('folder-add-bulk');
+
+    console.log(`📝 [BULK-ADD] Terminé: ok=${succeeded} fail=${failed} en ${Date.now() - startedAt}ms`);
+    return {
+      success: succeeded > 0,
+      succeeded,
+      failed,
+      results,
+      durationMs: Date.now() - startedAt
+    };
+  } catch (e) {
+    console.error('❌ [BULK-ADD] Erreur:', e?.message || e);
+    return { success: false, error: e?.message || String(e), results: [], durationMs: Date.now() - startedAt };
   }
 });
 
@@ -2011,19 +2072,8 @@ ipcMain.handle('api-folders-update-category', async (event, { folderPath, catego
       console.warn('⚠️ Impossible d\'invalider le cache des dossiers après mise à jour:', e?.message || e);
     }
 
-    // Redémarrer le monitoring en arrière-plan pour prendre en compte le changement
     if (global.unifiedMonitoringService) {
-      setTimeout(async () => {
-        try {
-          if (global.unifiedMonitoringService.isMonitoring) {
-            await global.unifiedMonitoringService.stopMonitoring();
-          }
-          await global.unifiedMonitoringService.initialize();
-          console.log('🔄 Service unifié redémarré pour changement de catégorie (arrière-plan)');
-        } catch (error) {
-          console.error('⚠️ Erreur redémarrage monitoring (arrière-plan):', error);
-        }
-      }, 0);
+      scheduleUnifiedMonitoringRestart('folder-category-update');
     }
 
     return {
