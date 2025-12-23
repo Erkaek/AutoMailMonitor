@@ -1514,23 +1514,104 @@ ipcMain.handle('api-folders-add-bulk', async (_event, payload) => {
     const items = Array.isArray(payload?.items) ? payload.items : [];
     if (!items.length) return { success: false, error: 'Aucun dossier à ajouter', results: [] };
 
+    const escapeRegExp = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const normalizePathBasic = (rawPath) => String(rawPath || '')
+      .replace(/\//g, '\\')
+      .replace(/\\+/g, '\\')
+      .replace(/^\\+/, '')
+      .trim();
+
+    const normalizePathWithContext = (rawPath, storeName) => {
+      let p = normalizePathBasic(rawPath);
+      const sName = String(storeName || '').trim();
+
+      // 1) Corriger le cas "<storeName>Boîte de réception" (antislash manquant après le nom de boîte)
+      if (sName) {
+        const pLc = p.toLowerCase();
+        const sLc = sName.toLowerCase();
+        if (pLc.startsWith(sLc) && p[sName.length] !== '\\') {
+          p = `${p.slice(0, sName.length)}\\${p.slice(sName.length)}`;
+          p = p.replace(/\\+/g, '\\');
+        }
+      }
+
+      // 2) Fallback générique: insérer un antislash avant Inbox/Boîte de réception si collé
+      //    (utile si storeName est absent ou différent)
+      const inboxNames = ['Boîte de réception', 'Boite de reception', 'Inbox'];
+      for (const inboxName of inboxNames) {
+        const re = new RegExp(`([^\\\\])(${escapeRegExp(inboxName)})`, 'i');
+        if (re.test(p)) {
+          p = p.replace(re, '$1\\\\$2');
+          p = p.replace(/\\+/g, '\\');
+        }
+      }
+
+      return p;
+    };
+
+    const isManagerSeg = (seg) => /^\d{2,}\s*-\s*.+/.test(String(seg || '').trim());
+    const extractManagerRootFromPath = (fullPath) => {
+      const raw = normalizePathBasic(fullPath);
+      const parts = raw.split('\\').map(s => s.trim()).filter(Boolean);
+      for (let i = 0; i < parts.length; i++) {
+        if (isManagerSeg(parts[i])) {
+          return parts.slice(0, i + 1).join('\\');
+        }
+      }
+      return null;
+    };
+
+    // Première passe: normaliser les paths et inférer le root gestionnaire canonical depuis les items complets
+    const pre = items.map((it) => {
+      const storeName = it?.storeName || it?.store_name || payload?.storeName || null;
+      const folderPath = it?.folderPath || it?.path || '';
+      const normalized = normalizePathWithContext(folderPath, storeName);
+      return { it, storeName, normalized };
+    });
+
+    const managerRootBySeg = new Map();
+    for (const x of pre) {
+      const root = extractManagerRootFromPath(x.normalized);
+      if (!root) continue;
+      const parts = root.split('\\').map(s => s.trim()).filter(Boolean);
+      const seg = parts.length ? parts[parts.length - 1] : '';
+      if (!seg) continue;
+      const key = seg.toLowerCase();
+      const prev = managerRootBySeg.get(key);
+      // Préférer le root le plus long (inclut mailbox + inbox si présent)
+      if (!prev || String(root).length > String(prev).length) {
+        managerRootBySeg.set(key, root);
+      }
+    }
+
+    const canonicalizeManagerRelative = (p) => {
+      const parts = String(p || '').split('\\').map(s => s.trim()).filter(Boolean);
+      if (parts.length === 0) return p;
+      const first = parts[0];
+      if (!isManagerSeg(first)) return p;
+      const root = managerRootBySeg.get(first.toLowerCase());
+      if (!root) return p;
+      const rest = parts.slice(1).join('\\');
+      return rest ? `${root}\\${rest}` : root;
+    };
+
     // Bulk insert direct en BDD: uniquement les dossiers cochés, sans analyse Outlook.
     const dbRef = global.databaseService || databaseService;
     if (!dbRef.isInitialized) {
       await dbRef.initialize();
     }
 
-    const rows = items.map((it) => {
-      const folderPath = it?.folderPath || it?.path || '';
+    const rows = pre.map(({ it, storeName, normalized }) => {
       const category = it?.category || 'Mails simples';
-      const folderName = it?.name || it?.folderName || extractFolderName(String(folderPath));
+      const folder_path = canonicalizeManagerRelative(normalized);
+      const folderName = it?.name || it?.folderName || extractFolderName(String(folder_path));
       return {
-        folder_path: String(folderPath).replace(/\//g, '\\').replace(/\\+/g, '\\').replace(/^\\+/, ''),
+        folder_path,
         category,
         folder_name: folderName,
         store_id: it?.storeId || it?.store_id || payload?.storeId || null,
         entry_id: it?.entryId || it?.entryID || it?.entry_id || null,
-        store_name: it?.storeName || it?.store_name || payload?.storeName || null
+        store_name: storeName || payload?.storeName || null
       };
     }).filter(r => r.folder_path);
 

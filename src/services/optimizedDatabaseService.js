@@ -906,11 +906,23 @@ class OptimizedDatabaseService {
 
     // ==================== MONITORED SCOPE (dossier gestionnaire 11-… + descendants) ====================
     _normalizeFolderPathForScope(p) {
-        return String(p || '')
+        let s = String(p || '')
             .replace(/\//g, '\\')
             .replace(/\\+/g, '\\')
-            .trim()
-            .toLowerCase();
+            .trim();
+
+        // Corriger les cas où le nom de boîte est collé sans antislash (ex: "FlotteAutoBoîte de réception")
+        // => "FlotteAuto\\Boîte de réception". On le fait ici pour que les comparisons de scope ne cassent pas.
+        const inboxNames = ['Boîte de réception', 'Boite de reception', 'Inbox'];
+        for (const inboxName of inboxNames) {
+            const re = new RegExp(`([^\\\\])(${inboxName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'i');
+            if (re.test(s)) {
+                s = s.replace(re, '$1\\$2');
+                s = s.replace(/\\+/g, '\\');
+            }
+        }
+
+        return s.toLowerCase();
     }
 
     _extractManagerRootFromPath(folderPath) {
