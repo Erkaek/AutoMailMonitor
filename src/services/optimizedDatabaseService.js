@@ -573,6 +573,17 @@ class OptimizedDatabaseService {
                     updated_at = CURRENT_TIMESTAMP
                 WHERE outlook_id = ?
             `)
+            ,
+            markReadAsTreatedIfNull: this.db.prepare(`
+                UPDATE emails
+                SET is_treated = 1,
+                    treated_at = COALESCE(treated_at, ?),
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE outlook_id = ?
+                  AND deleted_at IS NULL
+                  AND treated_at IS NULL
+                  AND is_read = 1
+            `)
         };
 
         // Folder sync state
@@ -681,6 +692,51 @@ class OptimizedDatabaseService {
             return Number(res?.changes || 0);
         } catch (e) {
             console.warn('⚠️ [DB] touchEmailSeen failed:', e.message);
+            return 0;
+        }
+    }
+
+    // Applique la règle "lu = traité" sans repasser par saveEmail (utile quand aucun changement n'est détecté)
+    markReadAsTreatedIfNeeded(outlookId, treatedAtIso = null) {
+        try {
+            if (!outlookId) return 0;
+            const countReadAsTreated = !!this.getAppSetting('count_read_as_treated', false);
+            if (!countReadAsTreated) return 0;
+
+            const existing = this.statements?.getEmailByEntryId?.get(outlookId);
+            if (!existing) return 0;
+            if (existing.deleted_at) return 0;
+            if (existing.treated_at) return 0;
+            const isRead = existing.is_read === 1 || existing.is_read === true || String(existing.is_read) === '1';
+            if (!isRead) return 0;
+
+            const toIsoIfPossible = (raw) => {
+                if (!raw) return null;
+                const ms = Date.parse(String(raw));
+                if (!Number.isFinite(ms)) return null;
+                return new Date(ms).toISOString();
+            };
+            const when = treatedAtIso
+                || toIsoIfPossible(existing.last_modified_time)
+                || new Date().toISOString();
+
+            const res = this.statements?.markReadAsTreatedIfNull?.run(when, outlookId);
+            const changes = Number(res?.changes || 0);
+            if (changes > 0) {
+                // Invalider les agrégats pour que les compteurs se mettent à jour sans attendre.
+                try {
+                    for (const k of ['email_stats', 'category_stats', 'folder_stats', 'unread_email_count', 'total_email_count']) {
+                        this.cache.del(k);
+                    }
+                    // Caches récents (quelques limites possibles)
+                    for (const k of this.cache.keys()) {
+                        if (k && typeof k === 'string' && k.startsWith('recent_emails_')) this.cache.del(k);
+                    }
+                } catch (_) {}
+            }
+            return changes;
+        } catch (e) {
+            console.warn('⚠️ [DB] markReadAsTreatedIfNeeded failed:', e.message);
             return 0;
         }
     }

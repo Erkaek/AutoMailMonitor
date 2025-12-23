@@ -1800,6 +1800,14 @@ class UnifiedMonitoringService extends EventEmitter {
                 } else {
                     // IMPORTANT: même sans changement, marquer l'email comme "vu" pendant les scans
                     // pour permettre la réconciliation (emails absents) au démarrage.
+                    // Et si "lu = traité" est actif, appliquer la règle même sans transition détectée.
+                    try {
+                        const isReadNow = emailData.UnRead !== undefined ? !emailData.UnRead : (emailData.isRead ?? existingEmail.is_read ?? false);
+                        if (isReadNow && !existingEmail?.treated_at) {
+                            const when = emailData.LastModificationTime || emailData.last_modified_time || emailData.lastModifiedTime || null;
+                            this.dbService.markReadAsTreatedIfNeeded?.(emailId, when);
+                        }
+                    } catch (_) {}
                     try { this.dbService.touchEmailSeen(emailId); } catch (_) {}
                 }
             } else {
