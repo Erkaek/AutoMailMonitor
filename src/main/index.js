@@ -147,6 +147,28 @@ let mainWindow = null;
 let loadingWindow = null;
 let tray = null;
 
+// Coalesce cache invalidations for bursty realtime events (COUNT/status/etc.)
+let uiCacheInvalidationTimer = null;
+function scheduleUICacheInvalidation(reason = 'realtime') {
+  try {
+    if (uiCacheInvalidationTimer) clearTimeout(uiCacheInvalidationTimer);
+    uiCacheInvalidationTimer = setTimeout(() => {
+      uiCacheInvalidationTimer = null;
+      try {
+        // Dashboard cards + folders tree counts
+        if (cacheService?.invalidateStats) cacheService.invalidateStats();
+        else cacheService?.del?.('ui', 'dashboard_stats');
+        if (cacheService?.invalidateFoldersTree) cacheService.invalidateFoldersTree();
+        else cacheService?.del?.('config', 'folders_tree');
+      } catch (e) {
+        console.warn('⚠️ [CACHE] Invalidation UI cache échouée:', e?.message || e);
+      }
+    }, 400);
+  } catch (e) {
+    console.warn('⚠️ [CACHE] scheduleUICacheInvalidation failed:', e?.message || e);
+  }
+}
+
 // Debounce: éviter de redémarrer le monitoring N fois lors d'ajouts en masse.
 let monitoringRestartTimer = null;
 let monitoringRestartInFlight = false;
@@ -684,6 +706,8 @@ function setupRealtimeEventForwarding() {
 
   // NOUVEAU: changements de compteur dossier (déclenche une sync partielle côté service)
   global.unifiedMonitoringService.on('folderCountUpdated', (data) => {
+    // IMPORTANT: api-folders-tree est mis en cache 5 min; il faut l'invalider pour que l'UI voie les nouveaux compteurs.
+    scheduleUICacheInvalidation('folder-count-updated');
     if (mainWindow && !mainWindow.isDestroyed()) {
       // Payload attendu: { folderPath, oldCount, newCount, ... }
       mainWindow.webContents.send('folder-count-updated', data);

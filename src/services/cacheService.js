@@ -169,6 +169,20 @@ class CacheService {
         this.delPattern('ui', 'stats_');
         this.delPattern('api', 'emails_');
     }
+
+    // Invalidation des statistiques UI/API (sans toucher à la config)
+    invalidateStats() {
+        // Stats dashboard
+        this.del('ui', 'dashboard_stats');
+        // Variantes potentielles
+        this.delPattern('ui', 'stats_');
+        this.delPattern('api', 'stats_');
+    }
+
+    // Invalidation ciblée de l'arbre des dossiers (compteurs Outlook)
+    invalidateFoldersTree() {
+        this.del('config', 'folders_tree');
+    }
 }
 
 // Export singleton

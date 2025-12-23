@@ -2521,6 +2521,9 @@ class UnifiedMonitoringService extends EventEmitter {
                         subject: data.subject,
                         folderPath: data.folderPath
                     });
+
+                    // Invalider les caches internes (sinon l'UI peut rester figée ~15s)
+                    try { this.emailCache?.clear?.(); } catch (_) {}
                     
                     // Invalider le cache des statistiques
                     if (this.cacheService && typeof this.cacheService.invalidateStats === 'function') {
@@ -2582,6 +2585,9 @@ class UnifiedMonitoringService extends EventEmitter {
                     
                     // Émettre événement
                     this.emit('emailDeleted', data);
+
+                    // Invalider les caches internes
+                    try { this.emailCache?.clear?.(); } catch (_) {}
                     
                     // Invalider le cache des statistiques
                     if (this.cacheService && typeof this.cacheService.invalidateStats === 'function') {
@@ -2608,6 +2614,9 @@ class UnifiedMonitoringService extends EventEmitter {
                     
                     // Émettre événement pour mise à jour de l'interface
                     this.emit('folderCountUpdated', data);
+
+                    // Invalider les caches internes (stats business, emails récents)
+                    try { this.emailCache?.clear?.(); } catch (_) {}
                     
                     // Invalider le cache des statistiques
                     if (this.cacheService && typeof this.cacheService.invalidateStats === 'function') {

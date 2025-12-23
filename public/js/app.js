@@ -406,11 +406,13 @@ class MailMonitor {
   }
 
   // Debounced folders refresh to reflect count changes quickly
-  scheduleFoldersStatsRefresh(delayMs = 250) {
+  scheduleFoldersStatsRefresh(delayMs = 250, forceFoldersTree = false) {
+    if (forceFoldersTree) this._forceFoldersTreeNext = true;
     if (this._foldersStatsRefreshTimer) clearTimeout(this._foldersStatsRefreshTimer);
     this._foldersStatsRefreshTimer = setTimeout(async () => {
       try {
-        await this.loadFoldersStats();
+        await this.loadFoldersStats({ forceFoldersTree: !!this._forceFoldersTreeNext });
+        this._forceFoldersTreeNext = false;
       } catch (_) {}
     }, Math.max(0, delayMs));
   }
@@ -460,8 +462,10 @@ class MailMonitor {
     // Changements de compteur dossiers (déclenche généralement une sync partielle)
     if (window.electronAPI.onFolderCountUpdated) {
       window.electronAPI.onFolderCountUpdated((payload) => {
-        // On rafraîchit les stats dossiers avec un debounce (évite de spammer getFoldersTree)
-        this.scheduleFoldersStatsRefresh(400);
+        // api-folders-tree est caché côté main (5 min). Sur événement COUNT on force un refresh non-caché.
+        this.scheduleFoldersStatsRefresh(350, true);
+        // Rafraîchir aussi les cartes dashboard (emailsToday/unreadTotal) sans attendre.
+        try { this.performStatsRefresh(); } catch (_) {}
       });
     }
 
@@ -1413,13 +1417,18 @@ class MailMonitor {
   }
 
   // Nouvelle méthode pour charger et afficher les statistiques par dossier
-  async loadFoldersStats() {
+  async loadFoldersStats(opts = {}) {
     try {
       console.log('📁 Chargement statistiques dossiers...');
       
       // Récupérer l'arborescence complète puis réduire aux dossiers surveillés (plus pertinent et compact)
+      const forceFoldersTree = !!opts.forceFoldersTree;
+      const foldersTreePromise = forceFoldersTree
+        ? window.electronAPI.invoke('api-folders-tree', { force: true })
+        : window.electronAPI.getFoldersTree();
+
       const [foldersData, dbFolderStatsResp] = await Promise.all([
-        window.electronAPI.getFoldersTree(),
+        foldersTreePromise,
         window.electronAPI.getFolderStats?.().catch(() => null)
       ]);
 
