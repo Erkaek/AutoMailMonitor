@@ -3025,6 +3025,52 @@ class OptimizedDatabaseService {
         const endDate = new Date(startDate.getTime() + 6 * 24 * 60 * 60 * 1000);
         return endDate.toISOString();
     }
+
+    // =====================================================================
+    // BDD: lecture brute (UI Debug) - READ ONLY
+    // =====================================================================
+
+    listDatabaseTables() {
+        try {
+            if (!this.db) throw new Error('DB non initialisée');
+            const rows = this.db.prepare(`
+                SELECT name
+                FROM sqlite_master
+                WHERE type = 'table'
+                  AND name NOT LIKE 'sqlite_%'
+                ORDER BY name
+            `).all();
+            return rows.map(r => r.name).filter(Boolean);
+        } catch (error) {
+            console.error('❌ [DB-VIEW] Erreur listDatabaseTables:', error);
+            return [];
+        }
+    }
+
+    getDatabaseTablePreview(tableName, limit = 200, offset = 0) {
+        try {
+            if (!this.db) throw new Error('DB non initialisée');
+
+            const table = String(tableName || '').trim();
+            if (!table) throw new Error('Nom de table requis');
+
+            const tables = new Set(this.listDatabaseTables());
+            if (!tables.has(table)) throw new Error('Table inconnue');
+
+            const safeLimit = Math.max(1, Math.min(1000, Number(limit) || 200));
+            const safeOffset = Math.max(0, Math.min(500000, Number(offset) || 0));
+
+            const quoted = `"${table.replace(/"/g, '""')}"`;
+            const cols = this.db.prepare(`PRAGMA table_info(${quoted})`).all();
+            const columns = (cols || []).map(c => c.name).filter(Boolean);
+
+            const rows = this.db.prepare(`SELECT * FROM ${quoted} LIMIT ? OFFSET ?`).all(safeLimit, safeOffset);
+            return { table, columns, rows, limit: safeLimit, offset: safeOffset };
+        } catch (error) {
+            console.error('❌ [DB-VIEW] Erreur getDatabaseTablePreview:', error);
+            return { table: String(tableName || ''), columns: [], rows: [], limit: 0, offset: 0, error: error.message };
+        }
+    }
 }
 
 module.exports = OptimizedDatabaseService;

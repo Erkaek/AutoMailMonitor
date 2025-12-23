@@ -53,6 +53,8 @@ class MailMonitor {
   this._weeklyRefreshTimer = null;
   this._weeklyInFlight = { stats: null, history: null };
   this._weeklyLastCall = { stats: 0, history: 0 };
+  // DB tab state
+  this._db = { initialized: false, active: false, timer: null };
     this.charts = {};
     this.init();
   }
@@ -184,6 +186,8 @@ class MailMonitor {
       await this.completeLoadingTask('weekly', this.initWeeklyTracking());
   // Initialize logs tab
   this.initLogsTab();
+  // Initialize DB tab (if enabled/visible, activation happens on tab change)
+  this.initDbTab();
       
       this.startPeriodicUpdates();
   // setupAutoRefresh is already invoked in setupEventListeners(); avoid double wiring
@@ -208,6 +212,134 @@ class MailMonitor {
       this.showNotification('Erreur d\'initialisation', error.message, 'danger');
       this.finishLoading();
     }
+  }
+
+  // ====== BDD TAB (lecture brute) ======
+  initDbTab() {
+    const tableEl = document.getElementById('db-table');
+    const limitEl = document.getElementById('db-limit');
+    const autoEl = document.getElementById('db-auto');
+    const refreshBtn = document.getElementById('db-refresh');
+    const headEl = document.getElementById('db-table-head');
+    const bodyEl = document.getElementById('db-table-body');
+    const statusEl = document.getElementById('db-status');
+    if (!tableEl || !limitEl || !autoEl || !refreshBtn || !headEl || !bodyEl || !statusEl) return;
+
+    const escapeHtml = (text) => String(text ?? '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#039;');
+
+    const formatCell = (val) => {
+      if (val === null || val === undefined) return '<span class="text-muted">NULL</span>';
+      if (typeof val === 'object') {
+        try { return escapeHtml(JSON.stringify(val)); } catch { return escapeHtml(String(val)); }
+      }
+      return escapeHtml(String(val));
+    };
+
+    const setStatus = (msg) => {
+      statusEl.textContent = msg || '—';
+    };
+
+    const renderTable = (columns, rows) => {
+      const cols = Array.isArray(columns) ? columns : [];
+      const safeCols = cols.length ? cols : (rows && rows[0] ? Object.keys(rows[0]) : []);
+
+      headEl.innerHTML = `<tr>${safeCols.map(c => `<th>${escapeHtml(c)}</th>`).join('')}</tr>`;
+      if (!rows || rows.length === 0) {
+        bodyEl.innerHTML = `<tr><td class="text-muted py-3" colspan="${Math.max(1, safeCols.length)}">Aucune donnée</td></tr>`;
+        return;
+      }
+
+      const html = rows.map(r => {
+        const cells = safeCols.map(c => `<td>${formatCell(r?.[c])}</td>`).join('');
+        return `<tr>${cells}</tr>`;
+      }).join('');
+      bodyEl.innerHTML = html;
+    };
+
+    const fetchTables = async () => {
+      try {
+        setStatus('Chargement des tables…');
+        const res = await window.electronAPI.getDbTables?.();
+        const tables = (res && res.success && Array.isArray(res.tables)) ? res.tables : [];
+        tableEl.innerHTML = tables.length
+          ? tables.map(t => `<option value="${escapeHtml(t)}">${escapeHtml(t)}</option>`).join('')
+          : '<option value="">(aucune table)</option>';
+        // Sélectionner la première table si aucune sélection
+        if (!tableEl.value && tables[0]) tableEl.value = tables[0];
+        setStatus(`Tables: ${tables.length} • ${new Date().toLocaleTimeString('fr-FR')}`);
+      } catch (e) {
+        tableEl.innerHTML = '<option value="">(erreur)</option>';
+        setStatus('Erreur chargement tables');
+      }
+    };
+
+    const fetchPreview = async () => {
+      const table = tableEl.value;
+      const limit = Number(limitEl.value) || 200;
+      if (!table) {
+        renderTable([], []);
+        setStatus('Sélectionnez une table');
+        return;
+      }
+      try {
+        setStatus(`Chargement ${table}…`);
+        const res = await window.electronAPI.getDbTablePreview?.({ table, limit, offset: 0 });
+        if (!(res && res.success)) {
+          renderTable([], []);
+          setStatus(res?.error || 'Erreur chargement table');
+          return;
+        }
+        const data = res.data || {};
+        renderTable(data.columns || [], data.rows || []);
+        setStatus(`${escapeHtml(table)} • ${Array.isArray(data.rows) ? data.rows.length : 0} ligne(s) • ${new Date().toLocaleTimeString('fr-FR')}`);
+      } catch (e) {
+        renderTable([], []);
+        setStatus('Erreur chargement table');
+      }
+    };
+
+    const startAuto = () => {
+      if (this._db.timer) return;
+      this._db.timer = setInterval(() => {
+        // Auto-refresh uniquement si onglet actif ET option activée
+        if (!this._db.active) return;
+        if (!autoEl.checked) return;
+        fetchPreview();
+      }, 2000);
+    };
+
+    const stopAuto = () => {
+      if (this._db.timer) {
+        clearInterval(this._db.timer);
+        this._db.timer = null;
+      }
+    };
+
+    // Public-ish hooks for tab lifecycle
+    this._dbStart = () => { this._db.active = true; startAuto(); };
+    this._dbStop = () => { this._db.active = false; stopAuto(); };
+    this._dbRefreshNow = async () => {
+      if (!this._db.initialized) {
+        await fetchTables();
+        this._db.initialized = true;
+      }
+      await fetchPreview();
+    };
+
+    // Bind UI events
+    refreshBtn.addEventListener('click', () => this._dbRefreshNow());
+    tableEl.addEventListener('change', () => this._dbRefreshNow());
+    limitEl.addEventListener('change', () => this._dbRefreshNow());
+    autoEl.addEventListener('change', () => {
+      if (autoEl.checked) startAuto();
+    });
+
+    // Initial tables load is deferred until first activation to avoid extra IPC on startup
   }
 
   // ---------- Sidebar responsive ----------
@@ -661,7 +793,7 @@ class MailMonitor {
     const exportBtn = document.getElementById('logs-export');
   const openFolderBtn = document.getElementById('logs-open-folder');
     const copyAllBtn = document.getElementById('logs-copy-all');
-    const container = view?.parentElement;
+    const container = document.getElementById('logs-container') || view?.parentElement;
   if (!view || !countEl || !bufferedEl || !statusEl || !searchEl || !levelEl || !categoryEl || !refreshBtn || !exportBtn || !openFolderBtn || !copyAllBtn) return;
 
     // Update autoScroll based on user scroll position
@@ -1966,11 +2098,6 @@ class MailMonitor {
                     <div class="form-text">Chaque dossier peut être affecté à une catégorie différente.</div>
                   </div>
                   <div class="mb-3">
-                    <label class="form-label">Logs (complets pour debug)</label>
-                    <div id="folder-log-box" class="border rounded p-2 bg-light" style="max-height: 200px; overflow-y: auto; font-family: monospace; font-size: 12px;"></div>
-                    <div class="form-text">Flux complet des logs temps réel pendant l'exploration (limité à 200 lignes).</div>
-                  </div>
-                  <div class="mb-3">
                     <label class="form-label">Catégorie</label>
                     <select class="form-control" id="category-input" required>
                       <option value="">-- Sélectionner une catégorie --</option>
@@ -2007,7 +2134,6 @@ class MailMonitor {
       const rootInput = document.getElementById('root-folder-input');
       const loadButton = document.getElementById('load-root-tree');
       const alertBox = document.getElementById('folder-modal-alert');
-      const logBox = document.getElementById('folder-log-box');
 
       // Gestion multi-sélection pour l'ajout en masse
       const selectionCtrl = this.createFolderSelectionController({
@@ -2016,33 +2142,6 @@ class MailMonitor {
         hiddenInputId: 'selected-folder-path'
       });
       this._folderSelectionController = selectionCtrl;
-
-      const pushLog = (msg) => {
-        if (!logBox) return;
-        const line = document.createElement('div');
-        line.textContent = msg;
-        logBox.appendChild(line);
-        // limiter le nombre de lignes
-        while (logBox.children.length > 200) {
-          logBox.removeChild(logBox.firstChild);
-        }
-        logBox.scrollTop = logBox.scrollHeight;
-      };
-
-      // Abonnement aux logs du main process (flux complet, limité à 200 lignes pour le modal)
-      if (!window.__folderLogHandlerAttached && window.electronAPI?.onLogEntry) {
-        window.__folderLogHandlerAttached = true;
-        window.electronAPI.onLogEntry((entry) => {
-          if (!document.getElementById('folderModal')) return; // modal fermé => ignore
-          const ts = entry?.ts || entry?.timestamp || entry?.time || new Date().toLocaleTimeString();
-          const lvl = (entry?.level || 'info').toString().toUpperCase();
-          const txt = (entry && (entry.text || entry.message || entry.msg || entry.error || entry)) ? String(entry.text || entry.message || entry.msg || entry.error || entry) : '';
-          if (!txt) return;
-          // Filtrer les logs trop verbeux non liés à l'exploration
-          if (/\[INFO\]\s*\[(CONFIG|WEEKLY)\]/i.test(txt)) return;
-          pushLog(`[${ts}] [${lvl}] ${txt}`);
-        });
-      }
 
       if (rootInput && this.state?.lastRootFolderPath) {
         rootInput.value = this.state.lastRootFolderPath;
@@ -2167,11 +2266,6 @@ class MailMonitor {
       // Sauvegarde
       document.getElementById('save-folder-config').addEventListener('click', () => {
         this.saveFolderConfiguration(modal);
-      });
-
-      // Nettoyage du buffer de logs à la fermeture du modal
-      document.getElementById('folderModal')?.addEventListener('hidden.bs.modal', () => {
-        if (logBox) logBox.innerHTML = '';
       });
 
       return true;
@@ -4370,6 +4464,7 @@ class MailMonitor {
         personalPerformance: !!document.getElementById('tab-personal-performance')?.checked,
         importActivity: !!document.getElementById('tab-import-activity')?.checked,
         monitoring: !!document.getElementById('tab-monitoring')?.checked,
+        db: !!document.getElementById('tab-db')?.checked,
       };
 
       // Récupérer les valeurs du formulaire
@@ -4435,7 +4530,9 @@ class MailMonitor {
               weekly: true,
               personalPerformance: true,
               importActivity: true,
-              monitoring: true
+              monitoring: true,
+              // IMPORTANT: l'onglet BDD est désactivé par défaut
+              db: false
             }
           },
           database: {
@@ -4501,7 +4598,8 @@ class MailMonitor {
           weekly: true,
           personalPerformance: true,
           importActivity: true,
-          monitoring: true
+          monitoring: true,
+          db: false
         });
   // Thème par défaut
   this.applyTheme('light');
@@ -4555,11 +4653,15 @@ class MailMonitor {
         ['tab-weekly','weekly'],
         ['tab-personal-performance','personalPerformance'],
         ['tab-import-activity','importActivity'],
-        ['tab-monitoring','monitoring']
+        ['tab-monitoring','monitoring'],
+        ['tab-db','db']
       ];
       for (const [domId, key] of map) {
         const el = document.getElementById(domId);
-        if (el) el.checked = (tabs?.[key] !== undefined ? !!tabs[key] : true);
+        if (el) {
+          const defaultChecked = (key === 'db') ? false : true;
+          el.checked = (tabs?.[key] !== undefined ? !!tabs[key] : defaultChecked);
+        }
       }
     }
     
@@ -4618,6 +4720,7 @@ class MailMonitor {
       personalPerformance: true,
       importActivity: true,
       monitoring: true,
+      db: false,
     }, tabs || {});
 
     const setVisible = (navSelector, paneSelector, visible) => {
@@ -4640,12 +4743,18 @@ class MailMonitor {
     setVisible('#personal-performance', '#personal-performance', conf.personalPerformance);
     setVisible('#import-activity', '#import-activity', conf.importActivity);
     setVisible('#monitoring', '#monitoring', conf.monitoring);
+    setVisible('#db', '#db', conf.db);
   }
 
   handleTabChange(target) {
     // Recharger les données spécifiques à l'onglet immédiatement
     // Changement d'onglet - log conservé pour navigation
     console.log(`🔄 Changement d'onglet vers: ${target}`);
+
+    // Lifecycle: BDD auto-refresh only when active
+    if (target !== '#db') {
+      try { this._dbStop?.(); } catch (_) {}
+    }
     
     switch (target) {
       case '#dashboard':
@@ -4661,6 +4770,12 @@ class MailMonitor {
         break;
       case '#monitoring':
         // Configuration déjà chargée
+        break;
+      case '#db':
+        try {
+          this._dbStart?.();
+          this._dbRefreshNow?.();
+        } catch (_) {}
         break;
     }
   }

@@ -2107,6 +2107,36 @@ ipcMain.handle('api-app-settings-load', async () => {
   }
 });
 
+// ========================================================================
+// BDD (UI debug): lecture brute en direct (READ ONLY)
+// ========================================================================
+
+ipcMain.handle('api-db-list-tables', async () => {
+  try {
+    await global.databaseService.initialize();
+    const tables = global.databaseService.listDatabaseTables?.() || [];
+    return { success: true, tables };
+  } catch (error) {
+    console.error('❌ [IPC] Erreur api-db-list-tables:', error);
+    return { success: false, error: error.message, tables: [] };
+  }
+});
+
+ipcMain.handle('api-db-table-preview', async (_event, payload) => {
+  try {
+    await global.databaseService.initialize();
+    const table = payload?.table;
+    const limit = payload?.limit;
+    const offset = payload?.offset;
+    const res = global.databaseService.getDatabaseTablePreview?.(table, limit, offset);
+    if (res?.error) return { success: false, error: res.error, data: res };
+    return { success: true, data: res };
+  } catch (error) {
+    console.error('❌ [IPC] Erreur api-db-table-preview:', error);
+    return { success: false, error: error.message, data: { columns: [], rows: [] } };
+  }
+});
+
 // APIs VBA Metrics
 ipcMain.handle('api-vba-metrics-summary', async () => {
   try {

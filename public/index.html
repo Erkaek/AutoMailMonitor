@@ -87,6 +87,11 @@
           <i class="bi bi-journal-text me-2"></i>Logs
         </a>
       </li>
+      <li class="nav-item mb-2" id="nav-item-db">
+        <a class="nav-link text-white" href="#" id="nav-db" data-bs-toggle="pill" data-bs-target="#db">
+          <i class="bi bi-database me-2"></i>BDD
+        </a>
+      </li>
       <li class="nav-item mb-2" id="nav-item-settings">
         <a class="nav-link text-white" href="#" id="nav-settings" data-bs-toggle="pill" data-bs-target="#settings">
           <i class="bi bi-gear me-2"></i>Paramètres
@@ -276,49 +281,137 @@
         <!-- Logs Tab -->
         <div class="tab-pane fade" id="logs">
           <div class="pane-scroll">
-            <div class="card border-0 shadow-sm mb-3">
-              <div class="card-header bg-white d-flex justify-content-between align-items-center">
-                <h5 class="mb-0"><i class="bi bi-journal-text me-2"></i>Journal d'application</h5>
-                <div class="d-flex gap-2">
-                  <input type="text" class="form-control form-control-sm" id="logs-search" placeholder="Rechercher...">
-                  <select id="logs-level" class="form-select form-select-sm" style="width:auto;">
-                    <option value="ALL">Tous</option>
-                    <option value="INFO">Info</option>
-                    <option value="SUCCESS">Succès</option>
-                    <option value="WARN">Warn</option>
-                    <option value="ERROR">Error</option>
-                    <option value="DEBUG">Debug</option>
-                  </select>
-                  <select id="logs-category" class="form-select form-select-sm" style="width:auto;">
-                    <option value="ALL">Toutes catégories</option>
-                    <option value="INIT">🚀 Init</option>
-                    <option value="SYNC">🔄 Sync</option>
-                    <option value="COM">📡 COM</option>
-                    <option value="DB">💾 DB</option>
-                    <option value="PS">⚙️ PowerShell</option>
-                    <option value="IPC">📱 IPC</option>
-                    <option value="CONFIG">⚙️ Config</option>
-                    <option value="WEEKLY">📅 Weekly</option>
-                    <option value="EMAIL">📧 Email</option>
-                    <option value="PERF">⚡ Performance</option>
-                    <option value="SECURITY">🔒 Security</option>
-                    <option value="CACHE">💨 Cache</option>
-                    <option value="START">▶️ Start</option>
-                    <option value="STOP">⏹️ Stop</option>
-                    <option value="AUTO">🤖 Auto</option>
-                  </select>
-                  <button class="btn btn-outline-secondary btn-sm" id="logs-refresh"><i class="bi bi-arrow-clockwise"></i></button>
-                  <button class="btn btn-outline-secondary btn-sm" id="logs-open-folder" title="Ouvrir le dossier de logs"><i class="bi bi-folder2-open"></i></button>
-                  <button class="btn btn-outline-primary btn-sm" id="logs-export"><i class="bi bi-download me-1"></i>Exporter</button>
-                  <button class="btn btn-outline-success btn-sm" id="logs-copy-all" title="Copier tous les logs dans le presse-papier"><i class="bi bi-clipboard me-1"></i>Copier tout</button>
+            <div class="row g-3">
+              <div class="col-12">
+                <div class="card border-0 shadow-sm logs-card">
+                  <div class="card-header bg-light d-flex justify-content-between align-items-center">
+                    <h5 class="mb-0 fw-semibold"><i class="bi bi-journal-text me-2"></i>Journal d'application</h5>
+                    <div class="d-flex align-items-center gap-2 small text-muted">
+                      <span>Entrées: <span class="fw-semibold" id="logs-count">0</span></span>
+                      <span class="opacity-50">•</span>
+                      <span>Tampon: <span class="fw-semibold" id="logs-buffered">0</span></span>
+                    </div>
+                  </div>
+
+                  <div class="card-body p-0 d-flex flex-column" style="min-height: 0;">
+                    <div class="logs-toolbar p-3">
+                      <div class="row g-2 align-items-end">
+                        <div class="col-12 col-lg-5">
+                          <label for="logs-search" class="form-label mb-1 small text-muted">Recherche</label>
+                          <div class="input-group input-group-sm">
+                            <span class="input-group-text"><i class="bi bi-search"></i></span>
+                            <input type="text" class="form-control" id="logs-search" placeholder="Rechercher dans message / data...">
+                          </div>
+                        </div>
+                        <div class="col-6 col-lg-2">
+                          <label for="logs-level" class="form-label mb-1 small text-muted">Niveau</label>
+                          <select id="logs-level" class="form-select form-select-sm">
+                            <option value="ALL">Tous</option>
+                            <option value="INFO">Info</option>
+                            <option value="SUCCESS">Succès</option>
+                            <option value="WARN">Warn</option>
+                            <option value="ERROR">Error</option>
+                            <option value="DEBUG">Debug</option>
+                          </select>
+                        </div>
+                        <div class="col-6 col-lg-3">
+                          <label for="logs-category" class="form-label mb-1 small text-muted">Catégorie</label>
+                          <select id="logs-category" class="form-select form-select-sm">
+                            <option value="ALL">Toutes catégories</option>
+                            <option value="INIT">🚀 Init</option>
+                            <option value="SYNC">🔄 Sync</option>
+                            <option value="COM">📡 COM</option>
+                            <option value="DB">💾 DB</option>
+                            <option value="PS">⚙️ PowerShell</option>
+                            <option value="IPC">📱 IPC</option>
+                            <option value="CONFIG">⚙️ Config</option>
+                            <option value="WEEKLY">📅 Weekly</option>
+                            <option value="EMAIL">📧 Email</option>
+                            <option value="PERF">⚡ Performance</option>
+                            <option value="SECURITY">🔒 Security</option>
+                            <option value="CACHE">💨 Cache</option>
+                            <option value="START">▶️ Start</option>
+                            <option value="STOP">⏹️ Stop</option>
+                            <option value="AUTO">🤖 Auto</option>
+                          </select>
+                        </div>
+                        <div class="col-12 col-lg-2 d-flex justify-content-lg-end gap-2">
+                          <button class="btn btn-outline-secondary btn-sm" id="logs-refresh" title="Rafraîchir"><i class="bi bi-arrow-clockwise"></i></button>
+                          <button class="btn btn-outline-secondary btn-sm" id="logs-open-folder" title="Ouvrir le dossier de logs"><i class="bi bi-folder2-open"></i></button>
+                        </div>
+                        <div class="col-12 d-flex flex-wrap gap-2 justify-content-end">
+                          <button class="btn btn-outline-primary btn-sm" id="logs-export"><i class="bi bi-download me-1"></i>Exporter</button>
+                          <button class="btn btn-outline-success btn-sm" id="logs-copy-all" title="Copier tous les logs dans le presse-papier"><i class="bi bi-clipboard me-1"></i>Copier tout</button>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div class="logs-console" id="logs-container" role="region" aria-label="Flux des logs">
+                      <div id="logs-view" class="logs-view"></div>
+                    </div>
+                  </div>
+
+                  <div class="card-footer d-flex justify-content-between align-items-center small text-muted">
+                    <div id="logs-status">—</div>
+                    <div class="text-end">Astuce: faire défiler vers le haut pour mettre en pause l'auto-scroll</div>
+                  </div>
                 </div>
               </div>
-              <div class="card-body p-0" style="height: 420px; overflow: auto; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace; font-size: 12px;">
-                <pre id="logs-view" class="m-0 p-3" style="white-space: pre-wrap;"></pre>
-              </div>
-              <div class="card-footer d-flex justify-content-between align-items-center small text-muted">
-                <div>Entrées affichées: <span id="logs-count">0</span> • Tampon: <span id="logs-buffered">0</span></div>
-                <div id="logs-status">—</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- BDD Tab (désactivé par défaut via Paramètres) -->
+        <div class="tab-pane fade" id="db">
+          <div class="pane-scroll">
+            <div class="row g-3">
+              <div class="col-12">
+                <div class="card border-0 shadow-sm db-card">
+                  <div class="card-header bg-light d-flex justify-content-between align-items-center">
+                    <h5 class="mb-0 fw-semibold"><i class="bi bi-database me-2"></i>BDD (données brutes)</h5>
+                    <div class="small text-muted" id="db-status">—</div>
+                  </div>
+                  <div class="card-body p-0 d-flex flex-column" style="min-height:0;">
+                    <div class="db-toolbar p-3">
+                      <div class="row g-2 align-items-end">
+                        <div class="col-12 col-lg-5">
+                          <label for="db-table" class="form-label mb-1 small text-muted">Table</label>
+                          <select class="form-select form-select-sm" id="db-table">
+                            <option value="">Chargement...</option>
+                          </select>
+                        </div>
+                        <div class="col-6 col-lg-2">
+                          <label for="db-limit" class="form-label mb-1 small text-muted">Limite</label>
+                          <select class="form-select form-select-sm" id="db-limit">
+                            <option value="50">50</option>
+                            <option value="100">100</option>
+                            <option value="200" selected>200</option>
+                            <option value="500">500</option>
+                          </select>
+                        </div>
+                        <div class="col-6 col-lg-3">
+                          <div class="form-check">
+                            <input class="form-check-input" type="checkbox" id="db-auto" checked>
+                            <label class="form-check-label" for="db-auto">Actualisation auto</label>
+                          </div>
+                          <div class="form-text">Rafraîchit uniquement quand l’onglet est actif.</div>
+                        </div>
+                        <div class="col-12 col-lg-2 d-flex justify-content-lg-end gap-2">
+                          <button class="btn btn-outline-secondary btn-sm" id="db-refresh" title="Rafraîchir"><i class="bi bi-arrow-clockwise"></i></button>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div class="db-table-wrap table-responsive" id="db-table-wrap">
+                      <table class="table table-sm table-striped mb-0">
+                        <thead class="table-light" id="db-table-head"></thead>
+                        <tbody id="db-table-body">
+                          <tr><td class="text-muted py-3">Sélectionnez une table…</td></tr>
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
@@ -1204,6 +1297,12 @@
                         <div class="form-check">
                           <input class="form-check-input" type="checkbox" id="tab-monitoring" checked>
                           <label class="form-check-label" for="tab-monitoring">Monitoring</label>
+                        </div>
+                      </div>
+                      <div class="col-md-4">
+                        <div class="form-check">
+                          <input class="form-check-input" type="checkbox" id="tab-db">
+                          <label class="form-check-label" for="tab-db">BDD</label>
                         </div>
                       </div>
                     </div>

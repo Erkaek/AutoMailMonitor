@@ -73,6 +73,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // API Base de données
   getCategoryStats: () => ipcRenderer.invoke('api-database-category-stats'),
   getFolderStats: () => ipcRenderer.invoke('api-database-folder-stats'),
+
+  // API BDD (debug, lecture seule)
+  getDbTables: () => ipcRenderer.invoke('api-db-list-tables'),
+  getDbTablePreview: (payload) => ipcRenderer.invoke('api-db-table-preview', payload),
   
   // APIs de monitoring
   // start/stop manuels retirés de l'UI; on conserve uniquement la lecture du statut

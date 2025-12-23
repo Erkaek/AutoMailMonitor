@@ -258,6 +258,47 @@ img, svg, canvas, video { max-width: 100%; height: auto; }
 /* Emails: single scroll area is the pane-scroll */
 #emails .pane-scroll { display: flex; flex-direction: column; overflow-x: hidden; overflow-y: auto; }
 #emails .pane-scroll > .card { flex: 0 0 auto; display: flex; flex-direction: column; min-height: 0; }
+
+/* --- Logs tab: coherent with other panes (card + toolbar + console) --- */
+#logs .pane-scroll { display: flex; flex-direction: column; min-height: 0; }
+#logs .logs-card { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+#logs .logs-toolbar {
+  border-bottom: 1px solid var(--bs-border-color);
+  background: var(--bs-body-bg);
+}
+#logs .logs-console {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+}
+#logs .logs-view {
+  padding: 0.75rem;
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+/* --- BDD tab: raw table viewer --- */
+#db .pane-scroll { display: flex; flex-direction: column; min-height: 0; }
+#db .db-card { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+#db .db-toolbar {
+  border-bottom: 1px solid var(--bs-border-color);
+  background: var(--bs-body-bg);
+}
+#db .db-table-wrap {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+}
+#db .db-table-wrap td, #db .db-table-wrap th {
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  vertical-align: top;
+}
 #emails .pane-scroll > .card > .card-body.p-0 { flex: 1 1 auto; display: flex; flex-direction: column; min-height: 0; }
 #emails .pane-scroll > .card > .card-body.p-0 > .table-responsive { flex: 1 1 auto; min-height: 0; overflow-y: visible; }
 
