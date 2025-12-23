@@ -89,6 +89,45 @@ class UnifiedMonitoringService extends EventEmitter {
             batchSize: 50,
             intervalMs: 100
         };
+
+        // Réconciliation anti-écart (déplacements/suppressions manqués)
+        this._folderReconcileState = {
+            lastRunAtByPath: new Map(),
+            inFlightByPath: new Map()
+        };
+    }
+
+    async reconcileFolderFullScan(folder, reason = '') {
+        const folderPath = folder?.path;
+        if (!folderPath) return;
+
+        const minIntervalMs = 2 * 60 * 1000; // éviter les scans complets trop fréquents
+        const lastAt = this._folderReconcileState.lastRunAtByPath.get(folderPath) || 0;
+        const now = Date.now();
+        if (now - lastAt < minIntervalMs) {
+            return;
+        }
+
+        if (this._folderReconcileState.inFlightByPath.get(folderPath)) {
+            return;
+        }
+
+        const runPromise = (async () => {
+            this._folderReconcileState.lastRunAtByPath.set(folderPath, now);
+            try {
+                this.log(`🧹 Réconciliation complète: ${folder.name}${reason ? ` (${reason})` : ''}`, 'SYNC');
+                await this.baselineSyncFolder(folder);
+            } catch (e) {
+                this.log(`⚠️ Réconciliation échouée pour ${folder.name}: ${e.message}`, 'WARNING');
+            }
+        })();
+
+        this._folderReconcileState.inFlightByPath.set(folderPath, runPromise);
+        try {
+            await runPromise;
+        } finally {
+            this._folderReconcileState.inFlightByPath.delete(folderPath);
+        }
     }
     
     /**
@@ -1413,6 +1452,9 @@ class UnifiedMonitoringService extends EventEmitter {
         const pageSize = Math.max(50, Number(this.config.syncBatchSize) || 50);
         const psPageSize = Math.max(100, Math.min(1000, pageSize * 10));
 
+        // Cutoff de réconciliation: tout email du dossier non revu depuis ce moment sera considéré absent
+        const baselineStartedAt = new Date().toISOString();
+
         let before = null;
         let maxCursor = null;
         let totalFetched = 0;
@@ -1484,6 +1526,19 @@ class UnifiedMonitoringService extends EventEmitter {
             baseline_done: 1
         });
 
+        // Réconciliation: marquer supprimés/déplacés les emails qui étaient en BDD pour ce dossier
+        // mais qui n'ont pas été revus pendant ce baseline complet.
+        try {
+            const changes = this.dbService.softDeleteMissingEmailsByFolderSince(folder.path, baselineStartedAt);
+            if (changes > 0) {
+                this.log(`🧹 Réconciliation: ${changes} email(s) marqués absents dans ${folder.name}`, 'SYNC');
+                try { this.emailCache?.clear?.(); } catch (_) {}
+                try { this.cacheService?.invalidateStats?.(); } catch (_) {}
+            }
+        } catch (e) {
+            this.log(`⚠️ Réconciliation baseline ignorée (${folder.name}): ${e.message}`, 'WARNING');
+        }
+
         this.log(`✅ Baseline terminé: ${folder.name} (${totalFetched} items traités)`, 'SUCCESS');
     }
 
@@ -1513,6 +1568,19 @@ class UnifiedMonitoringService extends EventEmitter {
                 await this.processBatch(chunk, folder);
             }
         }
+
+        // Détection d'écart offline: si Outlook indique un total plus petit que la BDD,
+        // on a probablement raté des suppressions/déplacements pendant que l'app était arrêtée.
+        try {
+            const totalInFolder = Number.isFinite(res.totalInFolder) ? Number(res.totalInFolder) : null;
+            if (Number.isFinite(totalInFolder)) {
+                const dbCount = this.dbService.getActiveEmailCountByFolder(folder.path);
+                // Tolérance: 1 (évite de rescan pour des micro-diff temporaires)
+                if (Number.isFinite(dbCount) && dbCount > (totalInFolder + 1)) {
+                    this.reconcileFolderFullScan(folder, 'écart BDD vs Outlook');
+                }
+            }
+        } catch (_) {}
 
         const nextCursor = res.maxLastModificationTime || emails[0]?.LastModificationTime || null;
         if (nextCursor) {
@@ -1729,6 +1797,10 @@ class UnifiedMonitoringService extends EventEmitter {
                     };
                     await this.dbService.saveEmail(saveRecord);
                     this.stats.emailsUpdated++;
+                } else {
+                    // IMPORTANT: même sans changement, marquer l'email comme "vu" pendant les scans
+                    // pour permettre la réconciliation (emails absents) au démarrage.
+                    try { this.dbService.touchEmailSeen(emailId); } catch (_) {}
                 }
             } else {
                 // Nouvel email
@@ -2635,6 +2707,12 @@ class UnifiedMonitoringService extends EventEmitter {
                     const folderConfig = this.getFolderConfigByPath(data.folderPath);
                     if (folderConfig) {
                         this.schedulePartialSync(folderConfig);
+
+                        // Si le nombre baisse, c'est typiquement une suppression ou un déplacement hors du dossier.
+                        // Une sync partielle ne peut pas "deviner" ce qui manque => lancer une réconciliation complète (throttled).
+                        if (Number.isFinite(data.oldCount) && Number.isFinite(data.newCount) && data.newCount < data.oldCount) {
+                            this.reconcileFolderFullScan(folderConfig, 'baisse compteur');
+                        }
                     }
                     
                 } catch (error) {

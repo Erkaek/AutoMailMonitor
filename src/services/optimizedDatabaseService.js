@@ -481,6 +481,7 @@ class OptimizedDatabaseService {
             
             getRecentEmails: this.db.prepare(`
                 SELECT * FROM emails 
+                WHERE deleted_at IS NULL
                 ORDER BY received_time DESC 
                 LIMIT ?
             `),
@@ -492,6 +493,24 @@ class OptimizedDatabaseService {
                     SUM(CASE WHEN DATE(first_seen_at) = DATE('now') THEN 1 ELSE 0 END) as emailsToday,
             SUM(CASE WHEN DATE(treated_at) = DATE('now') THEN 1 ELSE 0 END) as treatedToday
                 FROM emails
+                WHERE deleted_at IS NULL
+            `),
+
+            // Réconciliation (dossier = folder_name == folder.path)
+            getActiveEmailCountByFolder: this.db.prepare(`
+                SELECT COUNT(*) as count
+                FROM emails
+                WHERE deleted_at IS NULL AND folder_name = ?
+            `),
+            softDeleteMissingEmailsByFolderSince: this.db.prepare(`
+                UPDATE emails
+                SET deleted_at = COALESCE(deleted_at, CURRENT_TIMESTAMP),
+                    treated_at = COALESCE(treated_at, CURRENT_TIMESTAMP),
+                    is_treated = 1,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE deleted_at IS NULL
+                  AND folder_name = ?
+                  AND (last_seen_at IS NULL OR last_seen_at < ?)
             `),
             
             // Folders
@@ -546,6 +565,13 @@ class OptimizedDatabaseService {
             
             getEmailByEntryIdAndFolder: this.db.prepare(`
                 SELECT * FROM emails WHERE outlook_id = ? AND folder_name = ?
+            `)
+            ,
+            touchEmailSeen: this.db.prepare(`
+                UPDATE emails
+                SET last_seen_at = CURRENT_TIMESTAMP,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE outlook_id = ?
             `)
         };
 
@@ -624,6 +650,39 @@ class OptimizedDatabaseService {
         this.stats.avgQueryTime = (this.stats.avgQueryTime + queryTime) / 2;
         
         return result;
+    }
+
+    getActiveEmailCountByFolder(folderPath) {
+        try {
+            if (!folderPath) return 0;
+            const row = this.statements?.getActiveEmailCountByFolder?.get(folderPath);
+            return Number(row?.count || 0);
+        } catch (e) {
+            console.warn('⚠️ [DB] getActiveEmailCountByFolder failed:', e.message);
+            return 0;
+        }
+    }
+
+    softDeleteMissingEmailsByFolderSince(folderPath, cutoffIso) {
+        try {
+            if (!folderPath || !cutoffIso) return 0;
+            const res = this.statements?.softDeleteMissingEmailsByFolderSince?.run(folderPath, cutoffIso);
+            return Number(res?.changes || 0);
+        } catch (e) {
+            console.warn('⚠️ [DB] softDeleteMissingEmailsByFolderSince failed:', e.message);
+            return 0;
+        }
+    }
+
+    touchEmailSeen(outlookId) {
+        try {
+            if (!outlookId) return 0;
+            const res = this.statements?.touchEmailSeen?.run(outlookId);
+            return Number(res?.changes || 0);
+        } catch (e) {
+            console.warn('⚠️ [DB] touchEmailSeen failed:', e.message);
+            return 0;
+        }
     }
 
     // (méthodes activity_weekly supprimées)
@@ -1179,7 +1238,7 @@ class OptimizedDatabaseService {
                         COUNT(*) as count,
                         COUNT(CASE WHEN is_read = 0 THEN 1 END) as unread_count
                     FROM emails 
-                    WHERE category IS NOT NULL 
+                    WHERE deleted_at IS NULL AND category IS NOT NULL 
                     GROUP BY category
                 `).all();
                 
@@ -1216,7 +1275,8 @@ class OptimizedDatabaseService {
                 const result = this.db.prepare(`
                     SELECT COUNT(*) as count 
                     FROM emails 
-                    WHERE DATE(received_time) BETWEEN ? AND ?
+                                        WHERE deleted_at IS NULL
+                                            AND DATE(received_time) BETWEEN ? AND ?
                 `).get(startDate, endDate);
                 count = result.count;
                 this.cache.set(cacheKey, count, 300); // Cache 5 minutes
@@ -1241,7 +1301,7 @@ class OptimizedDatabaseService {
         
         if (count === undefined) {
             try {
-                const result = this.db.prepare('SELECT COUNT(*) as count FROM emails WHERE is_read = 0').get();
+                const result = this.db.prepare('SELECT COUNT(*) as count FROM emails WHERE deleted_at IS NULL AND is_read = 0').get();
                 count = result.count;
                 this.cache.set(cacheKey, count, 60); // Cache 1 minute
                 this.stats.cacheMisses++;
@@ -1269,7 +1329,7 @@ class OptimizedDatabaseService {
         
         if (count === undefined) {
             try {
-                const result = this.db.prepare('SELECT COUNT(*) as count FROM emails').get();
+                const result = this.db.prepare('SELECT COUNT(*) as count FROM emails WHERE deleted_at IS NULL').get();
                 count = result.count;
                 this.cache.set(cacheKey, count, 60); // Cache 1 minute
                 this.stats.cacheMisses++;
