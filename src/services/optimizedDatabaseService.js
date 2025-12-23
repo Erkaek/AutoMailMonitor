@@ -745,6 +745,13 @@ class OptimizedDatabaseService {
             } catch {}
         }
 
+        const toIsoIfPossible = (raw) => {
+            if (!raw) return null;
+            const ms = Date.parse(String(raw));
+            if (!Number.isFinite(ms)) return null;
+            return new Date(ms).toISOString();
+        };
+
         let result;
         if (existed) {
             // Mise à jour sans réinsérer (évite de compter une nouvelle arrivée)
@@ -758,24 +765,29 @@ class OptimizedDatabaseService {
             const prevInScope = this.isInMonitoredScope(prevFolderPath);
             const nextInScope = this.isInMonitoredScope(nextFolderPath);
 
+            const nowIso = new Date().toISOString();
             if (!existed.treated_at) {
                 if (emailData.is_treated) {
-                    treatedAtParam = new Date().toISOString();
-                } else if (countReadAsTreated && emailData.is_read && !existed.is_read) {
-                    treatedAtParam = new Date().toISOString();
+                    treatedAtParam = nowIso;
+                } else if (countReadAsTreated && emailData.is_read) {
+                    // Important au démarrage: si l'email arrive déjà en "lu", on le marque traité.
+                    // On tente d'utiliser LastModificationTime (proche du moment où il est passé lu), sinon now.
+                    treatedAtParam = toIsoIfPossible(lastModifiedTime) || nowIso;
                 } else if (emailData.deleted_at) {
                     treatedAtParam = emailData.deleted_at;
                 } else if (prevInScope && !nextInScope) {
-                    treatedAtParam = new Date().toISOString();
+                    treatedAtParam = nowIso;
                 }
             }
+
+            const effectiveIsTreated = !!(emailData.is_treated || emailData.deleted_at || (prevInScope && !nextInScope) || (countReadAsTreated && emailData.is_read) || treatedAtParam);
             result = this.statements.updateEmailByOutlookId.run(
                 normalizedSubject,
                 emailData.sender_email || '',
                 emailData.folder_name || '',
                 emailData.category || 'Mails simples',
                 emailData.is_read ? 1 : 0,
-                emailData.is_treated ? 1 : 0,
+                effectiveIsTreated ? 1 : 0,
                 internetMessageId,
                 lastModifiedTime,
                 treatedAtParam,
@@ -783,8 +795,17 @@ class OptimizedDatabaseService {
             );
         } else {
             // Insertion d'un nouvel email (véritable arrivée)
-            // treated_at initial: si déjà traité ou supprimé à l'insertion
-            const initialTreatedAt = emailData.is_treated ? (emailData.treated_at || new Date().toISOString()) : (emailData.deleted_at ? emailData.deleted_at : null);
+            const countReadAsTreated = !!this.getAppSetting('count_read_as_treated', false);
+            const nowIso = new Date().toISOString();
+            const shouldTreatOnInsert = !!(emailData.is_treated || emailData.deleted_at || (countReadAsTreated && emailData.is_read));
+            // treated_at initial: si déjà traité/supprimé OU si "lu = traité" et l'email arrive déjà en lu
+            const initialTreatedAt = shouldTreatOnInsert
+                ? (
+                    emailData.deleted_at
+                        ? emailData.deleted_at
+                        : (emailData.treated_at || (countReadAsTreated && emailData.is_read ? (toIsoIfPossible(lastModifiedTime) || nowIso) : nowIso))
+                )
+                : null;
             result = this.statements.insertEmailNew.run(
                 outlookId,
                 normalizedSubject,
@@ -793,7 +814,7 @@ class OptimizedDatabaseService {
                 emailData.folder_name || '',
                 emailData.category || 'Mails simples',
                 emailData.is_read ? 1 : 0,
-                emailData.is_treated ? 1 : 0,
+                shouldTreatOnInsert ? 1 : 0,
                 emailData.deleted_at || null,
                 initialTreatedAt,
                 weekId,
@@ -824,6 +845,15 @@ class OptimizedDatabaseService {
     saveEmailsBatch(emails) {
         if (!emails || emails.length === 0) return;
 
+        const toIsoIfPossible = (raw) => {
+            if (!raw) return null;
+            const ms = Date.parse(String(raw));
+            if (!Number.isFinite(ms)) return null;
+            return new Date(ms).toISOString();
+        };
+
+        const countReadAsTreated = !!this.getAppSetting('count_read_as_treated', false);
+
         const transaction = this.db.transaction((emails) => {
             for (const email of emails) {
                 const outlookId = email.outlook_id || email.id || '';
@@ -852,22 +882,44 @@ class OptimizedDatabaseService {
                 const rawSubject = (email.subject ?? email.Subject ?? email.ConversationTopic ?? '').toString();
                 const normalizedSubject = rawSubject.trim() !== '' ? rawSubject : '(Sans objet)';
                 if (existed) {
+                    const nowIso = new Date().toISOString();
+                    // Si l'email arrive déjà lu (au démarrage) et que "lu = traité" est actif,
+                    // on ne peut pas toujours détecter la transition => on marque treated_at si absent.
+                    let treatedAtParam = null;
+                    if (!existed.treated_at) {
+                        if (email.deleted_at) {
+                            treatedAtParam = email.deleted_at;
+                        } else if (email.is_treated) {
+                            treatedAtParam = nowIso;
+                        } else if (countReadAsTreated && email.is_read) {
+                            treatedAtParam = toIsoIfPossible(lastModifiedTime) || nowIso;
+                        }
+                    }
+                    const effectiveIsTreated = !!(email.is_treated || email.deleted_at || (countReadAsTreated && email.is_read) || treatedAtParam);
                     this.statements.updateEmailByOutlookId.run(
                         normalizedSubject,
                         email.sender_email || '',
                         email.folder_name || '',
                         email.category || 'Mails simples',
                         email.is_read ? 1 : 0,
-                        email.is_treated ? 1 : 0,
+                        effectiveIsTreated ? 1 : 0,
                         internetMessageId,
                         lastModifiedTime,
-                        null,
+                        treatedAtParam,
                         outlookId
                     );
                 } else {
                     // IMPORTANT: semaine d'arrivée = détection (insertion), pas received_time
                     const weekId = this.calculateWeekIdentifier(new Date());
-                    const initialTreatedAt = email.is_treated ? (email.treated_at || new Date().toISOString()) : null;
+                    const nowIso = new Date().toISOString();
+                    const shouldTreatOnInsert = !!(email.is_treated || email.deleted_at || (countReadAsTreated && email.is_read));
+                    const initialTreatedAt = shouldTreatOnInsert
+                        ? (
+                            email.deleted_at
+                                ? email.deleted_at
+                                : (email.treated_at || (countReadAsTreated && email.is_read ? (toIsoIfPossible(lastModifiedTime) || nowIso) : nowIso))
+                        )
+                        : null;
                     this.statements.insertEmailNew.run(
                         outlookId,
                         normalizedSubject,
@@ -876,7 +928,7 @@ class OptimizedDatabaseService {
                         email.folder_name || '',
                         email.category || 'Mails simples',
                         email.is_read ? 1 : 0,
-                        email.is_treated ? 1 : 0,
+                        shouldTreatOnInsert ? 1 : 0,
                         null,
                         initialTreatedAt,
                         weekId,
