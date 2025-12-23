@@ -61,7 +61,36 @@ function Find-FolderFromPath([string]$Path, $Namespace, $FallbackInbox = $false)
     $parts = @($p -split "\\" | Where-Object { $_ -and $_.Trim() -ne '' })
     if ($parts.Length -lt 1) { return $null }
 
-    # Cas: un seul segment fourni (ex: "SANOFI"). On tentera root/inbox du store par défaut.
+    # Cas: un seul segment fourni.
+    # - Si ce segment correspond à un Store Outlook, cela représente la racine de la boîte (store root).
+    # - Sinon, on conserve l'ancien comportement (chercher ce nom sous le store par défaut).
+    if ($parts.Length -eq 1) {
+        $candidateStoreName = $parts[0]
+        $storeMatch = $null
+        foreach ($store in $Namespace.Stores) {
+            try {
+                if ((Normalize-Name $store.DisplayName) -eq (Normalize-Name $candidateStoreName)) {
+                    $storeMatch = $store
+                    break
+                }
+            } catch {}
+        }
+        if ($storeMatch) {
+            try {
+                $root = $storeMatch.GetRootFolder()
+            } catch { $root = $null }
+            # Certaines boites partagées ont un root vide; tenter Namespace.Folders mapping
+            try {
+                $childCount = 0; try { $childCount = [int]$root.Folders.Count } catch {}
+                if ($childCount -eq 0) {
+                    foreach ($tf in $Namespace.Folders) { try { if ($tf.Store.StoreID -eq $storeMatch.StoreID) { $root = $tf; break } } catch {} }
+                }
+            } catch {}
+            if ($root) { return $root }
+        }
+    }
+
+    # Chemin store\path (ou path relatif): si on a au moins 2 segments, le 1er est le store.
     $accountName = if ($parts.Length -ge 2) { $parts[0] } else { '' }
     $targetStore = $null
     foreach ($store in $Namespace.Stores) {

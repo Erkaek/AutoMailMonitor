@@ -225,6 +225,12 @@ class MailMonitor {
     const statusEl = document.getElementById('db-status');
     if (!tableEl || !limitEl || !autoEl || !refreshBtn || !headEl || !bodyEl || !statusEl) return;
 
+    // State: filters + last data (client-side filtering)
+    this._db = this._db || { initialized: false, active: false, timer: null };
+    this._db.filters = this._db.filters || {};
+    this._db.lastColumnsKey = this._db.lastColumnsKey || '';
+    this._db.lastData = this._db.lastData || { columns: [], rows: [] };
+
     const escapeHtml = (text) => String(text ?? '')
       .replace(/&/g, '&amp;')
       .replace(/</g, '&lt;')
@@ -248,17 +254,93 @@ class MailMonitor {
       const cols = Array.isArray(columns) ? columns : [];
       const safeCols = cols.length ? cols : (rows && rows[0] ? Object.keys(rows[0]) : []);
 
-      headEl.innerHTML = `<tr>${safeCols.map(c => `<th>${escapeHtml(c)}</th>`).join('')}</tr>`;
-      if (!rows || rows.length === 0) {
-        bodyEl.innerHTML = `<tr><td class="text-muted py-3" colspan="${Math.max(1, safeCols.length)}">Aucune donnée</td></tr>`;
-        return;
-      }
+      // Persist last data for filtering
+      this._db.lastData = { columns: safeCols, rows: Array.isArray(rows) ? rows : [] };
 
-      const html = rows.map(r => {
-        const cells = safeCols.map(c => `<td>${formatCell(r?.[c])}</td>`).join('');
-        return `<tr>${cells}</tr>`;
-      }).join('');
-      bodyEl.innerHTML = html;
+      const normalizeForSearch = (val) => {
+        if (val === null || val === undefined) return '';
+        if (typeof val === 'string') return val;
+        if (typeof val === 'number' || typeof val === 'boolean') return String(val);
+        try { return JSON.stringify(val); } catch { return String(val); }
+      };
+
+      const getActiveFilters = () => {
+        const f = this._db.filters || {};
+        const entries = Object.entries(f)
+          .map(([k, v]) => [k, String(v ?? '').trim()])
+          .filter(([, v]) => v.length > 0);
+        return Object.fromEntries(entries);
+      };
+
+      const applyFilters = (allRows) => {
+        const filters = getActiveFilters();
+        const filterKeys = Object.keys(filters);
+        if (filterKeys.length === 0) return allRows;
+        return allRows.filter(r => {
+          for (const key of filterKeys) {
+            const q = filters[key].toLowerCase();
+            const cell = normalizeForSearch(r?.[key]).toLowerCase();
+            if (!cell.includes(q)) return false;
+          }
+          return true;
+        });
+      };
+
+      const ensureHeaderWithFilters = (colsToUse) => {
+        const key = (colsToUse || []).join('|');
+        if (key && key === this._db.lastColumnsKey) return;
+        this._db.lastColumnsKey = key;
+
+        headEl.innerHTML = `
+          <tr>${colsToUse.map(c => `<th>${escapeHtml(c)}</th>`).join('')}</tr>
+          <tr>${colsToUse.map(c => {
+            const current = String(this._db.filters?.[c] ?? '');
+            return `
+              <th>
+                <input
+                  type="text"
+                  class="form-control form-control-sm"
+                  data-db-filter-col="${escapeHtml(c)}"
+                  placeholder="Filtrer…"
+                  value="${escapeHtml(current)}"
+                />
+              </th>`;
+          }).join('')}</tr>
+        `;
+
+        const inputs = headEl.querySelectorAll('input[data-db-filter-col]');
+        for (const input of inputs) {
+          input.addEventListener('input', () => {
+            const col = input.getAttribute('data-db-filter-col');
+            if (!col) return;
+            this._db.filters[col] = input.value;
+            // Re-render rows only, do not rebuild header
+            renderRows();
+          });
+        }
+      };
+
+      const renderRows = () => {
+        const allRows = this._db.lastData?.rows || [];
+        const colsToUse = this._db.lastData?.columns || [];
+        const filtered = applyFilters(allRows);
+
+        if (!filtered || filtered.length === 0) {
+          const active = Object.values(getActiveFilters()).some(v => v && String(v).trim().length > 0);
+          const msg = active ? 'Aucun résultat (filtres actifs)' : 'Aucune donnée';
+          bodyEl.innerHTML = `<tr><td class="text-muted py-3" colspan="${Math.max(1, colsToUse.length)}">${escapeHtml(msg)}</td></tr>`;
+          return;
+        }
+
+        const html = filtered.map(r => {
+          const cells = colsToUse.map(c => `<td>${formatCell(r?.[c])}</td>`).join('');
+          return `<tr>${cells}</tr>`;
+        }).join('');
+        bodyEl.innerHTML = html;
+      };
+
+      ensureHeaderWithFilters(safeCols);
+      renderRows();
     };
 
     const fetchTables = async () => {
