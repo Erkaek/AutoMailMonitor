@@ -1375,11 +1375,11 @@ ipcMain.handle('api-folders-tree', async (_event, payload) => {
 });
 
 // Statistiques par dossier depuis la base de données (inclut unreadCount)
-ipcMain.handle('api-database-folder-stats', async () => {
+ipcMain.handle('api-database-folder-stats', async (_event, payload = {}) => {
   try {
     const databaseService = require('../services/optimizedDatabaseService');
     await databaseService.initialize();
-    const stats = databaseService.getFolderStats();
+    const stats = databaseService.getFolderStats(payload || {});
     return { success: true, stats };
   } catch (error) {
     console.error('❌ [IPC] Erreur api-database-folder-stats:', error);

@@ -1433,10 +1433,12 @@ class OptimizedDatabaseService {
     /**
      * Statistiques des dossiers
      */
-    getFolderStats() {
+    getFolderStats(opts = {}) {
         const cacheKey = 'folder_stats';
-        let stats = this.cache.get(cacheKey);
-        
+        const force = !!opts.force;
+
+        let stats = force ? null : this.cache.get(cacheKey);
+
         if (!stats) {
             try {
                 const result = this.db.prepare(`
@@ -1445,18 +1447,21 @@ class OptimizedDatabaseService {
                         COUNT(*) as email_count,
                         COUNT(CASE WHEN is_read = 0 THEN 1 END) as unread_count,
                         MAX(received_time) as last_email
-                    FROM emails 
+                    FROM emails
+                    WHERE deleted_at IS NULL
                     GROUP BY folder_name
                 `).all();
-                
+
                 stats = result.map(row => ({
                     path: row.folder_name,
                     emailCount: row.email_count,
                     unreadCount: row.unread_count,
                     lastEmail: row.last_email
                 }));
-                
-                this.cache.set(cacheKey, stats, 120); // Cache 2 minutes
+
+                // Garder un cache par défaut (pour limiter les requêtes), mais permettre au renderer de bypass.
+                // TTL réduit pour limiter les "compteurs figés" en cas d'appel non-forcé.
+                this.cache.set(cacheKey, stats, 10);
                 this.stats.cacheMisses++;
             } catch (error) {
                 console.error('❌ Erreur getFolderStats:', error);
@@ -1465,7 +1470,7 @@ class OptimizedDatabaseService {
         } else {
             this.stats.cacheHits++;
         }
-        
+
         return stats;
     }
 
@@ -1842,6 +1847,20 @@ class OptimizedDatabaseService {
             );
             
             folderKeys.forEach(key => this.cache.del(key));
+
+            // IMPORTANT: invalider aussi les agrégats globaux utilisés par l'UI.
+            // Sinon les compteurs restent "figés" même si les données emails changent.
+            for (const k of ['email_stats', 'category_stats', 'folder_stats', 'unread_email_count', 'total_email_count']) {
+                try { this.cache.del(k); } catch (_) {}
+            }
+            // Invalider les caches dérivés (ex: email_count_YYYY-MM-DD_YYYY-MM-DD)
+            try {
+                for (const k of keys) {
+                    if (k && typeof k === 'string' && k.startsWith('email_count_')) {
+                        this.cache.del(k);
+                    }
+                }
+            } catch (_) {}
             
             if (folderKeys.length > 0) {
                 console.log(`🗑️ [DB-COM] Cache invalidé: ${folderKeys.length} clés pour ${folderPath}`);
@@ -1865,6 +1884,20 @@ class OptimizedDatabaseService {
                 key.startsWith('folder_')
             );
             emailKeys.forEach(key => this.cache.del(key));
+
+            // IMPORTANT: invalider aussi les agrégats globaux.
+            for (const k of ['email_stats', 'category_stats', 'folder_stats', 'unread_email_count', 'total_email_count']) {
+                try { this.cache.del(k); } catch (_) {}
+            }
+
+            // Invalider les caches dérivés (ex: email_count_...)
+            try {
+                for (const k of keys) {
+                    if (k && typeof k === 'string' && k.startsWith('email_count_')) {
+                        this.cache.del(k);
+                    }
+                }
+            } catch (_) {}
             
             // Invalider le cache de l'interface utilisateur via le service global
             if (global.unifiedMonitoringService && global.unifiedMonitoringService.invalidateEmailCache) {

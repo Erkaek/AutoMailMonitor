@@ -72,7 +72,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   
   // API Base de données
   getCategoryStats: () => ipcRenderer.invoke('api-database-category-stats'),
-  getFolderStats: () => ipcRenderer.invoke('api-database-folder-stats'),
+  getFolderStats: (payload) => ipcRenderer.invoke('api-database-folder-stats', payload || {}),
 
   // API BDD (debug, lecture seule)
   getDbTables: () => ipcRenderer.invoke('api-db-list-tables'),

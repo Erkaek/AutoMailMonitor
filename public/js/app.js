@@ -1643,7 +1643,7 @@ class MailMonitor {
 
       const [foldersData, dbFolderStatsResp] = await Promise.all([
         foldersTreePromise,
-        window.electronAPI.getFolderStats?.().catch(() => null)
+        window.electronAPI.getFolderStats?.({ force: true }).catch(() => null)
       ]);
 
       // Index des stats DB par chemin (normalisé)
