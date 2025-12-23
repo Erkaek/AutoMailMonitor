@@ -230,6 +230,24 @@ class UnifiedMonitoringService extends EventEmitter {
             
             // foldersConfig est maintenant toujours un tableau après correction
             if (Array.isArray(foldersConfig)) {
+                const escapeRegExp = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                const normalizeFolderPathForMonitoring = (p) => {
+                    let s = String(p || '').replace(/\//g, '\\').replace(/\\+/g, '\\').trim();
+                    if (!s) return s;
+
+                    // Corriger les cas où le nom de boîte est collé sans antislash (ex: "FlotteAutoBoîte de réception")
+                    // -> "FlotteAuto\\Boîte de réception"
+                    const inboxNames = ['Boîte de réception', 'Boite de reception', 'Inbox'];
+                    for (const inboxName of inboxNames) {
+                        const re = new RegExp(`([^\\\\])(${escapeRegExp(inboxName)})`, 'i');
+                        if (re.test(s)) {
+                            s = s.replace(re, '$1\\\\$2');
+                            s = s.replace(/\\+/g, '\\');
+                        }
+                    }
+                    return s;
+                };
+
                 this.monitoredFolders = foldersConfig.filter(folder => 
                     folder && 
                     (folder.folder_path || folder.folder_name || folder.path) &&
@@ -243,7 +261,7 @@ class UnifiedMonitoringService extends EventEmitter {
                         console.log('🔍 DEBUG MAP - Raw folder:', { folder_path: dbgFolderPath, folder_name: dbgFolderName });
                     }
                     
-                    const resolvedPath = (folder.folder_path || folder.path || folder.folder_name || '').replace(/\\/g, '\\');
+                    const resolvedPath = normalizeFolderPathForMonitoring(folder.folder_path || folder.path || folder.folder_name || '');
                     const mapped = {
                         path: resolvedPath,
                         category: folder.category,
@@ -262,10 +280,10 @@ class UnifiedMonitoringService extends EventEmitter {
 
                 // IMPORTANT (reporting): inclure automatiquement le dossier racine "gestionnaire" (ex: 11- Tanguy)
                 // pour compter les arrivées dès qu'un mail est détecté dans ce dossier (même non trié).
-                const normalize = (p) => String(p || '').replace(/\//g, '\\').replace(/\\+/g, '\\').trim().toLowerCase();
+                const normalize = (p) => normalizeFolderPathForMonitoring(p).toLowerCase();
                 const isManagerSeg = (seg) => /^\d{2,}\s*-\s*.+/.test(String(seg || '').trim());
                 const extractManagerRoot = (fullPath) => {
-                    const raw = String(fullPath || '').replace(/\//g, '\\');
+                    const raw = normalizeFolderPathForMonitoring(fullPath);
                     const parts = raw.split('\\').map(s => s.trim()).filter(Boolean);
                     for (let i = 0; i < parts.length; i++) {
                         if (isManagerSeg(parts[i])) {
@@ -298,8 +316,42 @@ class UnifiedMonitoringService extends EventEmitter {
 
                 if (toAdd.length > 0) {
                     this.monitoredFolders = [...toAdd, ...this.monitoredFolders];
-                    this.log(`📁 +${toAdd.length} dossier(s) racine gestionnaire ajouté(s) automatiquement pour le scope`, 'CONFIG');
+
+                    // Ne logger l'ajout auto qu'une fois par root (évite le spam toutes les 30s)
+                    if (!this._autoScopeRootsLogged) {
+                        this._autoScopeRootsLogged = new Set();
+                    }
+                    const newlyLogged = toAdd.filter(f => {
+                        const k = normalize(f.path);
+                        if (!k) return false;
+                        if (this._autoScopeRootsLogged.has(k)) return false;
+                        this._autoScopeRootsLogged.add(k);
+                        return true;
+                    });
+                    if (newlyLogged.length > 0) {
+                        this.log(`📁 +${newlyLogged.length} dossier(s) racine gestionnaire ajouté(s) automatiquement pour le scope`, 'CONFIG');
+                    }
                 }
+
+                // Dédupliquer les dossiers monitorés par chemin normalisé (évite doubles monitorings / logs)
+                const pickBetter = (a, b) => {
+                    if (!a) return b;
+                    if (!b) return a;
+                    const aAuto = !!a._autoScopeRoot;
+                    const bAuto = !!b._autoScopeRoot;
+                    if (aAuto !== bAuto) return aAuto ? b : a;
+                    const aHasIds = !!(a.entryId || a.entry_id || a.storeId || a.store_id || a.storeName || a.store_name);
+                    const bHasIds = !!(b.entryId || b.entry_id || b.storeId || b.store_id || b.storeName || b.store_name);
+                    if (aHasIds !== bHasIds) return aHasIds ? a : b;
+                    return a;
+                };
+                const byPath = new Map();
+                for (const f of this.monitoredFolders) {
+                    const k = normalize(f?.path);
+                    if (!k) continue;
+                    byPath.set(k, pickBetter(byPath.get(k), f));
+                }
+                this.monitoredFolders = Array.from(byPath.values());
             } else {
                 this.log('⚠️ Format de configuration inattendu, utilisation tableau vide', 'WARNING');
                 this.monitoredFolders = [];
@@ -854,7 +906,45 @@ class UnifiedMonitoringService extends EventEmitter {
      * Récupère la configuration d'un dossier par son chemin
      */
     getFolderConfigByPath(folderPath) {
-        return this.monitoredFolders.find(folder => folder.path === folderPath) || null;
+        if (!folderPath) return null;
+        const normalize = (p) => String(p || '')
+            .replace(/\//g, '\\')
+            .replace(/\\+/g, '\\')
+            .trim()
+            .toLowerCase();
+
+        const target = normalize(folderPath);
+        if (!target) return null;
+
+        // 1) Exact match (normalisé)
+        let best = null;
+        for (const f of (this.monitoredFolders || [])) {
+            const fp = normalize(f?.path);
+            if (fp && fp === target) return f;
+        }
+
+        // 2) Best suffix/prefix match (le plus long gagne)
+        const scoreMatch = (fp, t) => {
+            if (!fp || !t) return 0;
+            if (t.startsWith(fp + '\\') || t === fp) return fp.length;
+            if (fp.startsWith(t + '\\') || fp === t) return t.length;
+            if (t.endsWith('\\' + fp) || t.endsWith(fp)) return fp.length;
+            if (fp.endsWith('\\' + t) || fp.endsWith(t)) return t.length;
+            if (t.includes(fp) || fp.includes(t)) return Math.min(fp.length, t.length);
+            return 0;
+        };
+
+        let bestScore = 0;
+        for (const f of (this.monitoredFolders || [])) {
+            const fp = normalize(f?.path);
+            const s = scoreMatch(fp, target);
+            if (s > bestScore) {
+                bestScore = s;
+                best = f;
+            }
+        }
+
+        return bestScore > 0 ? best : null;
     }
 
     /**
@@ -2414,6 +2504,15 @@ class UnifiedMonitoringService extends EventEmitter {
                     
                     // Mettre à jour la base de données
                     await this.dbService.updateEmailStatus(data.entryId, data.isRead);
+
+                    // IMPORTANT: un passage en lu/non-lu ne change pas le count total du dossier,
+                    // donc on ne reçoit pas forcément folderCountChanged. On force une sync partielle
+                    // (debounced) pour garantir la prise en compte (y compris si EntryID change).
+                    const folderPath = data.folderPath;
+                    const folderConfig = folderPath ? this.getFolderConfigByPath(folderPath) : null;
+                    if (folderConfig) {
+                        this.schedulePartialSync(folderConfig);
+                    }
                     
                     // Émettre événement pour mise à jour de l'interface
                     this.emit('emailStatusUpdated', {
