@@ -473,8 +473,8 @@ class OptimizedDatabaseService {
                     internet_message_id = COALESCE(?, internet_message_id),
                     last_modified_time = COALESCE(?, last_modified_time),
                     last_seen_at = CURRENT_TIMESTAMP,
-                    -- Do not overwrite treated_at unless a non-null value is provided
-                    treated_at = COALESCE(?, treated_at),
+                    -- Allow clearing treated_at when a mail becomes unread (if user expects treated to follow read)
+                    treated_at = CASE WHEN ? = 1 THEN NULL ELSE COALESCE(?, treated_at) END,
                     updated_at = CURRENT_TIMESTAMP
                 WHERE outlook_id = ?
             `),
@@ -836,7 +836,25 @@ class OptimizedDatabaseService {
                 }
             }
 
-            const effectiveIsTreated = !!(emailData.is_treated || emailData.deleted_at || (prevInScope && !nextInScope) || (countReadAsTreated && emailData.is_read) || treatedAtParam);
+            // Demande utilisateur: si un mail repasse NON LU, il doit repasser NON TRAITÉ
+            // (quand le paramètre "lu = traité" est actif). On n'applique pas ce "dé-traitement"
+            // aux mails supprimés ou sortis du scope monitoré.
+            const shouldClearTreated = !!(
+                countReadAsTreated &&
+                !emailData.deleted_at &&
+                nextInScope &&
+                (emailData.is_read === false || emailData.is_read === 0) &&
+                existed.treated_at
+            );
+            const clearTreatedFlag = shouldClearTreated ? 1 : 0;
+
+            const effectiveIsTreated = shouldClearTreated
+                ? false
+                : !!(emailData.is_treated || emailData.deleted_at || (prevInScope && !nextInScope) || (countReadAsTreated && emailData.is_read) || treatedAtParam);
+
+            if (shouldClearTreated) {
+                treatedAtParam = null;
+            }
             result = this.statements.updateEmailByOutlookId.run(
                 normalizedSubject,
                 emailData.sender_email || '',
@@ -846,6 +864,7 @@ class OptimizedDatabaseService {
                 effectiveIsTreated ? 1 : 0,
                 internetMessageId,
                 lastModifiedTime,
+                clearTreatedFlag,
                 treatedAtParam,
                 outlookId
             );
@@ -951,7 +970,22 @@ class OptimizedDatabaseService {
                             treatedAtParam = toIsoIfPossible(lastModifiedTime) || nowIso;
                         }
                     }
-                    const effectiveIsTreated = !!(email.is_treated || email.deleted_at || (countReadAsTreated && email.is_read) || treatedAtParam);
+
+                    const nextInScope = this.isInMonitoredScope(email.folder_name || '');
+                    const shouldClearTreated = !!(
+                        countReadAsTreated &&
+                        !email.deleted_at &&
+                        nextInScope &&
+                        (email.is_read === false || email.is_read === 0) &&
+                        existed.treated_at
+                    );
+                    const clearTreatedFlag = shouldClearTreated ? 1 : 0;
+                    const effectiveIsTreated = shouldClearTreated
+                        ? false
+                        : !!(email.is_treated || email.deleted_at || (countReadAsTreated && email.is_read) || treatedAtParam);
+                    if (shouldClearTreated) {
+                        treatedAtParam = null;
+                    }
                     this.statements.updateEmailByOutlookId.run(
                         normalizedSubject,
                         email.sender_email || '',
@@ -961,6 +995,7 @@ class OptimizedDatabaseService {
                         effectiveIsTreated ? 1 : 0,
                         internetMessageId,
                         lastModifiedTime,
+                        clearTreatedFlag,
                         treatedAtParam,
                         outlookId
                     );
