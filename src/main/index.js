@@ -1303,14 +1303,29 @@ ipcMain.handle('api-folders-tree', async (_event, payload) => {
       const fullPath = fullPathRaw;
 
       // Chercher le dossier dans la structure Outlook pour obtenir le nombre d'emails
-      const outlookFolder = allFolders.find(f => f.path === fullPath || f.name === displayName);
+      const lc = (s) => (s || '').toString().toLowerCase();
+      const fullKey = lc(fullPath);
+      const nameKey = lc(displayName);
+      let outlookFolder = allFolders.find(f => lc(f.path) === fullKey);
+      if (!outlookFolder) {
+        // Fallback suffix (utile si le chemin configuré ne contient pas le préfixe "Boîte aux lettres - ...")
+        outlookFolder = allFolders.find(f => {
+          const p = lc(f.path);
+          return (p && fullKey && (p.endsWith(fullKey) || fullKey.endsWith(p)));
+        });
+      }
+      if (!outlookFolder) {
+        outlookFolder = allFolders.find(f => lc(f.name) === nameKey);
+      }
 
       monitoredFolders.push({
         path: fullPath,
         name: displayName,
         isMonitored: true,
         category: config.category || 'Mails simples',
-        emailCount: outlookFolder ? (outlookFolder.emailCount || 0) : 0,
+        // Laisser null si Outlook ne trouve pas le dossier (permet au renderer de fallback sur la BDD)
+        emailCount: outlookFolder ? (outlookFolder.emailCount ?? outlookFolder.count ?? outlookFolder.total ?? 0) : null,
+        unreadCount: outlookFolder ? (outlookFolder.unreadCount ?? outlookFolder.unread ?? outlookFolder.unreadItems ?? null) : null,
         parentPath: getParentPath(fullPath)
       });
     });

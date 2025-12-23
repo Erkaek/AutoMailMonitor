@@ -1446,47 +1446,37 @@ class MailMonitor {
       let items = [];
 
       if (foldersData && Array.isArray(foldersData.folders) && foldersData.folders.length > 0) {
-        // Filtrer l'arbre pour ne conserver que les dossiers surveillés
+        // IMPORTANT: api-folders-tree renvoie déjà uniquement les dossiers monitorés.
+        // Un filtrage supplémentaire sur monitoredPaths peut exclure des dossiers (mismatch de chemin/prefix).
         const lc = (s) => (s || '').toLowerCase();
-        const monitoredLc = monitoredPaths.map(p => lc(p));
+        items = foldersData.folders.map(f => {
+          const fPath = f.path || f.FolderPath || f.Path || '';
 
-        items = foldersData.folders
-          .filter(f => {
-            const fPath = lc(f.path || f.FolderPath || f.Path || '');
-            if (!fPath) return false;
-            return monitoredLc.some(mp => fPath === mp || fPath.endsWith(mp));
-          })
-          .map(f => {
-            const fPath = f.path || f.FolderPath || f.Path || '';
-            // Récupérer la config surveillée correspondante
-            const matchKey = monitoredPaths.find(p => lc(fPath) === lc(p) || lc(fPath).endsWith(lc(p))) || fPath;
-            const cfg = monitoredConfigs[matchKey] || {};
-            const name = f.name || cfg.name || this.extractFolderName(fPath) || 'Dossier';
-            const category = cfg.category || f.category || '';
-            // Comptages robustes (valeurs natives Outlook > fallback emails récents)
-            // Support multiple possible property names from Outlook/PowerShell shapes
-            const totalRaw =
-              f.TotalItems ?? f.ItemsCount ?? f.TotalItemCount ?? f.ItemCount ?? f.Count ?? f.total ?? f.totalEmails ?? f.emailCount;
-            let unreadRaw =
-              f.UnReadItemCount ?? f.UnreadItemCount ?? f.UnreadCount ?? f.unreadCount ?? f.UnreadItems ?? f.unreadItems ?? f.unread ?? f.unreadEmails;
+          // Optionnel: tenter de récupérer la config UI correspondante pour compléter (nom/catégorie)
+          const matchKey = monitoredPaths.find(p => lc(fPath) === lc(p) || lc(fPath).endsWith(lc(p))) || fPath;
+          const cfg = monitoredConfigs[matchKey] || {};
+          const name = f.name || cfg.name || this.extractFolderName(fPath) || 'Dossier';
+          const category = f.category || cfg.category || '';
 
-            // Fusionner avec la BDD si pas de compteur non lus côté Outlook
-            if (!(Number.isFinite(+unreadRaw))) {
-              const db = statsByPath.get(toKey(fPath))
-                || statsByPath.get(toKey(this.extractFolderName(fPath)))
-                || [...statsByPath.entries()].find(([k]) => toKey(fPath).endsWith(k))?.[1];
-              const dbUnread = db?.unreadCount ?? db?.unread_count;
-              if (Number.isFinite(+dbUnread)) unreadRaw = +dbUnread;
-            }
+          // Comptages robustes (valeurs natives Outlook > fallback BDD)
+          const totalRaw =
+            f.TotalItems ?? f.ItemsCount ?? f.TotalItemCount ?? f.ItemCount ?? f.Count ?? f.total ?? f.totalEmails ?? f.emailCount;
+          let unreadRaw =
+            f.UnReadItemCount ?? f.UnreadItemCount ?? f.UnreadCount ?? f.unreadCount ?? f.UnreadItems ?? f.unreadItems ?? f.unread ?? f.unreadEmails;
 
-            const counts = this._computeFolderCounts({
-              total: totalRaw,
-              unread: unreadRaw,
-              path: fPath,
-              name
-            });
-            return { name, path: fPath, category, total: counts.total, unread: counts.unread };
-          });
+          // Fusionner avec la BDD si compteurs incomplets
+          const db = statsByPath.get(toKey(fPath))
+            || statsByPath.get(toKey(this.extractFolderName(fPath)))
+            || [...statsByPath.entries()].find(([k]) => toKey(fPath).endsWith(k))?.[1];
+          const dbUnread = db?.unreadCount ?? db?.unread_count;
+          const dbTotal = db?.emailCount ?? db?.email_count;
+
+          const total = Number.isFinite(+totalRaw) ? +totalRaw : (Number.isFinite(+dbTotal) ? +dbTotal : null);
+          const unread = Number.isFinite(+unreadRaw) ? +unreadRaw : (Number.isFinite(+dbUnread) ? +dbUnread : null);
+
+          const counts = this._computeFolderCounts({ total, unread, path: fPath, name });
+          return { name, path: fPath, category, total: counts.total, unread: counts.unread };
+        });
       }
 
       // Fallback: s'il n'y a pas d'arborescence, construire depuis la configuration surveillée
@@ -1498,8 +1488,10 @@ class MailMonitor {
           const db = statsByPath.get(toKey(p))
             || statsByPath.get(toKey(name))
             || [...statsByPath.entries()].find(([k]) => toKey(p).endsWith(k))?.[1];
-          let total = Number.isFinite(+db?.emailCount) ? +db.emailCount : null;
-          let unread = Number.isFinite(+db?.unreadCount) ? +db.unreadCount : null;
+          const dbTotal = db?.emailCount ?? db?.email_count;
+          const dbUnread = db?.unreadCount ?? db?.unread_count;
+          let total = Number.isFinite(+dbTotal) ? +dbTotal : null;
+          let unread = Number.isFinite(+dbUnread) ? +dbUnread : null;
           const counts = this._computeFolderCounts({ path: p, name, total, unread });
           return { name, path: p, category: cfg.category || '', total: counts.total, unread: counts.unread };
         });
