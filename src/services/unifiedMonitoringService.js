@@ -2284,6 +2284,23 @@ class UnifiedMonitoringService extends EventEmitter {
                 
                 console.log(`🗑️ [CACHE] Cache invalidé: ${emailKeys.length} clés emails/stats + cache UI`);
             }
+
+            // Invalider aussi le cache partagé (cacheService) utilisé par les handlers IPC
+            try {
+                if (this.cacheService) {
+                    if (typeof this.cacheService.invalidateStats === 'function') this.cacheService.invalidateStats();
+                    else this.cacheService?.del?.('ui', 'dashboard_stats');
+
+                    if (typeof this.cacheService.invalidateEmailsCache === 'function') this.cacheService.invalidateEmailsCache();
+                    else {
+                        this.cacheService?.del?.('emails', 'recent_20');
+                        this.cacheService?.del?.('emails', 'recent_50');
+                    }
+
+                    if (typeof this.cacheService.invalidateFoldersTree === 'function') this.cacheService.invalidateFoldersTree();
+                    else this.cacheService?.del?.('config', 'folders_tree');
+                }
+            } catch (_) {}
             
         } catch (error) {
             console.error('❌ [CACHE] Erreur invalidation cache emails:', error);

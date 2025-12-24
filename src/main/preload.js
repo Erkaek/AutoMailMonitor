@@ -31,7 +31,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getVBAWeeklyEvolution: () => ipcRenderer.invoke('api-vba-weekly-evolution'),
   
   // API Emails
-  getRecentEmails: () => ipcRenderer.invoke('api-recent-emails'),
+  // Utiliser l'endpoint optimisé (cacheService + attente init service unifié + fallback DB)
+  getRecentEmails: () => ipcRenderer.invoke('api-emails-recent'),
   
   // API Settings
   saveFoldersConfig: (data) => ipcRenderer.invoke('api-settings-folders', data),

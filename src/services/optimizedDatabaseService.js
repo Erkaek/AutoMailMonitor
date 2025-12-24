@@ -2280,6 +2280,25 @@ class OptimizedDatabaseService {
                 global.unifiedMonitoringService.invalidateEmailCache();
                 console.log(`🔄 [REAL-TIME] Cache UI invalidé: mise à jour immédiate de l'interface`);
             }
+
+            // IMPORTANT: invalider aussi le cache IPC/UI (cacheService) utilisé par les handlers du main.
+            // Sinon le renderer peut continuer à recevoir des valeurs "figées" (ex: dashboard_stats, recent_XX).
+            try {
+                const cs = global.cacheService;
+                if (cs) {
+                    if (typeof cs.invalidateStats === 'function') cs.invalidateStats();
+                    else cs?.del?.('ui', 'dashboard_stats');
+
+                    if (typeof cs.invalidateEmailsCache === 'function') cs.invalidateEmailsCache();
+                    else {
+                        cs?.del?.('emails', 'recent_20');
+                        cs?.del?.('emails', 'recent_50');
+                    }
+
+                    if (typeof cs.invalidateFoldersTree === 'function') cs.invalidateFoldersTree();
+                    else cs?.del?.('config', 'folders_tree');
+                }
+            } catch (_) {}
             
         } catch (error) {
             console.error('❌ [REAL-TIME] Erreur invalidation cache UI:', error);

@@ -2076,15 +2076,29 @@ ipcMain.handle('api-database-stats', async () => {
 // Handler pour récupérer les emails récents
 ipcMain.handle('api-recent-emails', async () => {
   try {
-    if (global.unifiedMonitoringService) {
-      const emails = await global.unifiedMonitoringService.getRecentEmails(20);
-      return emails;
-    } else {
-      // Fallback vers databaseService direct
-      await global.databaseService.initialize();
-      const emails = await global.databaseService.getRecentEmails(20);
-      return emails;
+    // Compat: garder ce channel, mais appliquer la même stratégie optimisée que api-emails-recent
+    const limit = 20;
+
+    const cachedEmails = cacheService.getRecentEmails(limit);
+    if (cachedEmails) return cachedEmails;
+
+    // Attendre un peu que le service unifié soit prêt si nécessaire
+    let waitAttempts = 0;
+    while (waitAttempts < 10 && global.unifiedMonitoringService && !global.unifiedMonitoringService.isInitialized) {
+      await new Promise(resolve => setTimeout(resolve, 200));
+      waitAttempts++;
     }
+
+    if (global.unifiedMonitoringService && global.unifiedMonitoringService.isInitialized) {
+      const emails = await global.unifiedMonitoringService.getRecentEmails(limit);
+      if (emails) cacheService.set('emails', `recent_${limit}`, emails, 60);
+      return emails || [];
+    }
+
+    await databaseService.initialize();
+    const emails = await databaseService.getRecentEmails(limit);
+    if (emails) cacheService.set('emails', `recent_${limit}`, emails, 60);
+    return emails || [];
   } catch (error) {
     console.error('❌ [IPC] Erreur récupération emails récents:', error);
     return [];
