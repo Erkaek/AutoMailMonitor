@@ -2286,19 +2286,51 @@ class OptimizedDatabaseService {
             try {
                 const cs = global.cacheService;
                 if (cs) {
-                    if (typeof cs.invalidateStats === 'function') cs.invalidateStats();
-                    else cs?.del?.('ui', 'dashboard_stats');
-
-                    if (typeof cs.invalidateEmailsCache === 'function') cs.invalidateEmailsCache();
-                    else {
-                        cs?.del?.('emails', 'recent_20');
-                        cs?.del?.('emails', 'recent_50');
+                    console.log('📊 [CACHE-INVALIDATE] Invalidation cacheService START');
+                    if (typeof cs.invalidateStats === 'function') {
+                        cs.invalidateStats();
+                        console.log('  ✓ invalidateStats() appelée');
+                    } else {
+                        cs?.del?.('ui', 'dashboard_stats');
+                        console.log('  ✓ dashboard_stats supprimée du cache ui');
                     }
 
-                    if (typeof cs.invalidateFoldersTree === 'function') cs.invalidateFoldersTree();
-                    else cs?.del?.('config', 'folders_tree');
+                    if (typeof cs.invalidateEmailsCache === 'function') {
+                        cs.invalidateEmailsCache();
+                        console.log('  ✓ invalidateEmailsCache() appelée');
+                    } else {
+                        cs?.del?.('emails', 'recent_20');
+                        cs?.del?.('emails', 'recent_50');
+                        console.log('  ✓ recent_20 et recent_50 supprimées du cache emails');
+                    }
+
+                    if (typeof cs.invalidateFoldersTree === 'function') {
+                        cs.invalidateFoldersTree();
+                        console.log('  ✓ invalidateFoldersTree() appelée');
+                    } else {
+                        cs?.del?.('config', 'folders_tree');
+                        console.log('  ✓ folders_tree supprimée du cache config');
+                    }
+                    console.log('📊 [CACHE-INVALIDATE] Invalidation cacheService DONE');
+                } else {
+                    console.warn('⚠️ [CACHE-INVALIDATE] cacheService est null/undefined');
                 }
-            } catch (_) {}
+            } catch (e) {
+                console.error('❌ [CACHE-INVALIDATE] Erreur lors invalidation cacheService:', e.message);
+            }
+
+            // Émettre un événement IPC pour forcer le renderer à rafraîchir immédiatement le dashboard
+            try {
+                if (global.mainWindow && global.mainWindow.webContents) {
+                    global.mainWindow.webContents.send('stats-cache-invalidated', {
+                        timestamp: new Date().toISOString(),
+                        reason: 'DB cache invalidation'
+                    });
+                    console.log('📣 [IPC] Événement stats-cache-invalidated émis au renderer');
+                }
+            } catch (e) {
+                console.warn('⚠️ [REAL-TIME] Impossible d\'émettre stats-cache-invalidated:', e?.message || e);
+            }
             
         } catch (error) {
             console.error('❌ [REAL-TIME] Erreur invalidation cache UI:', error);

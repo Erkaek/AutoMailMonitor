@@ -818,6 +818,20 @@ class MailMonitor {
       });
     }
     
+    // NOUVEAU: Rafraîchissement du dashboard quand le cache est invalidé
+    if (window.electronAPI.onStatsCacheInvalidated) {
+      window.electronAPI.onStatsCacheInvalidated((payload) => {
+        console.log('📊 Événement stats-cache-invalidated reçu (cache main invalide)', payload);
+        // Rafraîchir immédiatement le dashboard et les emails récents
+        try {
+          this.performStatsRefresh();
+          this.performEmailsRefresh();
+        } catch (e) {
+          console.warn('⚠️ Erreur refresh rapide après invalidation cache:', e);
+        }
+      });
+    }
+    
     // Rafraîchissement auto des stats hebdo après import/ajustements
     if (window.electronAPI.onWeeklyStatsUpdated) {
       window.electronAPI.onWeeklyStatsUpdated(async (payload) => {

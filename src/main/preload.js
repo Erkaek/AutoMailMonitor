@@ -102,6 +102,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onRealtimeNewEmail: (callback) => ipcRenderer.on('realtime-new-email', (event, ...args) => callback(...args)),
   // Événement de mise à jour des stats hebdo (import, ajustements)
   onWeeklyStatsUpdated: (callback) => ipcRenderer.on('weekly-stats-updated', (event, ...args) => callback(...args)),
+  // NOUVEAU: Événement quand le cache principal est invalidé (forcer rafraîchissement dashboard/emails)
+  onStatsCacheInvalidated: (callback) => ipcRenderer.on('stats-cache-invalidated', (event, ...args) => callback(...args)),
   
   // Événements de mise à jour automatique
   onUpdateChecking: (callback) => ipcRenderer.on('update-checking', (event, ...args) => callback(...args)),

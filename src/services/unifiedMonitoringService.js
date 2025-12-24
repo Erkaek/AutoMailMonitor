@@ -2264,11 +2264,17 @@ class UnifiedMonitoringService extends EventEmitter {
      */
     invalidateEmailCache() {
         try {
+            console.log('📊 [CACHE-UNIFIED] Invalidation START');
+            
             // Vider complètement le cache d'emails
+            const emailCacheSize = this.emailCache.size;
             this.emailCache.clear();
+            console.log(`  ✓ emailCache vidé (${emailCacheSize} entrées supprimées)`);
             
             // Invalider aussi le cache des stats de dossiers
+            const folderCacheSize = this.folderStatsCache.size;
             this.folderStatsCache.clear();
+            console.log(`  ✓ folderStatsCache vidé (${folderCacheSize} entrées supprimées)`);
             
             // Invalider le cache du service de base de données
             if (this.dbService && this.dbService.cache) {
@@ -2282,25 +2288,42 @@ class UnifiedMonitoringService extends EventEmitter {
                 
                 emailKeys.forEach(key => this.dbService.cache.del(key));
                 
-                console.log(`🗑️ [CACHE] Cache invalidé: ${emailKeys.length} clés emails/stats + cache UI`);
+                console.log(`  ✓ DB cache invalidé: ${emailKeys.length} clés emails/stats supprimées`);
             }
 
             // Invalider aussi le cache partagé (cacheService) utilisé par les handlers IPC
             try {
                 if (this.cacheService) {
-                    if (typeof this.cacheService.invalidateStats === 'function') this.cacheService.invalidateStats();
-                    else this.cacheService?.del?.('ui', 'dashboard_stats');
-
-                    if (typeof this.cacheService.invalidateEmailsCache === 'function') this.cacheService.invalidateEmailsCache();
-                    else {
-                        this.cacheService?.del?.('emails', 'recent_20');
-                        this.cacheService?.del?.('emails', 'recent_50');
+                    if (typeof this.cacheService.invalidateStats === 'function') {
+                        this.cacheService.invalidateStats();
+                        console.log(`  ✓ cacheService.invalidateStats() appelée`);
+                    } else {
+                        this.cacheService?.del?.('ui', 'dashboard_stats');
+                        console.log(`  ✓ cacheService: dashboard_stats supprimée`);
                     }
 
-                    if (typeof this.cacheService.invalidateFoldersTree === 'function') this.cacheService.invalidateFoldersTree();
-                    else this.cacheService?.del?.('config', 'folders_tree');
+                    if (typeof this.cacheService.invalidateEmailsCache === 'function') {
+                        this.cacheService.invalidateEmailsCache();
+                        console.log(`  ✓ cacheService.invalidateEmailsCache() appelée`);
+                    } else {
+                        this.cacheService?.del?.('emails', 'recent_20');
+                        this.cacheService?.del?.('emails', 'recent_50');
+                        console.log(`  ✓ cacheService: recent_20 et recent_50 supprimées`);
+                    }
+
+                    if (typeof this.cacheService.invalidateFoldersTree === 'function') {
+                        this.cacheService.invalidateFoldersTree();
+                        console.log(`  ✓ cacheService.invalidateFoldersTree() appelée`);
+                    } else {
+                        this.cacheService?.del?.('config', 'folders_tree');
+                        console.log(`  ✓ cacheService: folders_tree supprimée`);
+                    }
                 }
-            } catch (_) {}
+            } catch (e) {
+                console.error('❌ [CACHE-UNIFIED] Erreur lors invalidation cacheService:', e.message);
+            }
+
+            console.log('📊 [CACHE-UNIFIED] Invalidation DONE');
             
         } catch (error) {
             console.error('❌ [CACHE] Erreur invalidation cache emails:', error);

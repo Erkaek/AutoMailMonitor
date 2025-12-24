@@ -1948,9 +1948,12 @@ ipcMain.handle('api-stats-summary', async () => {
     // OPTIMIZED: Utiliser le cache intelligent d'abord
     const cachedStats = cacheService.getUIStats();
     if (cachedStats) {
+      console.log('⚡ [IPC] api-stats-summary: cache HIT (dashboard_stats)');
       return cachedStats;
     }
 
+    console.log('🔍 [IPC] api-stats-summary: cache MISS (dashboard_stats) - récupération depuis service');
+    
     // Attendre un peu que le service unifié soit prêt si nécessaire
     let waitAttempts = 0;
     while (waitAttempts < 10 && global.unifiedMonitoringService && !global.unifiedMonitoringService.isInitialized) {
@@ -1962,12 +1965,14 @@ ipcMain.handle('api-stats-summary', async () => {
     if (global.unifiedMonitoringService && global.unifiedMonitoringService.isInitialized) {
       // CORRIGÉ: Utiliser la nouvelle méthode getBusinessStats au lieu de getStats
       const stats = await global.unifiedMonitoringService.getBusinessStats();
+      console.log('📊 [IPC] api-stats-summary: stats depuis service unifié =', stats);
+      // OPTIMIZED: Mettre en cache
+      cacheService.set('ui', 'dashboard_stats', stats, 30);
       return stats;
     }
     
     // OPTIMIZED: Fallback vers le service optimisé
-    // Log fallback stats réduit
-    // console.log('⚠️ [IPC] Service unifié non disponible, utilisation BD optimisée');
+    console.log('⚠️ [IPC] Service unifié non disponible, utilisation BD optimisée');
     await databaseService.initialize();
     const stats = await databaseService.getEmailStats();
     
@@ -1979,6 +1984,8 @@ ipcMain.handle('api-stats-summary', async () => {
       lastSyncTime: stats.lastSyncTime || new Date().toISOString(),
       monitoringActive: false
     };
+
+    console.log('📊 [IPC] api-stats-summary: stats depuis DB =', result);
 
     // OPTIMIZED: Mettre en cache
     cacheService.set('ui', 'dashboard_stats', result, 30);
@@ -1999,21 +2006,19 @@ ipcMain.handle('api-stats-summary', async () => {
 
 ipcMain.handle('api-emails-recent', async () => {
   // Log réduit pour éviter le spam
-  // console.log('📧 [IPC] api-emails-recent appelé');
   try {
     // OPTIMIZED: Cache intelligent pour emails récents
     const cachedEmails = cacheService.getRecentEmails(50);
     if (cachedEmails) {
-      // Cache hit - log supprimé pour réduire spam
-      // console.log('⚡ [IPC] Emails récents depuis cache');
+      console.log('⚡ [IPC] api-emails-recent: cache HIT (recent_50) - ' + cachedEmails.length + ' emails');
       return cachedEmails;
     }
+
+    console.log('🔍 [IPC] api-emails-recent: cache MISS (recent_50) - récupération depuis service');
 
     // Attendre un peu que le service unifié soit prêt si nécessaire
     let waitAttempts = 0;
     while (waitAttempts < 10 && global.unifiedMonitoringService && !global.unifiedMonitoringService.isInitialized) {
-      // Log d'attente supprimé pour réduire spam
-      // console.log(`⏳ [IPC] Attente initialisation service unifié... ${waitAttempts + 1}/10`);
       await new Promise(resolve => setTimeout(resolve, 200));
       waitAttempts++;
     }
@@ -2021,9 +2026,8 @@ ipcMain.handle('api-emails-recent', async () => {
     // Utiliser le service unifié si disponible et initialisé
     if (global.unifiedMonitoringService && global.unifiedMonitoringService.isInitialized) {
       // Service unifié - log réduit
-      // console.log('📧 [IPC] Utilisation service unifié pour emails récents');
       const emails = await global.unifiedMonitoringService.getRecentEmails(50);
-      // console.log(`📧 [IPC] ${emails?.length || 0} emails trouvés via service unifié`);
+      console.log('📧 [IPC] api-emails-recent: ' + (emails?.length || 0) + ' emails trouvés via service unifié');
       
       // OPTIMIZED: Mettre en cache
       if (emails) {
@@ -2034,11 +2038,10 @@ ipcMain.handle('api-emails-recent', async () => {
     }
     
     // OPTIMIZED: Fallback vers le service optimisé
-    // Log réduit pour fallback
-    // console.log('⚠️ [IPC] Service unifié non disponible, utilisation BD optimisée');
+    console.log('⚠️ [IPC] Service unifié non disponible, utilisation BD optimisée');
     await databaseService.initialize();
     const emails = await databaseService.getRecentEmails(50);
-    // console.log(`📧 [IPC] ${emails?.length || 0} emails trouvés via BD optimisée`);
+    console.log('📧 [IPC] api-emails-recent: ' + (emails?.length || 0) + ' emails trouvés via BD optimisée');
     
     // OPTIMIZED: Mettre en cache
     if (emails) {
