@@ -267,6 +267,9 @@ class UnifiedMonitoringService extends EventEmitter {
             // Calculer le hash de la nouvelle configuration
             const newConfigHash = this.calculateConfigHash(foldersConfig);
             
+            // Tracker les chemins supprimés pour le log
+            let cleanedFolderPaths = [];
+            
             // foldersConfig est maintenant toujours un tableau après correction
             if (Array.isArray(foldersConfig)) {
                 const escapeRegExp = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -287,12 +290,52 @@ class UnifiedMonitoringService extends EventEmitter {
                     return s;
                 };
 
-                this.monitoredFolders = foldersConfig.filter(folder => 
-                    folder && 
-                    (folder.folder_path || folder.folder_name || folder.path) &&
-                    (folder.folder_name !== 'folderCategories') &&
-                    folder.category // S'assurer qu'une catégorie est définie
-                ).map(folder => {
+                this.monitoredFolders = foldersConfig.filter(folder => {
+                    // Validations de base
+                    if (!folder || !folder.category || folder.folder_name === 'folderCategories') {
+                        return false;
+                    }
+                    if (!(folder.folder_path || folder.folder_name || folder.path)) {
+                        return false;
+                    }
+                    
+                    // IMPORTANT: Filtrer les chemins invalides (trop courts - impossible avec Outlook)
+                    // Exemples invalides: "11- Tanguy", "Mails simples" (pas d'antislash, chemin trop court)
+                    // Exemples valides: "FlotteAuto\\Boîte de réception\\11- Tanguy", "entryId123"
+                    const folderPath = (folder.folder_path || folder.path || folder.folder_name || '').trim();
+                    if (!folderPath) return false;
+                    
+                    // Un dossier valide pour Outlook doit:
+                    // 1) Contenir au minimum un antislash (boîte\\dossier) OU
+                    // 2) Avoir des IDs de résolution (storeId + entryId)
+                    const hasBackslash = folderPath.includes('\\') || folderPath.includes('/');
+                    const hasIds = (folder.store_id || folder.storeId) && (folder.entry_id || folder.entryId);
+                    
+                    if (!hasBackslash && !hasIds) {
+                        // Chemin invalide: dossier orpheline qui ne pourra jamais être résolu
+                        cleanedFolderPaths.push(folderPath);
+                        this.log(`🗑️ [CLEANUP] Dossier orpheline (chemin invalide): "${folderPath}" (pas de boîte-mère, pas d'IDs) - suppression en arrière-plan`, 'INFO');
+                        
+                        // Nettoyer la BDD en arrière-plan (non-bloquant)
+                        try {
+                            const toDelete = folder.folder_path || folder.path || folder.folder_name;
+                            if (toDelete && typeof this.dbService?.deleteFolderConfiguration === 'function') {
+                                // Nettoyage asynchrone sans await
+                                Promise.resolve().then(() => 
+                                    this.dbService.deleteFolderConfiguration(toDelete)
+                                ).catch(e => {
+                                    this.log(`⚠️ [CLEANUP] Impossible de supprimer "${toDelete}": ${e?.message || e}`, 'WARNING');
+                                });
+                            }
+                        } catch (_) {
+                            // Ignorer les erreurs de nettoyage (ne pas bloquer le monitoring)
+                        }
+                        
+                        return false; // Exclure du monitoring
+                    }
+                    
+                    return true;
+                }).map(folder => {
                     // Debug réduit: afficher seulement l'essentiel et éviter undefined
                     if (this.config.enableDetailedLogging) {
                         const dbgFolderPath = folder.folder_path || folder.path || folder.folder_name || '';
@@ -401,7 +444,11 @@ class UnifiedMonitoringService extends EventEmitter {
             this.foldersConfigHash = newConfigHash;
 
             if (configChanged || !this._hasLoggedMonitoredFoldersCount || this.config.enableDetailedLogging) {
-                this.log(`📁 ${this.monitoredFolders.length} dossiers configurés pour le monitoring`, 'CONFIG');
+                let msg = `📁 ${this.monitoredFolders.length} dossiers configurés pour le monitoring`;
+                if (cleanedFolderPaths.length > 0) {
+                    msg += ` (${cleanedFolderPaths.length} orphelins supprimés: ${cleanedFolderPaths.slice(0, 3).map(p => `"${p}"`).join(', ')}${cleanedFolderPaths.length > 3 ? '...' : ''})`;
+                }
+                this.log(msg, 'CONFIG');
                 this._hasLoggedMonitoredFoldersCount = true;
             }
             

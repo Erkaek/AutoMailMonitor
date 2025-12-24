@@ -1460,6 +1460,20 @@ async function apiFoldersAddImpl({ folderPath, category, storeId: payloadStoreId
 
     folderPath = await normalizeFolderPath(folderPath);
 
+    // VALIDATION: Rejeter les chemins invalides (trop courts, orphelins)
+    // Un chemin valide doit: (1) contenir un antislash (boîte\\dossier) OU (2) avoir des IDs de résolution
+    const hasBackslash = String(folderPath).includes('\\') || String(folderPath).includes('/');
+    const hasIds = (payloadStoreId || storeId) && payloadEntryId;
+    if (!hasBackslash && !hasIds) {
+      const shortPath = String(folderPath).slice(0, 50);
+      throw new Error(
+        `Dossier invalide: "${shortPath}" (chemin trop court, pas de boîte-mère). ` +
+        `Sélectionnez le chemin complet (ex: "FlotteAuto\\Boîte de réception\\${shortPath}") ` +
+        `ou fournissez les IDs Outlook (storeId + entryId).`
+      );
+    }
+    debugPhases.push('path-validated');
+
     // IMPORTANT: On n'ajoute que les dossiers explicitement sélectionnés.
     // Pas d'énumération des enfants (évite les timeouts Outlook/PowerShell et les doublons inutiles).
     debugPhases.push('insert-selected-only');
