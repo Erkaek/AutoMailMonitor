@@ -269,6 +269,7 @@ class UnifiedMonitoringService extends EventEmitter {
             
             // Tracker les chemins supprimés pour le log
             let cleanedFolderPaths = [];
+            let repairedFolderPaths = [];
             
             // foldersConfig est maintenant toujours un tableau après correction
             if (Array.isArray(foldersConfig)) {
@@ -434,6 +435,14 @@ class UnifiedMonitoringService extends EventEmitter {
                     byPath.set(k, pickBetter(byPath.get(k), f));
                 }
                 this.monitoredFolders = Array.from(byPath.values());
+
+                // Résumé des corrections effectuées lors du chargement
+                if (repairedFolderPaths.length > 0) {
+                    this.log(`🛠️ Chemins réparés automatiquement (${repairedFolderPaths.length}): ${repairedFolderPaths.slice(0, 3).join('; ')}`,'CONFIG');
+                }
+                if (cleanedFolderPaths.length > 0) {
+                    this.log(`🗑️ Chemins invalides supprimés (${cleanedFolderPaths.length}): ${cleanedFolderPaths.slice(0, 3).join('; ')}`,'CONFIG');
+                }
             } else {
                 this.log('⚠️ Format de configuration inattendu, utilisation tableau vide', 'WARNING');
                 this.monitoredFolders = [];
@@ -449,6 +458,19 @@ class UnifiedMonitoringService extends EventEmitter {
                     msg += ` (${cleanedFolderPaths.length} orphelins supprimés: ${cleanedFolderPaths.slice(0, 3).map(p => `"${p}"`).join(', ')}${cleanedFolderPaths.length > 3 ? '...' : ''})`;
                 }
                 this.log(msg, 'CONFIG');
+                
+                // DEBUG: Afficher les chemins EXACTS pour chaque dossier (aide diagnostic)
+                if (this.config.enableDetailedLogging && this.monitoredFolders.length > 0) {
+                    this.log('📋 Chemins monitorés (détail):', 'DEBUG');
+                    this.monitoredFolders.forEach((f, i) => {
+                        const fullPath = f.path || '(vide)';
+                        const category = f.category || '(sans catégorie)';
+                        const hasIds = f.storeId || f.entryId;
+                        const idInfo = hasIds ? ` [store: ${f.storeId}, entry: ${f.entryId}]` : '';
+                        console.log(`  ${i + 1}. "${fullPath}" (${category})${idInfo}`);
+                    });
+                }
+                
                 this._hasLoggedMonitoredFoldersCount = true;
             }
             
@@ -1646,11 +1668,16 @@ class UnifiedMonitoringService extends EventEmitter {
      */
     async syncFolder(folder) {
         try {
-            this.log(`📁 Synchronisation du dossier: ${folder.name}`, 'SYNC');
+            // Afficher le chemin COMPLET pour plus de clarté (aide diagnostic)
+            const displayPath = folder.path || folder.name || '(inconnu)';
+            const displayMsg = displayPath.includes('\\') ? displayPath : `${folder.name} [path: ${folder.path}]`;
+            this.log(`📁 Synchronisation du dossier: ${displayMsg}`, 'SYNC');
             
             if (this.config.enableDetailedLogging) {
                 console.log(`🔍 DEBUG folder.path: "${folder.path}"`);
                 console.log(`🔍 DEBUG folder.name: "${folder.name}"`);
+                console.log(`🔍 DEBUG folder.storeId: "${folder.storeId}"`);
+                console.log(`🔍 DEBUG folder.entryId: "${folder.entryId}"`);
             }
 
             const state = this.safeGetFolderSyncState(folder);
@@ -1668,7 +1695,10 @@ class UnifiedMonitoringService extends EventEmitter {
             this.log(`✅ Dossier ${folder.name} synchronisé`, 'SUCCESS');
 
         } catch (error) {
-            this.log(`❌ Erreur synchronisation dossier ${folder.name}: ${error.message}`, 'ERROR');
+            const dbgPath = folder.path || '(path inconnu)';
+            const dbgStore = folder.storeId || folder.store_id || '(store inconnu)';
+            const dbgEntry = folder.entryId || folder.entry_id || '(entryId inconnu)';
+            this.log(`❌ Erreur synchronisation dossier ${folder.name}: ${error.message} — path="${dbgPath}", storeId="${dbgStore}", entryId="${dbgEntry}"`, 'ERROR');
             throw error;
         }
     }

@@ -11,10 +11,18 @@
 const path = require('path');
 const Database = require('better-sqlite3');
 
-const DB_PATH = path.join(__dirname, '../data.db');
+// Même logique que l'application: env var ou data/emails.db
+const resolveDbPath = () => {
+  const envPath = process.env.MAILMONITOR_DB_PATH || process.env.AUTO_MAIL_MONITOR_DB_PATH;
+  if (envPath) return path.isAbsolute(envPath) ? envPath : path.resolve(process.cwd(), envPath);
+  return path.join(__dirname, '../data/emails.db');
+};
+
+const DB_PATH = resolveDbPath();
 
 if (!require('fs').existsSync(DB_PATH)) {
   console.error(`❌ BDD non trouvée: ${DB_PATH}`);
+  console.error('Indiquez le chemin via MAILMONITOR_DB_PATH ou placez le fichier dans data/emails.db');
   process.exit(1);
 }
 
