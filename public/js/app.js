@@ -2065,6 +2065,21 @@ class MailMonitor {
           }
         }
 
+        // Compléter: ajouter tous les clients issus de la configuration surveillée même si 0
+        if (Array.isArray(monitoredPaths) && monitoredPaths.length > 0) {
+          const ensureClientExists = (clientName) => {
+            const key = String(clientName || 'Client').trim() || 'Client';
+            if (!byClient.has(key)) byClient.set(key, { declarations: 0, mails: 0, reglements: 0 });
+          };
+
+          for (const p of monitoredPaths) {
+            const extracted = tryExtractClientFromPath(p);
+            if (!extracted) continue;
+            const { clientName } = extracted;
+            ensureClientExists(clientName);
+          }
+        }
+
         const clients = Array.from(byClient.entries()).map(([client, counts]) => {
           const total = (counts.declarations || 0) + (counts.mails || 0) + (counts.reglements || 0);
           return { client, ...counts, total };
