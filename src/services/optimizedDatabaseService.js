@@ -512,6 +512,29 @@ class OptimizedDatabaseService {
                   AND folder_name = ?
                   AND (last_seen_at IS NULL OR last_seen_at < ?)
             `),
+
+            // Rétro-migration: appliquer "lu = traité" aux emails déjà en base
+            markExistingReadAsTreated: this.db.prepare(`
+                UPDATE emails
+                SET is_treated = 1,
+                    treated_at = COALESCE(treated_at, last_modified_time, received_time, first_seen_at, CURRENT_TIMESTAMP),
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE deleted_at IS NULL
+                  AND treated_at IS NULL
+                  AND (is_read = 1 OR is_read = '1' OR is_read = TRUE)
+            `),
+
+            // Rétro-migration inverse: si on désactive "lu = traité", remettre "non traité" les mails lus
+            // (hors soft-deleted) pour coller à la règle.
+            clearExistingReadTreated: this.db.prepare(`
+                UPDATE emails
+                SET is_treated = 0,
+                    treated_at = NULL,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE deleted_at IS NULL
+                  AND treated_at IS NOT NULL
+                  AND (is_read = 1 OR is_read = '1' OR is_read = TRUE)
+            `),
             
             // Folders
             getFoldersConfig: this.db.prepare(`
@@ -633,6 +656,216 @@ class OptimizedDatabaseService {
         `);
 
         console.log('⚡ Prepared statements créés pour performance maximale (compatible)');
+    }
+
+    /**
+     * Applique rétroactivement la règle "mail lu = traité" sur les emails existants.
+     * Important: met aussi à jour les agrégats (weekly_stats) pour refléter ce changement.
+     * @returns {{ success: boolean, updatedEmails?: number, updatedWeeklyRows?: number, error?: string }}
+     */
+    applyReadAsTreatedRetroactively() {
+        try {
+            const tx = this.db.transaction(() => {
+                const res = this.statements.markExistingReadAsTreated.run();
+                const weeklyRes = this.rebuildWeeklyStatsFromEmails();
+                return { updatedEmails: res?.changes || 0, updatedWeeklyRows: weeklyRes?.updatedRows || 0 };
+            });
+
+            const { updatedEmails, updatedWeeklyRows } = tx();
+
+            // Invalider caches et forcer les refresh UI
+            this.invalidateFolderCache('');
+            this.invalidateUICache();
+
+            return { success: true, updatedEmails, updatedWeeklyRows };
+        } catch (e) {
+            console.error('❌ [DB] Erreur applyReadAsTreatedRetroactively:', e);
+            return { success: false, error: e?.message || String(e) };
+        }
+    }
+
+    /**
+     * Applique rétroactivement la règle inverse quand on désactive "mail lu = traité":
+     * les emails non supprimés (deleted_at NULL) qui sont à la fois lus et traités repassent non traités.
+     * Important: met aussi à jour les agrégats (weekly_stats).
+     * @returns {{ success: boolean, updatedEmails?: number, updatedWeeklyRows?: number, error?: string }}
+     */
+    unapplyReadAsTreatedRetroactively() {
+        try {
+            const tx = this.db.transaction(() => {
+                const res = this.statements.clearExistingReadTreated.run();
+                const weeklyRes = this.rebuildWeeklyStatsFromEmails();
+                return { updatedEmails: res?.changes || 0, updatedWeeklyRows: weeklyRes?.updatedRows || 0 };
+            });
+
+            const { updatedEmails, updatedWeeklyRows } = tx();
+
+            this.invalidateFolderCache('');
+            this.invalidateUICache();
+
+            return { success: true, updatedEmails, updatedWeeklyRows };
+        } catch (e) {
+            console.error('❌ [DB] Erreur unapplyReadAsTreatedRetroactively:', e);
+            return { success: false, error: e?.message || String(e) };
+        }
+    }
+
+    /**
+     * Recalcule complètement la table weekly_stats à partir de la table emails.
+     * Conserve les champs manual_adjustments existants.
+     * @returns {{ updatedRows: number }}
+     */
+    rebuildWeeklyStatsFromEmails() {
+        const manual = new Map();
+        const manualMeta = new Map();
+        try {
+            const existingManual = this.db.prepare(`
+                SELECT week_identifier, folder_type,
+                       week_number, week_year, week_start_date, week_end_date,
+                       COALESCE(manual_adjustments, 0) AS manual_adjustments
+                FROM weekly_stats
+            `).all();
+
+            for (const row of existingManual) {
+                manual.set(`${row.week_identifier}||${row.folder_type}`, Number(row.manual_adjustments) || 0);
+                manualMeta.set(`${row.week_identifier}||${row.folder_type}`, {
+                    week_number: Number(row.week_number) || 0,
+                    week_year: Number(row.week_year) || 0,
+                    week_start_date: row.week_start_date,
+                    week_end_date: row.week_end_date
+                });
+            }
+        } catch (e) {
+            console.warn('⚠️ [WEEKLY] Impossible de charger manual_adjustments:', e?.message || e);
+        }
+
+        // Cache local des catégories (éviter une requête SQL par email)
+        const folderCategory = new Map();
+        try {
+            const rows = this.db.prepare(`SELECT folder_path, category FROM folder_configurations`).all();
+            for (const r of rows) {
+                folderCategory.set(r.folder_path, this.normalizeCategory(r.category));
+            }
+        } catch (e) {
+            // fallback: mapping par défaut plus bas
+        }
+
+        const defaultCategoryFromPath = (folderPath) => {
+            const folderName = String(folderPath || '').split('\\').pop() || '';
+            const name = folderName.toLowerCase();
+            if (name.includes('test')) return 'Déclarations';
+            if (name.includes('regel') || name.includes('reglement')) return 'Règlements';
+            return 'Mails simples';
+        };
+
+        const resolveCategory = (folderPath) => {
+            return folderCategory.get(folderPath) || defaultCategoryFromPath(folderPath);
+        };
+
+        const byKey = new Map();
+        const ensureEntry = (weekInfo, folderType) => {
+            const key = `${weekInfo.identifier}||${folderType}`;
+            if (!byKey.has(key)) {
+                byKey.set(key, {
+                    week_identifier: weekInfo.identifier,
+                    week_number: weekInfo.weekNumber,
+                    week_year: weekInfo.year,
+                    week_start_date: weekInfo.startDate,
+                    week_end_date: weekInfo.endDate,
+                    folder_type: folderType,
+                    emails_received: 0,
+                    emails_treated: 0,
+                    manual_adjustments: manual.get(key) || 0
+                });
+            }
+            return byKey.get(key);
+        };
+
+        const parseDateOnly = (value) => {
+            if (!value) return null;
+            const s = String(value);
+            const d = s.length >= 10 ? s.slice(0, 10) : null;
+            if (!d || !/^\d{4}-\d{2}-\d{2}$/.test(d)) return null;
+            return new Date(`${d}T00:00:00Z`);
+        };
+
+        // 1) Reçus: basé sur first_seen_at (même logique que updateCurrentWeekStats)
+        const receivedRows = this.db.prepare(`
+            SELECT folder_name, first_seen_at
+            FROM emails
+            WHERE first_seen_at IS NOT NULL
+        `).iterate();
+
+        for (const row of receivedRows) {
+            const dt = parseDateOnly(row.first_seen_at);
+            if (!dt) continue;
+            const weekInfo = this.getISOWeekInfo(dt);
+            const folderType = resolveCategory(row.folder_name) || 'Mails simples';
+            const entry = ensureEntry(weekInfo, folderType);
+            entry.emails_received += 1;
+        }
+
+        // 2) Traités: basé sur treated_at
+        const treatedRows = this.db.prepare(`
+            SELECT folder_name, treated_at
+            FROM emails
+            WHERE treated_at IS NOT NULL
+        `).iterate();
+
+        for (const row of treatedRows) {
+            const dt = parseDateOnly(row.treated_at);
+            if (!dt) continue;
+            const weekInfo = this.getISOWeekInfo(dt);
+            const folderType = resolveCategory(row.folder_name) || 'Mails simples';
+            const entry = ensureEntry(weekInfo, folderType);
+            entry.emails_treated += 1;
+        }
+
+        // Inclure les semaines existantes qui n'auraient plus d'emails (mais ont des ajustements)
+        for (const [k, adj] of manual.entries()) {
+            if (!byKey.has(k)) {
+                const [week_identifier, folder_type] = k.split('||');
+                const meta = manualMeta.get(k) || {};
+                // Fallback: reconstruire week_number/year depuis l'identifiant Sxx-YYYY si meta manquante
+                const m = /^S(\d+)-(\d{4})$/.exec(week_identifier);
+                const weekNumber = meta.week_number || (m ? Number(m[1]) : 0);
+                const year = meta.week_year || (m ? Number(m[2]) : 0);
+
+                // Si on n'a pas start/end, approx sur la base de l'année ISO
+                const approxDate = new Date(Date.UTC(year || 1970, 0, 4));
+                const weekInfo = this.getISOWeekInfo(approxDate);
+                byKey.set(k, {
+                    week_identifier,
+                    week_number: weekNumber || weekInfo.weekNumber,
+                    week_year: year || weekInfo.year,
+                    week_start_date: meta.week_start_date || weekInfo.startDate,
+                    week_end_date: meta.week_end_date || weekInfo.endDate,
+                    folder_type,
+                    emails_received: 0,
+                    emails_treated: 0,
+                    manual_adjustments: adj
+                });
+            }
+        }
+
+        const upsert = this.db.prepare(`
+            INSERT OR REPLACE INTO weekly_stats
+            (week_identifier, week_number, week_year, week_start_date, week_end_date, folder_type,
+             emails_received, emails_treated, manual_adjustments, updated_at)
+            VALUES (@week_identifier, @week_number, @week_year, @week_start_date, @week_end_date, @folder_type,
+                    @emails_received, @emails_treated, @manual_adjustments, CURRENT_TIMESTAMP)
+        `);
+
+        let updatedRows = 0;
+        for (const entry of byKey.values()) {
+            upsert.run(entry);
+            updatedRows += 1;
+        }
+
+        // Clamp de sécurité: éviter valeurs négatives
+        this.clampWeeklyStatsNonNegative();
+
+        return { updatedRows };
     }
 
     /**

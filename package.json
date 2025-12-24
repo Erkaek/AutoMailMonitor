@@ -1,9 +1,9 @@
 {
   "name": "mailmonitor",
-  "version": "0.11.7",
+  "version": "0.11.8",
   "description": "Application de monitoring des emails Outlook avec interface moderne",
   "main": "src/main/index.js",
-  "scripts": { 
+  "scripts": {
     "start": "npx electron .",
     "import-activity": "node src/cli/import-activity.js",
     "test:carry": "set ELECTRON_RUN_AS_NODE=1&& npx electron scripts/test-carry-over.js",
@@ -28,14 +28,14 @@
   "copyright": "Copyright (c) 2025 Tanguy Raingeard. Tous droits réservés.",
   "dependencies": {
     "better-sqlite3": "^12.2.0",
-  "electron-updater": "^6.1.8",
-  "xlsx": "^0.18.5",
+    "electron-updater": "^6.1.8",
+    "xlsx": "^0.18.5",
     "node-cache": "^5.1.2"
   },
   "devDependencies": {
-  "electron": "^37.2.5",
-  "electron-builder": "^25.1.8",
-  "adm-zip": "^0.5.12"
+    "electron": "^37.2.5",
+    "electron-builder": "^25.1.8",
+    "adm-zip": "^0.5.12"
   },
   "build": {
     "appId": "com.tanguy.mailmonitor",
@@ -57,41 +57,50 @@
       "public/**/*",
       "data/**/*",
       "config/**/*",
-  "resources/new logo/**/*",
+      "resources/new logo/**/*",
       "package.json",
-  "node_modules/better-sqlite3/**/*"
+      "node_modules/better-sqlite3/**/*"
     ],
     "extraResources": [
       {
         "from": "node_modules/better-sqlite3/build/Release/",
         "to": "app.asar.unpacked/node_modules/better-sqlite3/build/Release/",
-        "filter": ["**/*"]
-      }
-      ,
+        "filter": [
+          "**/*"
+        ]
+      },
       {
-  "from": "resources/ews/",
-  "to": "ews/",
-        "filter": ["**/*"]
-      }
-      ,
+        "from": "resources/ews/",
+        "to": "ews/",
+        "filter": [
+          "**/*"
+        ]
+      },
       {
-  "from": "scripts/",
-  "to": "scripts/",
-  "filter": ["**/*"]
+        "from": "scripts/",
+        "to": "scripts/",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "powershell/",
+        "to": "powershell/",
+        "filter": [
+          "**/*"
+        ]
       }
-        ,
-        {
-      "from": "powershell/",
-      "to": "powershell/",
-      "filter": ["**/*"]
-        }
     ],
     "win": {
       "target": "nsis",
-      "publisherName": ["MailMonitor Dev"],
-  "icon": "resources/new logo/logo.ico",
-  "signingHashAlgorithms": ["sha256"],
-  "rfc3161TimeStampServer": "http://timestamp.digicert.com"
+      "publisherName": [
+        "MailMonitor Dev"
+      ],
+      "icon": "resources/new logo/logo.ico",
+      "signingHashAlgorithms": [
+        "sha256"
+      ],
+      "rfc3161TimeStampServer": "http://timestamp.digicert.com"
     },
     "nsis": {
       "oneClick": false,

@@ -2772,18 +2772,59 @@ ipcMain.handle('api-folder-mapping-save', async (event, { originalPath, mappedCa
 ipcMain.handle('api-settings-count-read-as-treated', async (event, { value } = {}) => {
   try {
     if (global.unifiedMonitoringService && global.unifiedMonitoringService.dbService) {
-      
+      const db = global.unifiedMonitoringService.dbService;
+      if (typeof db.initialize === 'function') {
+        try { await db.initialize(); } catch (_) {}
+      }
+
       if (value !== undefined) {
         // Normaliser en booléen puis sauvegarder le paramètre
         const boolVal = (typeof value === 'string') ? (value.toLowerCase() === 'true') : !!value;
+
+        const prevRaw = db.getAppSetting ? db.getAppSetting('count_read_as_treated', false) : false;
+        const prevBool = (typeof prevRaw === 'boolean')
+          ? prevRaw
+          : (typeof prevRaw === 'string')
+            ? (prevRaw.toLowerCase() === 'true')
+            : !!prevRaw;
+
         const success = global.unifiedMonitoringService.dbService.saveAppSetting
           ? !!global.unifiedMonitoringService.dbService.saveAppSetting('count_read_as_treated', boolVal)
           : global.unifiedMonitoringService.dbService.setAppSetting('count_read_as_treated', boolVal);
         console.log(`⚙️ [IPC] Paramètre "mail lu = traité" défini: ${boolVal}`);
+
+        let migration = null;
+        // Si on active le paramètre après coup, appliquer rétroactivement aux emails déjà en base
+        if (success && prevBool === false && boolVal === true && typeof db.applyReadAsTreatedRetroactively === 'function') {
+          migration = db.applyReadAsTreatedRetroactively();
+          console.log('🧩 [IPC] Migration "lu = traité" (rétroactive):', migration);
+        }
+
+        // Si on désactive le paramètre après coup, appliquer la règle inverse en base
+        if (success && prevBool === true && boolVal === false && typeof db.unapplyReadAsTreatedRetroactively === 'function') {
+          migration = db.unapplyReadAsTreatedRetroactively();
+          console.log('🧩 [IPC] Migration "lu = traité" (inverse, rétroactive):', migration);
+        }
+
+        // Notifier le frontend (impact sur les stocks / historiques)
+        if (success && mainWindow && !mainWindow.isDestroyed()) {
+          try {
+            mainWindow.webContents.send('weekly-stats-updated', {
+              reason: 'count-read-as-treated-changed',
+              value: boolVal,
+              previous: prevBool,
+              migration,
+              timestamp: new Date().toISOString()
+            });
+          } catch (e) {
+            console.warn('[IPC] Impossible d\'émettre weekly-stats-updated (count-read-as-treated):', e?.message || e);
+          }
+        }
         
         return {
           success: success,
           value: boolVal,
+          migration,
           message: success ? 'Paramètre sauvegardé' : 'Échec de la sauvegarde'
         };
       } else {

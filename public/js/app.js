@@ -6199,8 +6199,14 @@ class MailMonitor {
       });
 
       if (response.success && startupRes?.success) {
-        this.showNotification('Paramètres sauvegardés', 
-          'Les paramètres du suivi hebdomadaire ont été mis à jour', 
+        const mig = response.migration;
+        const migInfo = (mig && mig.success)
+          ? `\nMise à jour rétroactive: ${mig.updatedEmails || 0} emails, ${mig.updatedWeeklyRows || 0} lignes d'historique.`
+          : '';
+
+        this.showNotification(
+          'Paramètres sauvegardés',
+          `Les paramètres du suivi hebdomadaire ont été mis à jour.${migInfo}`,
           'success'
         );
         
