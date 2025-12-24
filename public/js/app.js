@@ -2152,7 +2152,89 @@ class MailMonitor {
           </div>
         `;
 
-        grid.innerHTML = summaryHtml + tableHtml;
+        // Tableau complémentaire: tous les dossiers surveillés (même vides)
+        const statsByPathLocal = this._lastDbFolderStatsByPath;
+        const monitoredConfigsLocal = this.state.folderCategories || {};
+        const monitoredPathsLocal = Object.keys(monitoredConfigsLocal);
+        const lcLocal = (s) => (s || '').toLowerCase();
+        const folderRows = (Array.isArray(monitoredPathsLocal) ? monitoredPathsLocal : []).map(p => {
+          const cfg = monitoredConfigsLocal[p] || {};
+          const name = cfg.name || this.extractFolderName(p) || 'Dossier';
+          const db = statsByPathLocal?.get(lcLocal(p))
+            || statsByPathLocal?.get(lcLocal(name))
+            || [...(statsByPathLocal?.entries() || [])].find(([k]) => lcLocal(p).endsWith(k))?.[1];
+          const dbTotal = db?.emailCount ?? db?.email_count;
+          const dbUnread = db?.unreadCount ?? db?.unread_count;
+          const counts = this._computeFolderCounts({ path: p, name, total: dbTotal, unread: dbUnread });
+          return { name, path: p, category: cfg.category || '', total: counts.total, unread: counts.unread };
+        }).sort((a, b) => {
+          // Catégorie puis nom
+          const normalizeCategoryKey = (category) => {
+            const v = String(category || '').toLowerCase();
+            if (v.includes('déclar') || v.includes('declar') || v === 'declarations') return 'declarations';
+            if (v.includes('règle') || v.includes('regle') || v.includes('reglement') || v === 'reglements') return 'reglements';
+            if (v.includes('mail')) return 'mails';
+            return 'mails';
+          };
+          const ca = normalizeCategoryKey(a.category);
+          const cb = normalizeCategoryKey(b.category);
+          const catOrder = ['declarations','mails','reglements'];
+          const da = catOrder.indexOf(ca);
+          const dbi = catOrder.indexOf(cb);
+          if (da !== dbi) return da - dbi;
+          return String(a.name).localeCompare(String(b.name), 'fr', { sensitivity: 'base', numeric: true });
+        });
+
+        const fmt = new Intl.NumberFormat('fr-FR');
+        const categoryMeta = {
+          declarations: { label: 'Déclarations', icon: 'bi-file-earmark-text', color: 'text-danger' },
+          mails: { label: 'Mails simples', icon: 'bi-envelope', color: 'text-info' },
+          reglements: { label: 'Règlements', icon: 'bi-credit-card', color: 'text-success' }
+        };
+
+        const folderTableHtml = `
+          <div class="col-12 mt-4">
+            <div class="d-flex align-items-center gap-2 mb-2">
+              <span class="small text-muted">Dossiers surveillés</span>
+              <span class="badge bg-secondary">${folderRows.length}</span>
+            </div>
+            <div class="table-responsive">
+              <table class="table table-sm align-middle mb-0">
+                <thead class="table-light">
+                  <tr>
+                    <th>Dossier</th>
+                    <th>Catégorie</th>
+                    <th class="text-end">Non lus</th>
+                    <th class="text-end">Total</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${folderRows.length ? folderRows.map(r => {
+                    const normalizeCategoryKey = (category) => {
+                      const v = String(category || '').toLowerCase();
+                      if (v.includes('déclar') || v.includes('declar') || v === 'declarations') return 'declarations';
+                      if (v.includes('règle') || v.includes('regle') || v.includes('reglement') || v === 'reglements') return 'reglements';
+                      if (v.includes('mail')) return 'mails';
+                      return 'mails';
+                    };
+                    const catKey = normalizeCategoryKey(r.category);
+                    const m = categoryMeta[catKey] || { label: r.category || 'Mails', color: 'text-info', icon: 'bi-envelope' };
+                    return `
+                      <tr>
+                        <td class="fw-semibold">${this.escapeHtml(r.name)}</td>
+                        <td><span class="${m.color}"><i class="bi ${m.icon}"></i></span> <span class="small">${m.label}</span></td>
+                        <td class="text-end">${r.unread > 0 ? `<span class="badge bg-warning text-dark">${fmt.format(r.unread)}</span>` : '<span class="text-muted">0</span>'}</td>
+                        <td class="text-end">${fmt.format(r.total || 0)}</td>
+                      </tr>
+                    `;
+                  }).join('') : `<tr><td colspan="4" class="text-center text-muted py-3">Aucun dossier surveillé</td></tr>`}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        `;
+
+        grid.innerHTML = summaryHtml + tableHtml + folderTableHtml;
       }
     }
     // Onglet monitoring : arborescence
