@@ -2097,9 +2097,6 @@ class MailMonitor {
         const fmt = new Intl.NumberFormat('fr-FR');
         const totalAll = clients.reduce((s, c) => s + Number(c.total || 0), 0);
 
-        const fmt = new Intl.NumberFormat('fr-FR');
-        const totalAll = clients.reduce((s, c) => s + Number(c.total || 0), 0);
-
         const summaryHtml = `
           <div class="col-12">
             <div class="d-flex flex-wrap gap-2 align-items-center">
@@ -2160,14 +2157,6 @@ class MailMonitor {
         const monitoredConfigsLocal = this.state.folderCategories || {};
         const monitoredPathsLocal = Object.keys(monitoredConfigsLocal);
         const lcLocal = (s) => (s || '').toLowerCase();
-        
-        const normalizeCategoryKey = (category) => {
-          const v = String(category || '').toLowerCase();
-          if (v.includes('déclar') || v.includes('declar') || v === 'declarations') return 'declarations';
-          if (v.includes('règle') || v.includes('regle') || v.includes('reglement') || v === 'reglements') return 'reglements';
-          if (v.includes('mail')) return 'mails';
-          return 'mails';
-        };
         
         const folderRows = (Array.isArray(monitoredPathsLocal) ? monitoredPathsLocal : []).map(p => {
           const cfg = monitoredConfigsLocal[p] || {};
