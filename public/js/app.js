@@ -2097,6 +2097,9 @@ class MailMonitor {
         const fmt = new Intl.NumberFormat('fr-FR');
         const totalAll = clients.reduce((s, c) => s + Number(c.total || 0), 0);
 
+        const fmt = new Intl.NumberFormat('fr-FR');
+        const totalAll = clients.reduce((s, c) => s + Number(c.total || 0), 0);
+
         const summaryHtml = `
           <div class="col-12">
             <div class="d-flex flex-wrap gap-2 align-items-center">
@@ -2157,6 +2160,15 @@ class MailMonitor {
         const monitoredConfigsLocal = this.state.folderCategories || {};
         const monitoredPathsLocal = Object.keys(monitoredConfigsLocal);
         const lcLocal = (s) => (s || '').toLowerCase();
+        
+        const normalizeCategoryKey = (category) => {
+          const v = String(category || '').toLowerCase();
+          if (v.includes('déclar') || v.includes('declar') || v === 'declarations') return 'declarations';
+          if (v.includes('règle') || v.includes('regle') || v.includes('reglement') || v === 'reglements') return 'reglements';
+          if (v.includes('mail')) return 'mails';
+          return 'mails';
+        };
+        
         const folderRows = (Array.isArray(monitoredPathsLocal) ? monitoredPathsLocal : []).map(p => {
           const cfg = monitoredConfigsLocal[p] || {};
           const name = cfg.name || this.extractFolderName(p) || 'Dossier';
@@ -2169,13 +2181,6 @@ class MailMonitor {
           return { name, path: p, category: cfg.category || '', total: counts.total, unread: counts.unread };
         }).sort((a, b) => {
           // Catégorie puis nom
-          const normalizeCategoryKey = (category) => {
-            const v = String(category || '').toLowerCase();
-            if (v.includes('déclar') || v.includes('declar') || v === 'declarations') return 'declarations';
-            if (v.includes('règle') || v.includes('regle') || v.includes('reglement') || v === 'reglements') return 'reglements';
-            if (v.includes('mail')) return 'mails';
-            return 'mails';
-          };
           const ca = normalizeCategoryKey(a.category);
           const cb = normalizeCategoryKey(b.category);
           const catOrder = ['declarations','mails','reglements'];
@@ -2184,13 +2189,6 @@ class MailMonitor {
           if (da !== dbi) return da - dbi;
           return String(a.name).localeCompare(String(b.name), 'fr', { sensitivity: 'base', numeric: true });
         });
-
-        const fmt = new Intl.NumberFormat('fr-FR');
-        const categoryMeta = {
-          declarations: { label: 'Déclarations', icon: 'bi-file-earmark-text', color: 'text-danger' },
-          mails: { label: 'Mails simples', icon: 'bi-envelope', color: 'text-info' },
-          reglements: { label: 'Règlements', icon: 'bi-credit-card', color: 'text-success' }
-        };
 
         const folderTableHtml = `
           <div class="col-12 mt-4">
@@ -2210,13 +2208,6 @@ class MailMonitor {
                 </thead>
                 <tbody>
                   ${folderRows.length ? folderRows.map(r => {
-                    const normalizeCategoryKey = (category) => {
-                      const v = String(category || '').toLowerCase();
-                      if (v.includes('déclar') || v.includes('declar') || v === 'declarations') return 'declarations';
-                      if (v.includes('règle') || v.includes('regle') || v.includes('reglement') || v === 'reglements') return 'reglements';
-                      if (v.includes('mail')) return 'mails';
-                      return 'mails';
-                    };
                     const catKey = normalizeCategoryKey(r.category);
                     const m = categoryMeta[catKey] || { label: r.category || 'Mails', color: 'text-info', icon: 'bi-envelope' };
                     return `
