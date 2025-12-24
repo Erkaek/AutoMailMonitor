@@ -1782,11 +1782,45 @@ class MailMonitor {
         // IMPORTANT: api-folders-tree renvoie déjà uniquement les dossiers monitorés.
         // Un filtrage supplémentaire sur monitoredPaths peut exclure des dossiers (mismatch de chemin/prefix).
         const lc = (s) => (s || '').toLowerCase();
+
+        const findMonitoredMatch = (folderPath) => {
+          const fp = lc(folderPath);
+          if (!fp) return null;
+          for (const p of monitoredPaths) {
+            const mp = lc(p);
+            if (!mp) continue;
+            if (fp === mp) return p;
+            // Support: config courte ("11- Tanguy") vs chemin complet ("...\\11- Tanguy")
+            if (fp.endsWith('\\' + mp) || fp.endsWith('/' + mp)) return p;
+            if (fp.includes('\\' + mp + '\\') || fp.includes('/' + mp + '/')) return p;
+          }
+          return null;
+        };
+
         items = foldersData.folders.map(f => {
-          const fPath = f.path || f.FolderPath || f.Path || '';
+          let fPath = f.path || f.FolderPath || f.Path || '';
+
+          // Guard: certains providers peuvent renvoyer un node sans path.
+          // Dans ce cas, on tente de retrouver le chemin depuis la config monitorée,
+          // sinon on évite de tomber sur le fallback "Boîte de réception".
+          if (!fPath && monitoredPaths.length > 0) {
+            const nodeName = (f.name || f.Name || '').toString().trim();
+            const findByName = (p) => this.extractFolderName(p) === nodeName;
+            const matched = monitoredPaths.find(p => findByName(p))
+              || monitoredPaths.find(p => lc(p).endsWith(lc('\\' + nodeName)))
+              || monitoredPaths.find(p => lc(this.extractFolderName(p)) === lc(nodeName));
+            if (matched) fPath = matched;
+          }
+
+          // IMPORTANT: ne pas afficher les parents (ex: "Boîte de réception") si non monitorés.
+          // On garde uniquement les paths qui correspondent à la config monitorée.
+          const matchedMonitored = findMonitoredMatch(fPath);
+          if (!matchedMonitored) {
+            return null;
+          }
 
           // Optionnel: tenter de récupérer la config UI correspondante pour compléter (nom/catégorie)
-          const matchKey = monitoredPaths.find(p => lc(fPath) === lc(p) || lc(fPath).endsWith(lc(p))) || fPath;
+          const matchKey = matchedMonitored;
           const cfg = monitoredConfigs[matchKey] || {};
           const name = f.name || cfg.name || this.extractFolderName(fPath) || 'Dossier';
           const category = f.category || cfg.category || '';
@@ -1809,7 +1843,7 @@ class MailMonitor {
 
           const counts = this._computeFolderCounts({ total, unread, path: fPath, name });
           return { name, path: fPath, category, total: counts.total, unread: counts.unread };
-        });
+        }).filter(Boolean);
       }
 
       // Fallback: s'il n'y a pas d'arborescence, construire depuis la configuration surveillée
@@ -1948,11 +1982,35 @@ class MailMonitor {
 
         // Source: la répartition "par client" doit couvrir TOUS les dossiers (pas seulement ceux monitorés).
         // On privilégie donc les stats BDD (emails.groupBy folder_name) qui couvrent l'ensemble des chemins.
-        const clientSource = (Array.isArray(this._lastDbFolderStatsRaw) && this._lastDbFolderStatsRaw.length)
+        const monitoredConfigs = this.state.folderCategories || {};
+        const monitoredPaths = Object.keys(monitoredConfigs);
+        const lc = (s) => (s || '').toLowerCase();
+        const isUnderMonitoredScope = (folderPath) => {
+          const p = lc(folderPath);
+          if (!p) return false;
+          for (const mp of monitoredPaths) {
+            const m = lc(mp);
+            if (!m) continue;
+            // Match exact, descendants, or mailbox-prefixed variants
+            if (p === m) return true;
+            if (p.startsWith(m + '\\') || p.startsWith(m + '/')) return true;
+            if (p.includes('\\' + m + '\\') || p.includes('/' + m + '/')) return true;
+            if (p.endsWith('\\' + m) || p.endsWith('/' + m)) return true;
+          }
+          return false;
+        };
+
+        const rawDbFolderStats = (Array.isArray(this._lastDbFolderStatsRaw) && this._lastDbFolderStatsRaw.length)
           ? this._lastDbFolderStatsRaw
           : ((Array.isArray(this._lastFoldersTreeRaw) && this._lastFoldersTreeRaw.length)
             ? this._lastFoldersTreeRaw
             : safeFolders);
+
+        // IMPORTANT: La UI dit "dossiers surveillés" => filtrer les stats BDD au scope monitoré.
+        // Sinon on peut afficher des dossiers non monitorés (ex: Boîte de réception) qui polluent la répartition.
+        const clientSource = (Array.isArray(rawDbFolderStats) && monitoredPaths.length > 0)
+          ? rawDbFolderStats.filter(r => isUnderMonitoredScope(r?.path || r?.folder_name || r?.FolderPath || r?.Path || ''))
+          : rawDbFolderStats;
 
         const byClient = new Map();
         const totalsByCategory = { declarations: 0, mails: 0, reglements: 0 };

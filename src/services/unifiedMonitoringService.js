@@ -1453,7 +1453,11 @@ class UnifiedMonitoringService extends EventEmitter {
         const psPageSize = Math.max(100, Math.min(1000, pageSize * 10));
 
         // Cutoff de réconciliation: tout email du dossier non revu depuis ce moment sera considéré absent
-        const baselineStartedAt = new Date().toISOString();
+        // IMPORTANT: la BDD stocke last_seen_at en SQLite CURRENT_TIMESTAMP (UTC) => "YYYY-MM-DD HH:MM:SS".
+        // Comparer avec un ISO ("...T...Z") peut provoquer des comparaisons lexicographiques fausses et
+        // soft-delete des emails fraîchement insérés pendant le baseline.
+        const baselineStartedAtIso = new Date().toISOString();
+        const baselineStartedAtSql = baselineStartedAtIso.slice(0, 19).replace('T', ' ');
 
         let before = null;
         let maxCursor = null;
@@ -1529,7 +1533,7 @@ class UnifiedMonitoringService extends EventEmitter {
         // Réconciliation: marquer supprimés/déplacés les emails qui étaient en BDD pour ce dossier
         // mais qui n'ont pas été revus pendant ce baseline complet.
         try {
-            const changes = this.dbService.softDeleteMissingEmailsByFolderSince(folder.path, baselineStartedAt);
+            const changes = this.dbService.softDeleteMissingEmailsByFolderSince(folder.path, baselineStartedAtSql);
             if (changes > 0) {
                 this.log(`🧹 Réconciliation: ${changes} email(s) marqués absents dans ${folder.name}`, 'SYNC');
                 try { this.emailCache?.clear?.(); } catch (_) {}
