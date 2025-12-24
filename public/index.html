@@ -1475,6 +1475,29 @@
     </div>
   </div>
 
+  <!-- Modal: Première configuration (avant première synchronisation) -->
+  <div class="modal fade" id="firstRunReadAsTreatedModal" tabindex="-1" aria-hidden="true" data-bs-backdrop="static" data-bs-keyboard="false">
+    <div class="modal-dialog modal-dialog-centered">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title">
+            <i class="bi bi-sliders me-2"></i>Première configuration
+          </h5>
+        </div>
+        <div class="modal-body">
+          <p class="mb-2 fw-semibold">Souhaitez-vous compter les emails <span class="text-decoration-underline">lus</span> comme <span class="text-decoration-underline">traités</span> ?</p>
+          <p class="mb-0 text-muted small">
+            Ce choix impacte les statistiques hebdomadaires. Vous pourrez le modifier plus tard dans Paramètres.
+          </p>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-outline-secondary" id="first-run-read-as-treated-no">Non</button>
+          <button type="button" class="btn btn-primary" id="first-run-read-as-treated-yes">Oui</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
   

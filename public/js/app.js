@@ -59,6 +59,93 @@ class MailMonitor {
     this.init();
   }
 
+  // === PREMIER LANCEMENT: forcer le choix "lu = traité" avant première sync ===
+  async ensureFirstRunReadAsTreatedChoice() {
+    try {
+      const res = await window.electronAPI.invoke('api-settings-count-read-as-treated');
+      if (!res?.success) return;
+
+      // Si le setting existe déjà en base => rien à faire
+      if (res.exists) return;
+
+      // Flag: après la config initiale, rediriger vers l'ajout d'un dossier
+      this._firstRunGoToAddFolder = true;
+
+      const modalEl = document.getElementById('firstRunReadAsTreatedModal');
+      const btnYes = document.getElementById('first-run-read-as-treated-yes');
+      const btnNo = document.getElementById('first-run-read-as-treated-no');
+      if (!modalEl || !btnYes || !btnNo || !window.bootstrap) return;
+
+      await new Promise((resolve) => {
+        const modal = new bootstrap.Modal(modalEl, { backdrop: 'static', keyboard: false });
+
+        const cleanup = () => {
+          try { btnYes.disabled = false; } catch (_) {}
+          try { btnNo.disabled = false; } catch (_) {}
+          btnYes.onclick = null;
+          btnNo.onclick = null;
+        };
+
+        const choose = async (value) => {
+          try {
+            btnYes.disabled = true;
+            btnNo.disabled = true;
+
+            const save = await window.electronAPI.invoke('api-settings-count-read-as-treated', { value });
+            if (!save?.success) {
+              this.showNotification('Erreur', save?.error || save?.message || 'Impossible d\'enregistrer le paramètre', 'danger');
+              btnYes.disabled = false;
+              btnNo.disabled = false;
+              return;
+            }
+
+            // Mettre à jour la checkbox du panneau Paramètres hebdo si elle est déjà dans le DOM
+            const weeklyCheckbox = document.getElementById('count-read-as-treated');
+            if (weeklyCheckbox) weeklyCheckbox.checked = !!value;
+
+            // Autoriser le main process à démarrer le monitoring/baseline
+            await window.electronAPI.invoke('api-first-run-complete');
+
+            modal.hide();
+            cleanup();
+            resolve();
+          } catch (e) {
+            console.error('Erreur choix premier lancement:', e);
+            this.showNotification('Erreur', 'Impossible d\'enregistrer le paramètre', 'danger');
+            btnYes.disabled = false;
+            btnNo.disabled = false;
+          }
+        };
+
+        btnYes.onclick = () => choose(true);
+        btnNo.onclick = () => choose(false);
+
+        modal.show();
+      });
+    } catch (error) {
+      console.error('Erreur ensureFirstRunReadAsTreatedChoice:', error);
+    }
+  }
+
+  async goToMonitoringAndOpenAddFolder() {
+    try {
+      const nav = document.getElementById('nav-monitoring');
+      if (nav && window.bootstrap?.Tab) {
+        const tab = new bootstrap.Tab(nav);
+        tab.show();
+      }
+
+      // Laisser Bootstrap appliquer le changement d'onglet
+      await new Promise(r => setTimeout(r, 50));
+
+      if (typeof this.showAddFolderModal === 'function') {
+        await this.showAddFolderModal();
+      }
+    } catch (e) {
+      console.warn('Impossible de rediriger vers l\'ajout de dossier:', e);
+    }
+  }
+
   // ---------- Performances personnelles: filtres ----------
   getPersonalPerformanceFilters() {
     const defaults = {
@@ -137,6 +224,9 @@ class MailMonitor {
     console.log('🚀 Initialisation de Mail Monitor...');
     
     try {
+      // Premier lancement: demander le choix avant de charger le reste
+      await this.ensureFirstRunReadAsTreatedChoice();
+
       // Injecter la version app dans le footer (source: app.getVersion)
       try {
               const ver = (window.electronAPI && await window.electronAPI.getAppVersion()) || 'unknown';
@@ -205,6 +295,12 @@ class MailMonitor {
           this.applyResponsiveSidebar();
         });
       } catch(_) {}
+
+      // Premier lancement: après choix "lu = traité", guider vers l'ajout de dossier
+      if (this._firstRunGoToAddFolder) {
+        this._firstRunGoToAddFolder = false;
+        await this.goToMonitoringAndOpenAddFolder();
+      }
       
       console.log('✅ MailMonitor app initialisée avec succès');
     } catch (error) {

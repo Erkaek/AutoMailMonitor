@@ -1100,6 +1100,21 @@ async function initializeOutlook() {
       // CORRECTION: Toujours initialiser le service unifié (même sans configuration)
       const UnifiedMonitoringService = require('../services/unifiedMonitoringService');
       global.unifiedMonitoringService = new UnifiedMonitoringService(outlookConnector);
+
+      // OPTION A (premier lancement): demander "lu = traité" avant toute baseline.
+      try {
+        const hasChoice = (typeof databaseService.hasAppSetting === 'function')
+          ? databaseService.hasAppSetting('count_read_as_treated')
+          : true;
+        global.__firstRunNeedsCountReadAsTreatedChoice = !hasChoice;
+        if (global.__firstRunNeedsCountReadAsTreatedChoice) {
+          global.unifiedMonitoringService.config.autoStartMonitoring = false;
+          console.log('[LOG] 🧩 Premier lancement: choix "lu = traité" requis -> autoStartMonitoring désactivé temporairement');
+        }
+      } catch (e) {
+        console.warn('[LOG] ⚠️ Impossible de déterminer si le choix "lu = traité" existe:', e?.message || e);
+      }
+
       global.unifiedMonitoringService.initialize().then(() => {
         console.log('[LOG] ✅ Service unifié initialisé en arrière-plan');
         setupRealtimeEventForwarding();
@@ -2781,6 +2796,7 @@ ipcMain.handle('api-settings-count-read-as-treated', async (event, { value } = {
         // Normaliser en booléen puis sauvegarder le paramètre
         const boolVal = (typeof value === 'string') ? (value.toLowerCase() === 'true') : !!value;
 
+        const prevExists = (typeof db.hasAppSetting === 'function') ? db.hasAppSetting('count_read_as_treated') : true;
         const prevRaw = db.getAppSetting ? db.getAppSetting('count_read_as_treated', false) : false;
         const prevBool = (typeof prevRaw === 'boolean')
           ? prevRaw
@@ -2795,13 +2811,13 @@ ipcMain.handle('api-settings-count-read-as-treated', async (event, { value } = {
 
         let migration = null;
         // Si on active le paramètre après coup, appliquer rétroactivement aux emails déjà en base
-        if (success && prevBool === false && boolVal === true && typeof db.applyReadAsTreatedRetroactively === 'function') {
+        if (success && prevExists === true && prevBool === false && boolVal === true && typeof db.applyReadAsTreatedRetroactively === 'function') {
           migration = db.applyReadAsTreatedRetroactively();
           console.log('🧩 [IPC] Migration "lu = traité" (rétroactive):', migration);
         }
 
         // Si on désactive le paramètre après coup, appliquer la règle inverse en base
-        if (success && prevBool === true && boolVal === false && typeof db.unapplyReadAsTreatedRetroactively === 'function') {
+        if (success && prevExists === true && prevBool === true && boolVal === false && typeof db.unapplyReadAsTreatedRetroactively === 'function') {
           migration = db.unapplyReadAsTreatedRetroactively();
           console.log('🧩 [IPC] Migration "lu = traité" (inverse, rétroactive):', migration);
         }
@@ -2829,6 +2845,7 @@ ipcMain.handle('api-settings-count-read-as-treated', async (event, { value } = {
         };
       } else {
         // Récupérer le paramètre
+        const exists = (typeof db.hasAppSetting === 'function') ? db.hasAppSetting('count_read_as_treated') : true;
         const currentValueRaw = global.unifiedMonitoringService.dbService.getAppSetting('count_read_as_treated', 'false');
         const currentBool = (typeof currentValueRaw === 'boolean')
           ? currentValueRaw
@@ -2838,7 +2855,8 @@ ipcMain.handle('api-settings-count-read-as-treated', async (event, { value } = {
         
         return {
           success: true,
-          value: currentBool
+          value: currentBool,
+          exists
         };
       }
     }
@@ -2928,6 +2946,39 @@ ipcMain.handle('api-monitoring-status', async () => {
       lastCheck: null,
       foldersMonitored: 0
     };
+  }
+});
+
+// Premier lancement: l'UI a collecté le choix "lu = traité".
+// On peut alors lancer le monitoring/baseline si une config de dossiers existe.
+ipcMain.handle('api-first-run-complete', async () => {
+  try {
+    global.__firstRunNeedsCountReadAsTreatedChoice = false;
+    if (!global.unifiedMonitoringService) {
+      return { success: false, error: 'Service de monitoring non disponible' };
+    }
+
+    // Réactiver l'auto-start pour les prochaines init/restarts.
+    global.unifiedMonitoringService.config.autoStartMonitoring = true;
+
+    // Démarrer si des dossiers sont configurés.
+    try {
+      const folders = await global.unifiedMonitoringService.reloadFoldersConfiguration?.();
+      const hasFolders = Array.isArray(folders) ? folders.length > 0 : (Array.isArray(global.unifiedMonitoringService.monitoredFolders) && global.unifiedMonitoringService.monitoredFolders.length > 0);
+      if (hasFolders) {
+        if (!global.unifiedMonitoringService.isMonitoring) {
+          await global.unifiedMonitoringService.startMonitoring();
+        }
+        return { success: true, started: true };
+      }
+    } catch (e) {
+      console.warn('[IPC] api-first-run-complete reload/start warning:', e?.message || e);
+    }
+
+    return { success: true, started: false };
+  } catch (error) {
+    console.error('❌ [IPC] Erreur api-first-run-complete:', error);
+    return { success: false, error: error.message };
   }
 });
 

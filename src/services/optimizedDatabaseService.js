@@ -3182,6 +3182,17 @@ class OptimizedDatabaseService {
     /**
      * Méthodes pour gérer les paramètres d'application
      */
+    hasAppSetting(key) {
+        try {
+            const stmt = this.db.prepare('SELECT 1 AS ok FROM app_settings WHERE key = ? LIMIT 1');
+            const row = stmt.get(key);
+            return !!row;
+        } catch (error) {
+            console.error(`❌ [SETTINGS] Erreur existence paramètre ${key}:`, error);
+            return false;
+        }
+    }
+
     getAppSetting(key, defaultValue = null) {
         try {
             const stmt = this.db.prepare('SELECT value FROM app_settings WHERE key = ?');
