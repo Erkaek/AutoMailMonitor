@@ -83,8 +83,21 @@ public sealed class WebBridge
 
     private void Respond(long id, bool ok, object? result, string? error)
     {
-        var payload = JsonSerializer.Serialize(new { id, ok, result, error }, Json);
-        _ownerForm.BeginInvoke(new Action(() => _web.CoreWebView2.PostWebMessageAsJson(payload)));
+        try
+        {
+            if (_web.CoreWebView2 is null) return;
+            var payload = JsonSerializer.Serialize(new { id, ok, result, error }, Json);
+            _ownerForm.BeginInvoke(new Action(() =>
+            {
+                try
+                {
+                    if (_web.CoreWebView2 is null) return;
+                    _web.CoreWebView2.PostWebMessageAsJson(payload);
+                }
+                catch { }
+            }));
+        }
+        catch { }
     }
 
     private async Task<object?> DispatchAsync(string method, JsonElement args)
