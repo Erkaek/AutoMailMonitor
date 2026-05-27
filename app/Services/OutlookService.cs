@@ -89,11 +89,24 @@ public sealed class OutlookService : IDisposable
     public Task<T> InvokeAsync<T>(Func<dynamic, dynamic, T> fn)
     {
         var tcs = new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
-        _queue.Add(() =>
+        Action action = () =>
         {
             try { tcs.SetResult(fn(_app!, _ns!)); }
             catch (Exception ex) { tcs.SetException(ex); }
-        });
+        };
+        try
+        {
+            if (!_queue.TryAdd(action, 5000, _cts.Token))
+                tcs.TrySetException(new TimeoutException("Le délai d'attente pour planifier l'action Outlook a expiré car la file COM est saturée."));
+        }
+        catch (OperationCanceledException ex)
+        {
+            tcs.TrySetException(ex);
+        }
+        catch (InvalidOperationException ex)
+        {
+            tcs.TrySetException(ex);
+        }
         return tcs.Task;
     }
 
