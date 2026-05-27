@@ -109,7 +109,13 @@ public sealed class MonitoringService
                     : null;
                 var sw = System.Diagnostics.Stopwatch.StartNew();
                 var mails = await _outlook.ScanFolderAsync(f.storeId, f.entryId, since);
-                if (mails.Count == 0) continue;
+                if (mails.Count == 0)
+                {
+                    // Mise à jour last_scan_ts (+ init last_received_ts si NULL) pour éviter
+                    // un rescan complet à chaque cycle sur dossiers vides (review Copilot).
+                    TouchFolderScan(f.id);
+                    continue;
+                }
                 _classifier.BulkUpsertEmails(f.id, f.category, mails);
                 long maxTs = mails.Max(m => new DateTimeOffset(m.ReceivedTime).ToUnixTimeSeconds());
                 UpdateFolderWatermark(f.id, maxTs);
@@ -155,6 +161,24 @@ public sealed class MonitoringService
         }
     }
 
+    // Met à jour uniquement last_scan_ts, et initialise last_received_ts à maintenant
+    // s'il est NULL (évite rescans complets sur dossiers vides). Review Copilot.
+    private void TouchFolderScan(long folderId)
+    {
+        lock (_storage.WriteLock)
+        {
+            using var c = _storage.OpenConnection();
+            using var cmd = c.CreateCommand();
+            cmd.CommandText = @"UPDATE folders
+               SET last_scan_ts=$now,
+                   last_received_ts=COALESCE(last_received_ts, $now)
+               WHERE id=$id";
+            cmd.Parameters.AddWithValue("$now", DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+            cmd.Parameters.AddWithValue("$id", folderId);
+            cmd.ExecuteNonQuery();
+        }
+    }
+
     public async Task AddFolderAsync(string storeId, string entryId, string path, string displayName, string? category = null)
     {
         category ??= ClassificationService.ClassifyByPath(path);
@@ -183,6 +207,11 @@ RETURNING id;";
         {
             long maxTs = mails.Max(m => new DateTimeOffset(m.ReceivedTime).ToUnixTimeSeconds());
             UpdateFolderWatermark(id, maxTs);
+        }
+        else
+        {
+            // Init watermark à maintenant sinon rescan complet à chaque polling (review Copilot)
+            TouchFolderScan(id);
         }
         OnStatsChanged?.Invoke();
     }

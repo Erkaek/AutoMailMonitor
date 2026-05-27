@@ -76,8 +76,9 @@ public sealed class UpdateService
         }
         _log.Info("UPDATE", $"Téléchargé: {dest} ({got} octets)");
         var pending = Path.Combine(_paths.UpdatesDir, "pending.json");
+        // Sérialisation JSON propre (review Copilot)
         await File.WriteAllTextAsync(pending,
-            $"{{\"file\":\"{dest.Replace("\\", "\\\\")}\"}}");
+            System.Text.Json.JsonSerializer.Serialize(new { file = dest }));
     }
 
     private static bool IsNewer(string remote, string local)
@@ -102,7 +103,7 @@ public sealed class UpdateService
             }
             catch { }
             if (string.IsNullOrWhiteSpace(newExe)) return;
-            newExe = newExe.Replace("\\\\", "\\");
+            // JsonDocument.GetString() retourne déjà la chaîne déséchappée (review Copilot)
             var currentExe = Process.GetCurrentProcess().MainModule!.FileName!;
             var bat = Path.Combine(_paths.UpdatesDir, "swap.bat");
             File.WriteAllText(bat, $"""

@@ -21,10 +21,12 @@
     if (!msg) return;
 
     if (msg.id !== undefined && pending.has(msg.id)) {
-      const { resolve, reject } = pending.get(msg.id);
+      const entry = pending.get(msg.id);
       pending.delete(msg.id);
-      if (msg.ok) resolve(msg.result);
-      else reject(new Error(msg.error || 'RPC error'));
+      // Annule le timeout pour éviter d'accumuler des timers (review Copilot)
+      if (entry.timeout) clearTimeout(entry.timeout);
+      if (msg.ok) entry.resolve(msg.result);
+      else entry.reject(new Error(msg.error || 'RPC error'));
       return;
     }
     if (msg.event) {
@@ -38,14 +40,15 @@
   function call(method, ...args) {
     const id = seq++;
     return new Promise((resolve, reject) => {
-      pending.set(id, { resolve, reject });
-      // Timeout auto-cleanup (10s)
+      // Timeout auto-cleanup (10s) — l'id du timer est stocké dans pending
+      // pour pouvoir l'annuler dès qu'une réponse arrive (review Copilot)
       const timeout = setTimeout(() => {
         if (pending.has(id)) {
           pending.delete(id);
           reject(new Error(`[MailMonitor] RPC ${method}(${id}) timeout`));
         }
       }, 10000);
+      pending.set(id, { resolve, reject, timeout });
       try {
         wv.postMessage({ id, method, args });
       } catch (e) {
@@ -58,8 +61,9 @@
 
   // Purge pending map sur navigation/reload
   wv.addEventListener('navigationStarting', () => {
-    for (const { reject } of pending.values()) {
-      try { reject(new Error('[MailMonitor] navigation: pending RPC annulé')); } catch {}
+    for (const entry of pending.values()) {
+      if (entry.timeout) clearTimeout(entry.timeout);
+      try { entry.reject(new Error('[MailMonitor] navigation: pending RPC annulé')); } catch {}
     }
     pending.clear();
   });

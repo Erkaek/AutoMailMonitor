@@ -183,48 +183,65 @@ public sealed class OutlookService : IDisposable
         InvokeAsync<List<OutlookMailItem>>((_, ns) =>
         {
             var list = new List<OutlookMailItem>(512);
-            dynamic folder;
-            try { folder = ns.GetFolderFromID(folderEntryId, storeId); }
-            catch (Exception ex) { _log.Warn("OUTLOOK", "GetFolderFromID KO: " + ex.Message); return list; }
-
-            dynamic items = folder.Items;
-            try { items.SetColumns("EntryID,Subject,ReceivedTime,SenderName,UnRead"); } catch { }
-
-            if (since.HasValue)
+            dynamic? folder = null;
+            dynamic? itemsRaw = null;
+            dynamic? items = null;
+            try
             {
-                try
-                {
-                    string filter = "[ReceivedTime] >= '" + since.Value.ToString("g") + "'";
-                    items = items.Restrict(filter);
-                    try { items.SetColumns("EntryID,Subject,ReceivedTime,SenderName,UnRead"); } catch { }
-                }
-                catch { }
-            }
-            try { items.Sort("[ReceivedTime]", true); } catch { }
+                try { folder = ns.GetFolderFromID(folderEntryId, storeId); }
+                catch (Exception ex) { _log.Warn("OUTLOOK", "GetFolderFromID KO: " + ex.Message); return list; }
 
-            int count;
-            try { count = (int)items.Count; } catch { return list; }
-            for (int i = 1; i <= count; i++)
-            {
-                dynamic? mi = null;
-                try { mi = items[i]; } catch { continue; }
-                try
+                itemsRaw = folder.Items;
+                items = itemsRaw;
+                try { items.SetColumns("EntryID,Subject,ReceivedTime,SenderName,UnRead"); } catch { }
+
+                if (since.HasValue)
                 {
-                    string? cls = SafeStr(() => (string)mi.MessageClass);
-                    if (cls is not null && !cls.StartsWith("IPM.Note", StringComparison.OrdinalIgnoreCase)) continue;
-                    list.Add(new OutlookMailItem
+                    try
                     {
-                        EntryId = SafeStr(() => (string)mi.EntryID) ?? "",
-                        Subject = SafeStr(() => (string)mi.Subject) ?? "",
-                        Sender  = SafeStr(() => (string)mi.SenderName) ?? "",
-                        ReceivedTime = SafeDt(() => (DateTime)mi.ReceivedTime),
-                        IsUnread = SafeBool(() => (bool)mi.UnRead)
-                    });
+                        string filter = "[ReceivedTime] >= '" + since.Value.ToString("g") + "'";
+                        var restricted = items.Restrict(filter);
+                        items = restricted; // l'ancien items (itemsRaw) sera lib\u00e9r\u00e9 dans le finally
+                        try { items.SetColumns("EntryID,Subject,ReceivedTime,SenderName,UnRead"); } catch { }
+                    }
+                    catch { }
                 }
-                catch { }
-                finally { try { Marshal.ReleaseComObject((object)mi!); } catch { } }
+                try { items.Sort("[ReceivedTime]", true); } catch { }
+
+                int count;
+                try { count = (int)items.Count; } catch { return list; }
+                for (int i = 1; i <= count; i++)
+                {
+                    dynamic? mi = null;
+                    try { mi = items[i]; } catch { continue; }
+                    try
+                    {
+                        string? cls = SafeStr(() => (string)mi.MessageClass);
+                        if (cls is not null && !cls.StartsWith("IPM.Note", StringComparison.OrdinalIgnoreCase)) continue;
+                        list.Add(new OutlookMailItem
+                        {
+                            EntryId = SafeStr(() => (string)mi.EntryID) ?? "",
+                            Subject = SafeStr(() => (string)mi.Subject) ?? "",
+                            Sender  = SafeStr(() => (string)mi.SenderName) ?? "",
+                            ReceivedTime = SafeDt(() => (DateTime)mi.ReceivedTime),
+                            IsUnread = SafeBool(() => (bool)mi.UnRead)
+                        });
+                    }
+                    catch { }
+                    finally { try { Marshal.ReleaseComObject((object)mi!); } catch { } }
+                }
+                return list;
             }
-            return list;
+            finally
+            {
+                // Lib\u00e9ration COM explicite (review Copilot)
+                if (items is not null && !ReferenceEquals(items, itemsRaw))
+                    try { Marshal.ReleaseComObject((object)items!); } catch { }
+                if (itemsRaw is not null)
+                    try { Marshal.ReleaseComObject((object)itemsRaw!); } catch { }
+                if (folder is not null)
+                    try { Marshal.ReleaseComObject((object)folder!); } catch { }
+            }
         });
 
     private static string? SafeStr(Func<string> f) { try { return f(); } catch { return null; } }
