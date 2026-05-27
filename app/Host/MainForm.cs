@@ -71,13 +71,25 @@ public sealed class MainForm : Form
         {
             var env = await CoreWebView2Environment.CreateAsync(
                 browserExecutableFolder: null,
-                userDataFolder: _paths.WebView2UserData,
-                options: new CoreWebView2EnvironmentOptions { AdditionalBrowserArguments = "--disable-features=msSmartScreenProtection" });
+                userDataFolder: _paths.WebView2UserData);
 
             await _web.EnsureCoreWebView2Async(env);
 
             _web.CoreWebView2.SetVirtualHostNameToFolderMapping(
                 "app.local", _paths.WwwRoot, CoreWebView2HostResourceAccessKind.Allow);
+
+            // Sécurité : restreindre strictement la navigation à app.local (review Copilot)
+            _web.CoreWebView2.NavigationStarting += (_, e) =>
+            {
+                if (!string.IsNullOrEmpty(e.Uri) &&
+                    !e.Uri.StartsWith("https://app.local/", StringComparison.OrdinalIgnoreCase) &&
+                    !e.Uri.StartsWith("about:", StringComparison.OrdinalIgnoreCase))
+                {
+                    e.Cancel = true;
+                    _log.Warn("WEBVIEW", "Navigation bloquée vers " + e.Uri);
+                }
+            };
+            _web.CoreWebView2.NewWindowRequested += (_, e) => { e.Handled = true; };
 
 #if !DEBUG
             _web.CoreWebView2.Settings.AreDefaultContextMenusEnabled = false;

@@ -6,22 +6,23 @@ public sealed class StorageService : IDisposable
 {
     private readonly AppPaths _paths;
     private readonly LogService _log;
-    private SqliteConnection _conn = default!;
+    private SqliteConnection _conn = default!; // connexion d'init/schema uniquement
+    private string _cs = "";
     private readonly object _writeLock = new();
 
     public StorageService(AppPaths paths, LogService log) { _paths = paths; _log = log; }
 
     public void Initialize()
     {
-        var cs = new SqliteConnectionStringBuilder
+        _cs = new SqliteConnectionStringBuilder
         {
             DataSource = _paths.DatabasePath,
             Mode = SqliteOpenMode.ReadWriteCreate,
             Cache = SqliteCacheMode.Shared,
-            Pooling = false
+            Pooling = true
         }.ToString();
 
-        _conn = new SqliteConnection(cs);
+        _conn = new SqliteConnection(_cs);
         _conn.Open();
 
         Exec("PRAGMA journal_mode=WAL;");
@@ -98,9 +99,18 @@ CREATE TABLE IF NOT EXISTS settings (
     public SqliteConnection Connection => _conn;
     public object WriteLock => _writeLock;
 
+    // Connexion par opération (thread-safe via pooling SQLite, review Copilot)
+    public SqliteConnection OpenConnection()
+    {
+        var c = new SqliteConnection(_cs);
+        c.Open();
+        return c;
+    }
+
     public string? GetSetting(string key)
     {
-        using var cmd = _conn.CreateCommand();
+        using var c = OpenConnection();
+        using var cmd = c.CreateCommand();
         cmd.CommandText = "SELECT value FROM settings WHERE key=$k";
         cmd.Parameters.AddWithValue("$k", key);
         return cmd.ExecuteScalar() as string;
@@ -110,7 +120,8 @@ CREATE TABLE IF NOT EXISTS settings (
     {
         lock (_writeLock)
         {
-            using var cmd = _conn.CreateCommand();
+            using var c = OpenConnection();
+            using var cmd = c.CreateCommand();
             cmd.CommandText = "INSERT INTO settings(key,value) VALUES($k,$v) ON CONFLICT(key) DO UPDATE SET value=excluded.value";
             cmd.Parameters.AddWithValue("$k", key);
             cmd.Parameters.AddWithValue("$v", value);

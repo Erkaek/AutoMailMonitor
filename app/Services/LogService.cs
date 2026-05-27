@@ -21,6 +21,7 @@ public sealed class LogService : IDisposable
     private readonly Thread _worker;
     private readonly CancellationTokenSource _cts = new();
     private readonly ConcurrentQueue<LogEntry> _recent = new();
+    private int _recentCount;
     private const int RecentCap = 2000;
     private readonly object _fileLock = new();
     private string _currentFile = "";
@@ -51,7 +52,12 @@ public sealed class LogService : IDisposable
             Level = level, Category = cat, Message = msg, Meta = meta
         };
         _recent.Enqueue(entry);
-        while (_recent.Count > RecentCap && _recent.TryDequeue(out _)) { }
+        // Trim ring buffer via compteur atomique O(1) (review Copilot)
+        if (System.Threading.Interlocked.Increment(ref _recentCount) > RecentCap)
+        {
+            while (System.Threading.Volatile.Read(ref _recentCount) > RecentCap && _recent.TryDequeue(out _))
+                System.Threading.Interlocked.Decrement(ref _recentCount);
+        }
         try { OnEntry?.Invoke(entry); } catch { }
         if (!_queue.IsAddingCompleted) _queue.TryAdd(entry);
     }

@@ -100,6 +100,44 @@ public sealed class WebBridge
         catch { }
     }
 
+    // Validation centralisée des arguments RPC (review Copilot)
+    private static JsonElement RequireArg(JsonElement args, int index, string method)
+    {
+        if (args.ValueKind != JsonValueKind.Array)
+            throw new ArgumentException($"{method}: args doit être un tableau JSON");
+        if (args.GetArrayLength() <= index)
+            throw new ArgumentException($"{method}: argument [{index}] manquant");
+        return args[index];
+    }
+    private static string RequireString(JsonElement args, int index, string method)
+    {
+        var el = RequireArg(args, index, method);
+        if (el.ValueKind != JsonValueKind.String)
+            throw new ArgumentException($"{method}: argument [{index}] doit être une chaîne");
+        return el.GetString() ?? "";
+    }
+    private static bool RequireBool(JsonElement args, int index, string method)
+    {
+        var el = RequireArg(args, index, method);
+        if (el.ValueKind != JsonValueKind.True && el.ValueKind != JsonValueKind.False)
+            throw new ArgumentException($"{method}: argument [{index}] doit être un booléen");
+        return el.GetBoolean();
+    }
+    private static int RequireInt(JsonElement args, int index, string method)
+    {
+        var el = RequireArg(args, index, method);
+        if (el.ValueKind != JsonValueKind.Number)
+            throw new ArgumentException($"{method}: argument [{index}] doit être un nombre");
+        return el.GetInt32();
+    }
+    private static JsonElement RequireObject(JsonElement args, int index, string method)
+    {
+        var el = RequireArg(args, index, method);
+        if (el.ValueKind != JsonValueKind.Object)
+            throw new ArgumentException($"{method}: argument [{index}] doit être un objet");
+        return el;
+    }
+
     private async Task<object?> DispatchAsync(string method, JsonElement args)
     {
         switch (method)
@@ -107,7 +145,7 @@ public sealed class WebBridge
             case "app.version": return AppInfo.Version;
             case "app.autostart.get": return _autostart.IsEnabled;
             case "app.autostart.set":
-                if (args.ValueKind == JsonValueKind.Array && args[0].GetBoolean()) _autostart.EnsureEnabled();
+                if (RequireBool(args, 0, method)) _autostart.EnsureEnabled();
                 else _autostart.Disable();
                 return null;
             case "app.check-updates": _ = _updater.CheckOnceAsync(); return null;
@@ -123,7 +161,7 @@ public sealed class WebBridge
                 }
             case "outlook.list-folders":
                 {
-                    var storeId = args[0].GetString() ?? "";
+                    var storeId = RequireString(args, 0, method);
                     var folders = await _monitor.Outlook.ListFoldersAsync(storeId);
                     return folders.Select(f => new
                     {
@@ -138,17 +176,23 @@ public sealed class WebBridge
             case "folders.list-monitored": return ListMonitoredFolders();
             case "folders.add":
                 {
-                    var p = args[0];
+                    var p = RequireObject(args, 0, method);
+                    if (!p.TryGetProperty("storeId", out var storeIdEl) || storeIdEl.ValueKind != JsonValueKind.String)
+                        throw new ArgumentException(method + ": propriété 'storeId' manquante ou invalide");
+                    if (!p.TryGetProperty("entryId", out var entryIdEl) || entryIdEl.ValueKind != JsonValueKind.String)
+                        throw new ArgumentException(method + ": propriété 'entryId' manquante ou invalide");
+                    if (!p.TryGetProperty("path", out var pathEl) || pathEl.ValueKind != JsonValueKind.String)
+                        throw new ArgumentException(method + ": propriété 'path' manquante ou invalide");
                     await _monitor.AddFolderAsync(
-                        p.GetProperty("storeId").GetString()!,
-                        p.GetProperty("entryId").GetString()!,
-                        p.GetProperty("path").GetString()!,
-                        p.GetProperty("displayName").GetString() ?? "",
-                        p.TryGetProperty("category", out var c) ? c.GetString() : null);
+                        storeIdEl.GetString()!,
+                        entryIdEl.GetString()!,
+                        pathEl.GetString()!,
+                        p.TryGetProperty("displayName", out var dn) && dn.ValueKind == JsonValueKind.String ? dn.GetString()! : "",
+                        p.TryGetProperty("category", out var c) && c.ValueKind == JsonValueKind.String ? c.GetString() : null);
                     return null;
                 }
             case "folders.remove":
-                await _monitor.RemoveFolderAsync(args[0].GetString()!);
+                await _monitor.RemoveFolderAsync(RequireString(args, 0, method));
                 return null;
 
             case "stats.summary": return BuildSummary();
@@ -160,9 +204,9 @@ public sealed class WebBridge
             case "logs.recent": return _log.Snapshot(500);
 
             case "weekly-comments.list":
-                return ListWeeklyComments(args[0].GetInt32(), args[1].GetInt32());
+                return ListWeeklyComments(RequireInt(args, 0, method), RequireInt(args, 1, method));
             case "weekly-comments.add":
-                return AddWeeklyComment(args[0]);
+                return AddWeeklyComment(RequireObject(args, 0, method));
 
             case "window.minimize": _ownerForm.BeginInvoke(new Action(() => _ownerForm.WindowState = FormWindowState.Minimized)); return null;
             case "window.close":    _ownerForm.BeginInvoke(new Action(() => _ownerForm.Hide())); return null;
@@ -174,7 +218,8 @@ public sealed class WebBridge
     private List<object> ListMonitoredFolders()
     {
         var list = new List<object>();
-        using var cmd = _storage.Connection.CreateCommand();
+        using var c = _storage.OpenConnection();
+        using var cmd = c.CreateCommand();
         cmd.CommandText = "SELECT id, store_id, entry_id, path, display_name, category, last_received_ts FROM folders WHERE is_monitored=1 ORDER BY path";
         using var r = cmd.ExecuteReader();
         while (r.Read())
@@ -195,7 +240,8 @@ public sealed class WebBridge
 
     private object BuildSummary()
     {
-        using var cmd = _storage.Connection.CreateCommand();
+        using var c = _storage.OpenConnection();
+        using var cmd = c.CreateCommand();
         cmd.CommandText = @"SELECT
             (SELECT COUNT(*) FROM folders WHERE is_monitored=1),
             (SELECT COUNT(*) FROM emails),
@@ -215,7 +261,8 @@ public sealed class WebBridge
     private List<object> BuildByCategory()
     {
         var list = new List<object>();
-        using var cmd = _storage.Connection.CreateCommand();
+        using var c = _storage.OpenConnection();
+        using var cmd = c.CreateCommand();
         cmd.CommandText = "SELECT category, COUNT(*) FROM emails GROUP BY category";
         using var r = cmd.ExecuteReader();
         while (r.Read()) list.Add(new { category = r.GetString(0), count = r.GetInt64(1) });
@@ -226,7 +273,8 @@ public sealed class WebBridge
     {
         var weeks = args.ValueKind == JsonValueKind.Array && args.GetArrayLength() > 0 ? args[0].GetInt32() : 12;
         var list = new List<object>();
-        using var cmd = _storage.Connection.CreateCommand();
+        using var c = _storage.OpenConnection();
+        using var cmd = c.CreateCommand();
         cmd.CommandText = @"SELECT iso_year, iso_week, category, COUNT(*) FROM emails
                             WHERE received_ts >= strftime('%s','now',$lookback)
                             GROUP BY iso_year, iso_week, category
@@ -242,7 +290,8 @@ public sealed class WebBridge
     {
         var limit = args.ValueKind == JsonValueKind.Array && args.GetArrayLength() > 0 ? args[0].GetInt32() : 50;
         var list = new List<object>();
-        using var cmd = _storage.Connection.CreateCommand();
+        using var c = _storage.OpenConnection();
+        using var cmd = c.CreateCommand();
         cmd.CommandText = @"SELECT e.entry_id, e.subject, e.sender, e.received_ts, e.is_unread, e.category, f.path
                             FROM emails e JOIN folders f ON f.id=e.folder_id
                             ORDER BY e.received_ts DESC LIMIT $l";
@@ -265,7 +314,8 @@ public sealed class WebBridge
     private List<object> ListWeeklyComments(int year, int week)
     {
         var list = new List<object>();
-        using var cmd = _storage.Connection.CreateCommand();
+        using var c = _storage.OpenConnection();
+        using var cmd = c.CreateCommand();
         cmd.CommandText = "SELECT id, category, comment_text, created_ts, updated_ts FROM weekly_comments WHERE iso_year=$y AND iso_week=$w";
         cmd.Parameters.AddWithValue("$y", year);
         cmd.Parameters.AddWithValue("$w", week);
@@ -291,7 +341,8 @@ public sealed class WebBridge
         var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
         lock (_storage.WriteLock)
         {
-            using var cmd = _storage.Connection.CreateCommand();
+            using var conn = _storage.OpenConnection();
+            using var cmd = conn.CreateCommand();
             cmd.CommandText = @"INSERT INTO weekly_comments(iso_year, iso_week, category, comment_text, created_ts, updated_ts)
                                 VALUES($y,$w,$c,$t,$n,$n) RETURNING id";
             cmd.Parameters.AddWithValue("$y", year);

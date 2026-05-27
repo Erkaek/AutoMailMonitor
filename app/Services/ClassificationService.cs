@@ -43,7 +43,8 @@ public sealed class ClassificationService
         var ts = new DateTimeOffset(mail.ReceivedTime).ToUnixTimeSeconds();
         lock (_storage.WriteLock)
         {
-            using var cmd = _storage.Connection.CreateCommand();
+            using var c = _storage.OpenConnection();
+            using var cmd = c.CreateCommand();
             cmd.CommandText = @"
 INSERT INTO emails(folder_id, entry_id, subject, sender, received_ts, is_unread, category, iso_year, iso_week)
 VALUES($fid, $eid, $sub, $snd, $rts, $unr, $cat, $y, $w)
@@ -68,8 +69,9 @@ ON CONFLICT(entry_id) DO UPDATE SET
         if (mails.Count == 0) return;
         lock (_storage.WriteLock)
         {
-            using var tx = _storage.Connection.BeginTransaction();
-            using var cmd = _storage.Connection.CreateCommand();
+            using var c = _storage.OpenConnection();
+            using var tx = c.BeginTransaction();
+            using var cmd = c.CreateCommand();
             cmd.Transaction = tx;
             cmd.CommandText = @"
 INSERT INTO emails(folder_id, entry_id, subject, sender, received_ts, is_unread, category, iso_year, iso_week)

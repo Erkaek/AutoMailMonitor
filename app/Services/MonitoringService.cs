@@ -74,7 +74,8 @@ public sealed class MonitoringService
     private async Task ReconcileFoldersAsync()
     {
         _folderDbIds.Clear();
-        using var cmd = _storage.Connection.CreateCommand();
+        using var c = _storage.OpenConnection();
+        using var cmd = c.CreateCommand();
         cmd.CommandText = "SELECT id, entry_id FROM folders WHERE is_monitored=1";
         using var r = cmd.ExecuteReader();
         while (r.Read()) _folderDbIds[r.GetString(1)] = r.GetInt64(0);
@@ -87,7 +88,8 @@ public sealed class MonitoringService
         if (_folderDbIds.Count == 0) return;
 
         var meta = new List<(long id, string storeId, string entryId, string category, long? since)>();
-        using (var cmd = _storage.Connection.CreateCommand())
+        using (var c = _storage.OpenConnection())
+        using (var cmd = c.CreateCommand())
         {
             cmd.CommandText = "SELECT id, store_id, entry_id, category, last_received_ts FROM folders WHERE is_monitored=1";
             using var r = cmd.ExecuteReader();
@@ -143,7 +145,8 @@ public sealed class MonitoringService
     {
         lock (_storage.WriteLock)
         {
-            using var cmd = _storage.Connection.CreateCommand();
+            using var c = _storage.OpenConnection();
+            using var cmd = c.CreateCommand();
             cmd.CommandText = "UPDATE folders SET last_scan_ts=$now, last_received_ts=$ts WHERE id=$id";
             cmd.Parameters.AddWithValue("$now", DateTimeOffset.UtcNow.ToUnixTimeSeconds());
             cmd.Parameters.AddWithValue("$ts", lastReceivedTs);
@@ -158,7 +161,8 @@ public sealed class MonitoringService
         long id;
         lock (_storage.WriteLock)
         {
-            using var cmd = _storage.Connection.CreateCommand();
+            using var c = _storage.OpenConnection();
+            using var cmd = c.CreateCommand();
             cmd.CommandText = @"
 INSERT INTO folders(store_id, entry_id, path, display_name, category, is_monitored)
 VALUES($s,$e,$p,$d,$c,1)
@@ -187,12 +191,13 @@ RETURNING id;";
     {
         lock (_storage.WriteLock)
         {
-            using var cmd = _storage.Connection.CreateCommand();
+            using var c = _storage.OpenConnection();
+            using var cmd = c.CreateCommand();
             cmd.CommandText = "UPDATE folders SET is_monitored=0 WHERE entry_id=$e";
             cmd.Parameters.AddWithValue("$e", entryId);
             cmd.ExecuteNonQuery();
         }
-        _folderDbIds.Remove(entryId);
+        _folderDbIds.TryRemove(entryId, out _);
         OnStatsChanged?.Invoke();
         return Task.CompletedTask;
     }
