@@ -109,7 +109,7 @@ main { padding: 18px; display: flex; flex-direction: column; gap: 18px; max-widt
 .email-row .when { color: var(--text-dim); font-family: var(--mono); font-size: 11.5px; }
 .email-row .who { color: var(--text-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .email-row .sub { font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.email-row .unread .sub { color: var(--accent-2); }
+.email-row.unread .sub { color: var(--accent-2); }
 .email-row .cat-tag { font-size: 10.5px; text-align: right; color: var(--text-dim); }
 
 .logs {
