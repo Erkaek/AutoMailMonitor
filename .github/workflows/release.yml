@@ -1,4 +1,4 @@
-name: Release on Push (Windows)
+name: Release on Push (Windows .NET)
 
 on:
   push:
@@ -10,157 +10,126 @@ jobs:
   build-and-publish:
     runs-on: windows-latest
     env:
-      ELECTRON_BUILDER_DEBUG: true
-      NPM_CONFIG_LOGLEVEL: info
+      DOTNET_NOLOGO: 'true'
+      DOTNET_CLI_TELEMETRY_OPTOUT: 'true'
       CODE_SIGNING_CERT_BASE64: ${{ secrets.CODE_SIGNING_CERT_BASE64 }}
       CODE_SIGNING_CERT_PASSWORD: ${{ secrets.CODE_SIGNING_CERT_PASSWORD }}
-      PRIVATE_UPDATER_TOKEN: ${{ secrets.PRIVATE_UPDATER_TOKEN }}
     permissions:
-      contents: write   # allow creating releases and uploading assets
+      contents: write
     steps:
       - name: Checkout
         uses: actions/checkout@v5
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v5
         with:
-          node-version: 20
-          cache: 'npm'
+          fetch-depth: 0
 
-      - name: Set Electron cache paths
-        shell: powershell
-        run: |
-          # RUNNER_TEMP est fourni par GitHub Actions sur Windows
-          $electronCache = Join-Path $env:RUNNER_TEMP 'electron-cache'
-          $builderCache = Join-Path $env:RUNNER_TEMP 'electron-builder-cache'
-          "ELECTRON_CACHE=$electronCache" | Out-File -FilePath $env:GITHUB_ENV -Append
-          "ELECTRON_BUILDER_CACHE=$builderCache" | Out-File -FilePath $env:GITHUB_ENV -Append
-          Write-Host "ELECTRON_CACHE=$electronCache"
-          Write-Host "ELECTRON_BUILDER_CACHE=$builderCache"
-
-      - name: Cache Electron downloads
-        uses: actions/cache@v4
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v4
         with:
-          path: |
-            ${{ env.ELECTRON_CACHE }}
-            ${{ env.ELECTRON_BUILDER_CACHE }}
-          key: ${{ runner.os }}-electron-cache-${{ hashFiles('package-lock.json') }}
-          restore-keys: |
-            ${{ runner.os }}-electron-cache-
+          dotnet-version: '8.0.x'
 
-      - name: Configure npm network retries
-        shell: bash
+      - name: Read version from csproj
+        id: version
+        shell: pwsh
         run: |
-          npm config set fetch-retries 5
-          npm config set fetch-retry-mintimeout 20000
-          npm config set fetch-retry-maxtimeout 120000
-          npm config set fetch-timeout 600000
+          [xml]$proj = Get-Content app/MailMonitor.csproj
+          $v = $proj.Project.PropertyGroup.Version | Where-Object { $_ } | Select-Object -First 1
+          if (-not $v) { Write-Error "Version introuvable dans MailMonitor.csproj" }
+          $tag = "v$v"
+          Write-Host "Version=$v Tag=$tag"
+          "version=$v"  | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "tag=$tag"    | Out-File -FilePath $env:GITHUB_OUTPUT -Append
 
-      - name: Install dependencies
-        shell: bash
-        run: |
-          set -e
-          for i in 1 2 3; do
-            echo "npm ci attempt $i/3"
-            if npm ci; then
-              break
-            fi
-
-            # Fallback miroir: utile si le téléchargement Electron (install.js) échoue (503 / socket hang up)
-            if [ "$i" -eq 1 ]; then
-              echo "First npm ci failed: enabling Electron mirrors for next attempts"
-              export ELECTRON_MIRROR="https://npmmirror.com/mirrors/electron/"
-              export ELECTRON_BUILDER_BINARIES_MIRROR="https://npmmirror.com/mirrors/electron-builder-binaries/"
-              echo "ELECTRON_MIRROR=$ELECTRON_MIRROR" >> "$GITHUB_ENV"
-              echo "ELECTRON_BUILDER_BINARIES_MIRROR=$ELECTRON_BUILDER_BINARIES_MIRROR" >> "$GITHUB_ENV"
-            fi
-            if [ "$i" -lt 3 ]; then
-              echo "npm ci failed, retrying in 15s..."
-              sleep 15
-            else
-              echo "npm ci failed after 3 attempts"
-              exit 1
-            fi
-          done
-
-      - name: Prepare native deps for Electron
-        shell: bash
-        run: |
-          set -e
-          for i in 1 2 3; do
-            echo "install-app-deps attempt $i/3"
-            if npx electron-builder install-app-deps; then
-              break
-            fi
-
-            # Même fallback miroir si les binaires electron-builder sont indisponibles temporairement
-            if [ "$i" -eq 1 ]; then
-              echo "First install-app-deps failed: enabling Electron mirrors for next attempts"
-              export ELECTRON_MIRROR="https://npmmirror.com/mirrors/electron/"
-              export ELECTRON_BUILDER_BINARIES_MIRROR="https://npmmirror.com/mirrors/electron-builder-binaries/"
-              echo "ELECTRON_MIRROR=$ELECTRON_MIRROR" >> "$GITHUB_ENV"
-              echo "ELECTRON_BUILDER_BINARIES_MIRROR=$ELECTRON_BUILDER_BINARIES_MIRROR" >> "$GITHUB_ENV"
-            fi
-            if [ "$i" -lt 3 ]; then
-              echo "install-app-deps failed, retrying in 15s..."
-              sleep 15
-            else
-              echo "install-app-deps failed after 3 attempts"
-              exit 1
-            fi
-          done
-
-      - name: Inject updater token (for private releases)
-        shell: bash
-        env:
-          PRIVATE_UPDATER_TOKEN: ${{ secrets.PRIVATE_UPDATER_TOKEN }}
-        run: |
-          TOKEN_VALUE="${PRIVATE_UPDATER_TOKEN:-}"
-          if [ -n "$TOKEN_VALUE" ]; then
-            echo "Creating src/main/updaterToken.js from secret env"
-            mkdir -p src/main
-            printf 'module.exports = "%s";\n' "$TOKEN_VALUE" > src/main/updaterToken.js
-            echo "Token file created (not printed)"
-          else
-            echo "No PRIVATE_UPDATER_TOKEN env provided; skipping token injection"
-          fi
-
-      - name: Prepare Windows code signing certificate (required)
-        if: runner.os == 'Windows'
-        shell: powershell
-        run: |
-          if (-not $env:CODE_SIGNING_CERT_BASE64 -or -not $env:CODE_SIGNING_CERT_PASSWORD) {
-            Write-Error "CODE_SIGNING_CERT_BASE64 / CODE_SIGNING_CERT_PASSWORD secrets manquants : impossible de signer le build (evite les certificats differents a chaque run)." -ErrorAction Stop
-          }
-          Write-Host "Decoding code signing certificate..."
-          $pfxPath = "$env:RUNNER_TEMP\\codesign.pfx"
-          [IO.File]::WriteAllBytes($pfxPath, [Convert]::FromBase64String($env:CODE_SIGNING_CERT_BASE64))
-          echo "CSC_LINK=$pfxPath" | Out-File -FilePath $env:GITHUB_ENV -Append
-          echo "CSC_KEY_PASSWORD=$env:CODE_SIGNING_CERT_PASSWORD" | Out-File -FilePath $env:GITHUB_ENV -Append
-          echo "WIN_CSC_LINK=$pfxPath" | Out-File -FilePath $env:GITHUB_ENV -Append
-          echo "WIN_CSC_KEY_PASSWORD=$env:CODE_SIGNING_CERT_PASSWORD" | Out-File -FilePath $env:GITHUB_ENV -Append
-          Write-Host "Code signing variables exported"
-
-      - name: Ensure git tags are available
-        shell: bash
-        run: git fetch --tags --force
-
-      - name: Create tag if missing (v<package.json>)
-        shell: bash
-        run: |
-          VERSION=$(node -p "require('./package.json').version")
-          TAG="v$VERSION"
-          if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
-            echo "Tag already exists: $TAG"
-          else
-            echo "Creating tag $TAG"
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git tag -a "$TAG" -m "Release $TAG"
-            git push origin "$TAG"
-          fi
-
-      - name: Build and publish (electron-builder)
+      - name: Check if release already exists
+        id: check_release
+        shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: npx electron-builder --win --x64 --publish always
+        run: |
+          $tag = "${{ steps.version.outputs.tag }}"
+          $exists = "false"
+          try {
+            gh release view $tag --repo "${{ github.repository }}" 1>$null 2>$null
+            if ($LASTEXITCODE -eq 0) { $exists = "true" }
+          } catch { $exists = "false" }
+          Write-Host "Release $tag exists: $exists"
+          "exists=$exists" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Restore
+        if: steps.check_release.outputs.exists != 'true'
+        run: dotnet restore app/MailMonitor.csproj
+
+      - name: Publish (single-file, self-contained win-x64)
+        if: steps.check_release.outputs.exists != 'true'
+        run: >
+          dotnet publish app/MailMonitor.csproj
+          -c Release
+          -r win-x64
+          --self-contained true
+          -p:PublishSingleFile=true
+          -p:IncludeNativeLibrariesForSelfExtract=true
+          -p:EnableCompressionInSingleFile=true
+          -p:DebugType=embedded
+          -o publish
+
+      - name: Stage release artifact
+        if: steps.check_release.outputs.exists != 'true'
+        id: stage
+        shell: pwsh
+        run: |
+          $version = "${{ steps.version.outputs.version }}"
+          $src = "publish/MailMonitor.exe"
+          if (-not (Test-Path $src)) {
+            Write-Error "MailMonitor.exe introuvable dans publish/"
+          }
+          New-Item -ItemType Directory -Force -Path artifacts | Out-Null
+          $dest = "artifacts/MailMonitor-v$version.exe"
+          Copy-Item $src $dest
+          Write-Host "Artifact: $dest"
+          "artifact=$dest" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Sign Windows executable
+        if: steps.check_release.outputs.exists != 'true' && env.CODE_SIGNING_CERT_BASE64 != '' && env.CODE_SIGNING_CERT_PASSWORD != ''
+        shell: pwsh
+        run: |
+          $pfxPath = Join-Path $env:RUNNER_TEMP 'codesign.pfx'
+          [IO.File]::WriteAllBytes($pfxPath, [Convert]::FromBase64String($env:CODE_SIGNING_CERT_BASE64))
+          $signtool = (Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin" -Recurse -Filter signtool.exe -ErrorAction SilentlyContinue |
+                       Where-Object { $_.FullName -match 'x64\\signtool.exe$' } |
+                       Sort-Object FullName -Descending | Select-Object -First 1).FullName
+          if (-not $signtool) { Write-Error "signtool.exe introuvable" }
+          Write-Host "signtool: $signtool"
+          & $signtool sign /fd SHA256 /td SHA256 /tr "http://timestamp.digicert.com" `
+            /f $pfxPath /p $env:CODE_SIGNING_CERT_PASSWORD `
+            "${{ steps.stage.outputs.artifact }}"
+          if ($LASTEXITCODE -ne 0) { Write-Error "Signature échouée" }
+          Remove-Item $pfxPath -Force
+
+      - name: Compute SHA256
+        if: steps.check_release.outputs.exists != 'true'
+        shell: pwsh
+        run: |
+          $artifact = "${{ steps.stage.outputs.artifact }}"
+          $hash = (Get-FileHash $artifact -Algorithm SHA256).Hash
+          "$hash  $(Split-Path $artifact -Leaf)" | Out-File -FilePath "$artifact.sha256" -Encoding ascii
+          Write-Host "SHA256=$hash"
+
+      - name: Create GitHub Release
+        if: steps.check_release.outputs.exists != 'true'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $tag = "${{ steps.version.outputs.tag }}"
+          $version = "${{ steps.version.outputs.version }}"
+          $artifact = "${{ steps.stage.outputs.artifact }}"
+          $sha = "$artifact.sha256"
+          $notes = "Mail Monitor $tag`n`nBuild automatique depuis main."
+          gh release create $tag $artifact $sha `
+            --repo "${{ github.repository }}" `
+            --title "Mail Monitor $tag" `
+            --notes "$notes"
+          if ($LASTEXITCODE -ne 0) { Write-Error "gh release create a échoué" }
+
+      - name: Skip notice
+        if: steps.check_release.outputs.exists == 'true'
+        run: echo "Release ${{ steps.version.outputs.tag }} existe déjà — build sauté. Bump <Version> dans app/MailMonitor.csproj pour publier une nouvelle release."
