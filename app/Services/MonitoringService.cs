@@ -13,7 +13,7 @@ public sealed class MonitoringService
     private readonly ClassificationService _classifier;
     private readonly LogService _log;
 
-    private readonly Dictionary<string, long> _folderDbIds = new();
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, long> _folderDbIds = new();
     private CancellationTokenSource? _cts;
     private Task? _pollTask;
     private static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(30);
