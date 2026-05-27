@@ -39,14 +39,30 @@
     const id = seq++;
     return new Promise((resolve, reject) => {
       pending.set(id, { resolve, reject });
+      // Timeout auto-cleanup (10s)
+      const timeout = setTimeout(() => {
+        if (pending.has(id)) {
+          pending.delete(id);
+          reject(new Error(`[MailMonitor] RPC ${method}(${id}) timeout`));
+        }
+      }, 10000);
       try {
         wv.postMessage({ id, method, args });
       } catch (e) {
         pending.delete(id);
+        clearTimeout(timeout);
         reject(e);
       }
     });
   }
+
+  // Purge pending map sur navigation/reload
+  wv.addEventListener('navigationStarting', () => {
+    for (const { reject } of pending.values()) {
+      try { reject(new Error('[MailMonitor] navigation: pending RPC annulé')); } catch {}
+    }
+    pending.clear();
+  });
 
   function on(event, fn) {
     if (!eventListeners.has(event)) eventListeners.set(event, new Set());
