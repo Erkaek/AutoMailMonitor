@@ -86,6 +86,17 @@ CREATE TABLE IF NOT EXISTS settings (
   key   TEXT PRIMARY KEY,
   value TEXT
 );
+
+CREATE TABLE IF NOT EXISTS weekly_adjustments (
+  id INTEGER PRIMARY KEY,
+  iso_year   INTEGER NOT NULL,
+  iso_week   INTEGER NOT NULL,
+  category   TEXT NOT NULL,
+  kind       TEXT NOT NULL,    -- 'arrivals' | 'treated' | 'stock'
+  delta      INTEGER NOT NULL,
+  created_ts INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_adj_week ON weekly_adjustments(iso_year, iso_week);
 ");
     }
 

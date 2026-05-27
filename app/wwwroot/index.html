@@ -1,99 +1,1526 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="fr">
 <head>
-  <meta charset="utf-8" />
-  <meta http-equiv="Content-Security-Policy"
-        content="default-src 'self' https://app.local; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'">
-  <title>Mail Monitor</title>
-  <link rel="stylesheet" href="/app.css" />
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Mail Monitor - Surveillance Outlook</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.0/font/bootstrap-icons.css" rel="stylesheet">
+  <link href="./css/style.css" rel="stylesheet">
+  <link href="./css/themes.css" rel="stylesheet">
+  <style>
+  </style>
 </head>
-<body class="theme-dark">
-  <header class="topbar">
-    <div class="brand">
-      <div class="logo">📬</div>
+<body data-theme="light">
+  
+  <!-- Barre de titre personnalisée -->
+  <div class="custom-titlebar">
+    <div class="titlebar-title d-flex align-items-center gap-2">
+      <button id="sidebar-burger" class="btn btn-sm btn-outline-light" title="Afficher/Masquer le menu" style="padding:.15rem .4rem;">
+        <i class="bi bi-list"></i>
+      </button>
+      <i class="bi bi-envelope-check"></i>
+      <span>Mail Monitor - Surveillance Outlook</span>
+    </div>
+    <div class="titlebar-controls">
+      <button class="titlebar-btn minimize" id="minimize-btn" title="Réduire">
+        <i class="bi bi-dash"></i>
+      </button>
+      <button class="titlebar-btn close" id="close-btn" title="Fermer">
+        <i class="bi bi-x"></i>
+      </button>
+    </div>
+  </div>
+  
+  <!-- Sidebar -->
+  <nav class="sidebar position-fixed top-0 start-0 text-white p-3">
+    <div class="d-flex align-items-center mb-4">
+  <img src="./resources/new%20logo/logo_32x32.png" alt="Logo" width="28" height="28" class="me-2" style="border-radius:6px; box-shadow:0 1px 3px rgba(0,0,0,0.2);" />
       <div>
-        <div class="title">Mail Monitor</div>
-        <div class="subtitle" id="appVersion">v—</div>
+        <h5 class="mb-0">Mail Monitor</h5>
+        <small class="opacity-75">Surveillance Outlook</small>
       </div>
     </div>
-    <div class="status-cluster">
-      <span class="chip" id="outlookChip" data-state="off">Outlook —</span>
-      <span class="chip" id="monitorChip" data-state="off">Monitoring —</span>
-      <span class="chip" id="updateChip" data-state="ok">À jour</span>
+    
+    <div class="mb-3">
+      <div class="d-flex align-items-center">
+        <span class="status-indicator status-connecting me-2" id="connection-indicator"></span>
+        <small id="connection-status">Initialisation...</small>
+      </div>
     </div>
-    <div class="actions">
-      <label class="toggle"><input type="checkbox" id="autostartCb"> <span>Démarrer avec Windows</span></label>
-      <button id="checkUpdatesBtn">Vérifier MAJ</button>
-      <button id="minBtn" title="Réduire">—</button>
-      <button id="closeBtn" title="Vers la tray">✕</button>
+    
+    <hr class="border-white border-opacity-25">
+    
+    <ul class="nav nav-pills flex-column">
+      <li class="nav-item mb-2" id="nav-item-dashboard">
+        <a class="nav-link text-white active" href="#" id="nav-dashboard" data-bs-toggle="pill" data-bs-target="#dashboard">
+          <i class="bi bi-speedometer2 me-2"></i>Tableau de bord
+        </a>
+      </li>
+      <li class="nav-item mb-2" id="nav-item-emails">
+        <a class="nav-link text-white" href="#" id="nav-emails" data-bs-toggle="pill" data-bs-target="#emails">
+          <i class="bi bi-envelope me-2"></i>Emails récents
+        </a>
+      </li>
+      <li class="nav-item mb-2" id="nav-item-weekly">
+        <a class="nav-link text-white" href="#" id="nav-weekly" data-bs-toggle="pill" data-bs-target="#weekly">
+          <i class="bi bi-calendar-week me-2"></i>Suivi hebdomadaire
+        </a>
+      </li>
+      <li class="nav-item mb-2" id="nav-item-personal">
+        <a class="nav-link text-white" href="#" id="nav-personal" data-bs-toggle="pill" data-bs-target="#personal-performance">
+          <i class="bi bi-person-lines-fill me-2"></i>Performances personnelles
+        </a>
+      </li>
+      <li class="nav-item mb-2" id="nav-item-import">
+        <a class="nav-link text-white" href="#" id="nav-import" data-bs-toggle="pill" data-bs-target="#import-activity">
+          <i class="bi bi-file-earmark-spreadsheet me-2"></i>Import Activité (.xlsb)
+        </a>
+      </li>
+      <li class="nav-item mb-2" id="nav-item-monitoring">
+        <a class="nav-link text-white" href="#" id="nav-monitoring" data-bs-toggle="pill" data-bs-target="#monitoring">
+          <i class="bi bi-eye me-2"></i>Monitoring
+        </a>
+      </li>
+      <li class="nav-item mb-2" id="nav-item-logs">
+        <a class="nav-link text-white" href="#" id="nav-logs" data-bs-toggle="pill" data-bs-target="#logs">
+          <i class="bi bi-journal-text me-2"></i>Logs
+        </a>
+      </li>
+      <li class="nav-item mb-2" id="nav-item-db">
+        <a class="nav-link text-white" href="#" id="nav-db" data-bs-toggle="pill" data-bs-target="#db">
+          <i class="bi bi-database me-2"></i>BDD
+        </a>
+      </li>
+      <li class="nav-item mb-2" id="nav-item-settings">
+        <a class="nav-link text-white" href="#" id="nav-settings" data-bs-toggle="pill" data-bs-target="#settings">
+          <i class="bi bi-gear me-2"></i>Paramètres
+        </a>
+      </li>
+    </ul>
+    
+    <hr class="border-white border-opacity-25 mt-auto">
+    
+    <div class="mt-auto">
+      <small class="opacity-75">Dernière synchro:</small>
+      <div class="fw-bold" id="last-sync">--:--</div>
+      <div class="mt-3">
+        <label class="form-label small opacity-75 mb-1"><i class="bi bi-palette2 me-1"></i>Thème</label>
+        <button id="theme-toggle" class="btn btn-sm w-100" type="button" aria-label="Basculer le thème">
+          <i id="theme-toggle-icon" class="bi bi-sun me-2"></i>
+          <span id="theme-toggle-label">Clair</span>
+        </button>
+      </div>
     </div>
-  </header>
+  </nav>
 
-  <main>
-    <section class="kpis">
-      <div class="kpi"><div class="kpi-label">Dossiers</div><div class="kpi-value" id="kpiFolders">—</div></div>
-      <div class="kpi"><div class="kpi-label">Mails (total)</div><div class="kpi-value" id="kpiEmails">—</div></div>
-      <div class="kpi"><div class="kpi-label">Non lus</div><div class="kpi-value" id="kpiUnread">—</div></div>
-      <div class="kpi"><div class="kpi-label">7 derniers jours</div><div class="kpi-value" id="kpiRecent">—</div></div>
-    </section>
+  <!-- Floating toggle when sidebar is collapsed (native toolbar active) -->
+  <button id="sidebar-fab" class="sidebar-toggle-fab" title="Afficher/Masquer le menu" aria-label="Afficher/Masquer le menu">
+    <i class="bi bi-list"></i>
+  </button>
 
-    <section class="panel">
-      <div class="panel-head">
-        <h2>Dossiers monitorés</h2>
-        <button id="addFolderBtn" class="primary">+ Ajouter</button>
+  <!-- Main Content -->
+  <div class="main-content">
+    <div class="container-fluid p-0">
+      
+  <!-- Header supprimé: infos déjà présentes dans la barre latérale -->
+
+  <!-- Tab Content -->
+  <div class="tab-content">
+        <!-- Dashboard Tab -->
+        <div class="tab-pane fade show active" id="dashboard">
+          <div class="pane-scroll">
+          <!-- Métriques principales temps réel -->
+          <div class="row g-4 mb-4">
+            <div class="col-lg-3 col-md-6">
+              <div class="card stat-card h-100 border-0 shadow-sm">
+                <div class="card-body text-center">
+                  <i class="bi bi-inbox text-primary fs-1 mb-3"></i>
+                  <h3 class="mb-2 counter-animate" id="total-emails">--</h3>
+                  <p class="text-muted mb-1">Total des emails</p>
+                  <small class="text-success"><i class="bi bi-arrow-clockwise me-1"></i>Temps réel</small>
+                </div>
+              </div>
+            </div>
+            <div class="col-lg-3 col-md-6">
+              <div class="card stat-card h-100 border-0 shadow-sm">
+                <div class="card-body text-center">
+                  <i class="bi bi-envelope-exclamation text-warning fs-1 mb-3"></i>
+                  <h3 class="mb-2 counter-animate" id="emails-unread">--</h3>
+                  <p class="text-muted mb-1">Non lus</p>
+                  <small class="text-muted"><span id="unread-percentage">--%</span> du total</small>
+                </div>
+              </div>
+            </div>
+            <div class="col-lg-3 col-md-6">
+              <div class="card stat-card h-100 border-0 shadow-sm">
+                <div class="card-body text-center">
+                  <i class="bi bi-envelope-plus text-success fs-1 mb-3"></i>
+                  <h3 class="mb-2 counter-animate" id="emails-today">--</h3>
+                  <p class="text-muted mb-1">Reçus aujourd'hui</p>
+                  <small class="text-info"><span id="today-growth">--</span> vs hier</small>
+                </div>
+              </div>
+            </div>
+            <div class="col-lg-3 col-md-6">
+              <div class="card stat-card h-100 border-0 shadow-sm">
+                <div class="card-body text-center">
+                  <i class="bi bi-folder2-open text-info fs-1 mb-3"></i>
+                  <h3 class="mb-2 counter-animate" id="monitored-folders">--</h3>
+                  <p class="text-muted mb-0">Dossiers surveillés</p>
+                </div>
+              </div>
+            </div>
+          </div>
+          
+          <!-- Répartition par dossiers surveillés -->
+          <div class="row g-4 mb-4">
+            <div class="col-12">
+              <div class="card border-0 shadow-sm">
+                <div class="card-header bg-white d-flex justify-content-between align-items-center">
+                  <h5 class="mb-0"><i class="bi bi-pie-chart me-2"></i>Répartition par dossiers</h5>
+                  <div class="d-flex align-items-center gap-2">
+                    <div class="btn-group btn-group-sm" role="group" aria-label="Tri dossiers">
+                      <button type="button" id="sort-folders-alpha" class="btn btn-outline-secondary active" title="Trier A→Z">
+                        <i class="bi bi-sort-alpha-down"></i>
+                      </button>
+                      <button type="button" id="sort-folders-unread" class="btn btn-outline-secondary" title="Non lus d'abord">
+                        <i class="bi bi-envelope-exclamation"></i>
+                      </button>
+                    </div>
+                    <div class="badge bg-primary" id="total-folders-badge">0 dossiers</div>
+                  </div>
+                </div>
+                <div class="card-body">
+                  <div class="row g-3" id="folders-stats-grid">
+                    <div class="col-12 text-center text-muted py-4">
+                      <div class="spinner-border spinner-border-sm me-2" role="status"></div>
+                      Chargement des dossiers...
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+          
+          <!-- Analyse temporelle -->
+          <div class="row g-4 mb-4">
+            <div class="col-lg-8">
+              <div class="card border-0 shadow-sm">
+                <div class="card-header bg-white d-flex justify-content-between align-items-center">
+                  <h5 class="mb-0"><i class="bi bi-graph-up me-2"></i>Activité des dernières 24h</h5>
+                  <small class="text-muted">Mise à jour: <span id="activity-last-update">--</span></small>
+                </div>
+                <div class="card-body">
+                  <div class="row g-4">
+                    <div class="col-md-4 text-center">
+                      <div class="fs-2 fw-bold text-primary mb-2" id="activity-total">--</div>
+                      <p class="text-muted mb-0">Total reçus</p>
+                    </div>
+                    <div class="col-md-4 text-center">
+                      <div class="fs-2 fw-bold text-success mb-2" id="activity-read">--</div>
+                      <p class="text-muted mb-0">Lus</p>
+                    </div>
+                    <div class="col-md-4 text-center">
+                      <div class="fs-2 fw-bold text-warning mb-2" id="activity-pending">--</div>
+                      <p class="text-muted mb-0">En attente</p>
+                    </div>
+                  </div>
+                  <hr>
+                  <div class="row g-3">
+                    <div class="col-md-6">
+                      <div class="d-flex justify-content-between">
+                        <span class="text-muted">Emails/heure moyenne:</span>
+                        <span class="fw-bold" id="emails-per-hour">--</span>
+                      </div>
+                    </div>
+                    <div class="col-md-6">
+                      <div class="d-flex justify-content-between">
+                        <span class="text-muted">Pic d'activité:</span>
+                        <span class="fw-bold" id="peak-activity">--</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="col-lg-4">
+              <div class="card border-0 shadow-sm">
+                <div class="card-header bg-white">
+                  <h5 class="mb-0"><i class="bi bi-speedometer2 me-2"></i>Performance système</h5>
+                </div>
+                <div class="card-body">
+                  <div class="mb-3">
+                    <div class="d-flex justify-content-between mb-1">
+                      <span class="text-muted">Synchronisation</span>
+                      <span class="text-success fw-bold">Temps réel</span>
+                    </div>
+                    <div class="progress" style="height: 8px;">
+                      <div class="progress-bar bg-success" style="width: 100%"></div>
+                    </div>
+                  </div>
+                  <div class="mb-3">
+                    <div class="d-flex justify-content-between mb-1">
+                      <span class="text-muted">Monitoring</span>
+                      <span id="monitoring-performance" class="fw-bold">--</span>
+                    </div>
+                    <div class="progress" style="height: 8px;">
+                      <div id="monitoring-progress" class="progress-bar" style="width: 0%"></div>
+                    </div>
+                  </div>
+                  <div class="text-center">
+                    <small class="text-muted">Dernière vérification: <span id="last-check">--</span></small>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+          </div>
+        </div>
+
+        <!-- Logs Tab -->
+        <div class="tab-pane fade" id="logs">
+          <div class="pane-scroll">
+            <div class="row g-3">
+              <div class="col-12">
+                <div class="card border-0 shadow-sm logs-card">
+                  <div class="card-header bg-light d-flex justify-content-between align-items-center">
+                    <h5 class="mb-0 fw-semibold"><i class="bi bi-journal-text me-2"></i>Journal d'application</h5>
+                    <div class="d-flex align-items-center gap-2 small text-muted">
+                      <span>Entrées: <span class="fw-semibold" id="logs-count">0</span></span>
+                      <span class="opacity-50">•</span>
+                      <span>Tampon: <span class="fw-semibold" id="logs-buffered">0</span></span>
+                    </div>
+                  </div>
+
+                  <div class="card-body p-0 d-flex flex-column" style="min-height: 0;">
+                    <div class="logs-toolbar p-3">
+                      <div class="row g-2 align-items-end">
+                        <div class="col-12 col-lg-5">
+                          <label for="logs-search" class="form-label mb-1 small text-muted">Recherche</label>
+                          <div class="input-group input-group-sm">
+                            <span class="input-group-text"><i class="bi bi-search"></i></span>
+                            <input type="text" class="form-control" id="logs-search" placeholder="Rechercher dans message / data...">
+                          </div>
+                        </div>
+                        <div class="col-6 col-lg-2">
+                          <label for="logs-level" class="form-label mb-1 small text-muted">Niveau</label>
+                          <select id="logs-level" class="form-select form-select-sm">
+                            <option value="ALL">Tous</option>
+                            <option value="INFO">Info</option>
+                            <option value="SUCCESS">Succès</option>
+                            <option value="WARN">Warn</option>
+                            <option value="ERROR">Error</option>
+                            <option value="DEBUG">Debug</option>
+                          </select>
+                        </div>
+                        <div class="col-6 col-lg-3">
+                          <label for="logs-category" class="form-label mb-1 small text-muted">Catégorie</label>
+                          <select id="logs-category" class="form-select form-select-sm">
+                            <option value="ALL">Toutes catégories</option>
+                            <option value="INIT">🚀 Init</option>
+                            <option value="SYNC">🔄 Sync</option>
+                            <option value="COM">📡 COM</option>
+                            <option value="DB">💾 DB</option>
+                            <option value="PS">⚙️ PowerShell</option>
+                            <option value="IPC">📱 IPC</option>
+                            <option value="CONFIG">⚙️ Config</option>
+                            <option value="WEEKLY">📅 Weekly</option>
+                            <option value="EMAIL">📧 Email</option>
+                            <option value="PERF">⚡ Performance</option>
+                            <option value="SECURITY">🔒 Security</option>
+                            <option value="CACHE">💨 Cache</option>
+                            <option value="START">▶️ Start</option>
+                            <option value="STOP">⏹️ Stop</option>
+                            <option value="AUTO">🤖 Auto</option>
+                          </select>
+                        </div>
+                        <div class="col-12 col-lg-2 d-flex justify-content-lg-end gap-2">
+                          <button class="btn btn-outline-secondary btn-sm" id="logs-refresh" title="Rafraîchir"><i class="bi bi-arrow-clockwise"></i></button>
+                          <button class="btn btn-outline-secondary btn-sm" id="logs-open-folder" title="Ouvrir le dossier de logs"><i class="bi bi-folder2-open"></i></button>
+                        </div>
+                        <div class="col-12 d-flex flex-wrap gap-2 justify-content-end">
+                          <button class="btn btn-outline-primary btn-sm" id="logs-export"><i class="bi bi-download me-1"></i>Exporter</button>
+                          <button class="btn btn-outline-success btn-sm" id="logs-copy-all" title="Copier tous les logs dans le presse-papier"><i class="bi bi-clipboard me-1"></i>Copier tout</button>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div class="logs-console" id="logs-container" role="region" aria-label="Flux des logs">
+                      <div id="logs-view" class="logs-view"></div>
+                    </div>
+                  </div>
+
+                  <div class="card-footer d-flex justify-content-between align-items-center small text-muted">
+                    <div id="logs-status">—</div>
+                    <div class="text-end">Astuce: faire défiler vers le haut pour mettre en pause l'auto-scroll</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- BDD Tab (désactivé par défaut via Paramètres) -->
+        <div class="tab-pane fade" id="db">
+          <div class="pane-scroll">
+            <div class="row g-3">
+              <div class="col-12">
+                <div class="card border-0 shadow-sm db-card">
+                  <div class="card-header bg-light d-flex justify-content-between align-items-center">
+                    <h5 class="mb-0 fw-semibold"><i class="bi bi-database me-2"></i>BDD (données brutes)</h5>
+                    <div class="small text-muted" id="db-status">—</div>
+                  </div>
+                  <div class="card-body p-0 d-flex flex-column" style="min-height:0;">
+                    <div class="db-toolbar p-3">
+                      <div class="row g-2 align-items-end">
+                        <div class="col-12 col-lg-5">
+                          <label for="db-table" class="form-label mb-1 small text-muted">Table</label>
+                          <select class="form-select form-select-sm" id="db-table">
+                            <option value="">Chargement...</option>
+                          </select>
+                        </div>
+                        <div class="col-6 col-lg-2">
+                          <label for="db-limit" class="form-label mb-1 small text-muted">Limite</label>
+                          <select class="form-select form-select-sm" id="db-limit">
+                            <option value="50">50</option>
+                            <option value="100">100</option>
+                            <option value="200" selected>200</option>
+                            <option value="500">500</option>
+                          </select>
+                        </div>
+                        <div class="col-6 col-lg-3">
+                          <div class="form-check">
+                            <input class="form-check-input" type="checkbox" id="db-auto" checked>
+                            <label class="form-check-label" for="db-auto">Actualisation auto</label>
+                          </div>
+                          <div class="form-text">Rafraîchit uniquement quand l’onglet est actif.</div>
+                        </div>
+                        <div class="col-12 col-lg-2 d-flex justify-content-lg-end gap-2">
+                          <button class="btn btn-outline-secondary btn-sm" id="db-refresh" title="Rafraîchir"><i class="bi bi-arrow-clockwise"></i></button>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div class="db-table-wrap table-responsive" id="db-table-wrap">
+                      <table class="table table-sm table-striped mb-0">
+                        <thead class="table-light" id="db-table-head"></thead>
+                        <tbody id="db-table-body">
+                          <tr><td class="text-muted py-3">Sélectionnez une table…</td></tr>
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Emails Tab -->
+        <div class="tab-pane fade" id="emails">
+          <div class="pane-scroll">
+
+          <!-- Statistiques rapides des emails -->
+          <div class="row g-3 mb-4">
+            <div class="col-lg-2 col-md-4 col-sm-6">
+              <div class="card border-0 bg-light h-100">
+                <div class="card-body text-center p-3">
+                  <i class="bi bi-inbox text-primary fs-4 mb-2"></i>
+                  <div class="h5 mb-1 counter-animate" id="emails-stats-total">--</div>
+                  <small class="text-muted">Total</small>
+                </div>
+              </div>
+            </div>
+            <div class="col-lg-2 col-md-4 col-sm-6">
+              <div class="card border-0 bg-light h-100">
+                <div class="card-body text-center p-3">
+                  <i class="bi bi-envelope-exclamation text-warning fs-4 mb-2"></i>
+                  <div class="h5 mb-1 counter-animate" id="emails-stats-unread">--</div>
+                  <small class="text-muted">Non lus</small>
+                </div>
+              </div>
+            </div>
+            <div class="col-lg-2 col-md-4 col-sm-6">
+              <div class="card border-0 bg-light h-100">
+                <div class="card-body text-center p-3">
+                  <i class="bi bi-calendar-day text-success fs-4 mb-2"></i>
+                  <div class="h5 mb-1 counter-animate" id="emails-stats-today">--</div>
+                  <small class="text-muted">Aujourd'hui</small>
+                </div>
+              </div>
+            </div>
+            <div class="col-lg-2 col-md-4 col-sm-6">
+              <div class="card border-0 bg-light h-100">
+                <div class="card-body text-center p-3">
+                  <i class="bi bi-calendar-week text-info fs-4 mb-2"></i>
+                  <div class="h5 mb-1 counter-animate" id="emails-stats-week">--</div>
+                  <small class="text-muted">Cette semaine</small>
+                </div>
+              </div>
+            </div>
+            <div class="col-lg-2 col-md-4 col-sm-6">
+              <div class="card border-0 bg-light h-100">
+                <div class="card-body text-center p-3">
+                  <i class="bi bi-clock text-secondary fs-4 mb-2"></i>
+                  <div class="h6 mb-1" id="emails-stats-last-sync">--</div>
+                  <small class="text-muted">Dernière sync</small>
+                </div>
+              </div>
+            </div>
+            <div class="col-lg-2 col-md-4 col-sm-6">
+              <div class="card border-0 bg-light h-100">
+                <div class="card-body text-center p-3">
+                  <i class="bi bi-speedometer text-primary fs-4 mb-2"></i>
+                  <div class="h6 mb-1" id="emails-stats-rate">--/h</div>
+                  <small class="text-muted">Moyenne</small>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Liste principale des emails -->
+          <div class="card border-0 shadow-sm">
+            <div class="card-header bg-gradient">
+              <div class="row align-items-center">
+                <div class="col">
+                  <h5 class="mb-0 fw-semibold">
+                    <i class="bi bi-list-ul me-2 text-primary"></i>
+                    Liste des emails
+                  </h5>
+                </div>
+                <div class="col-auto">
+                  <div class="d-flex align-items-center gap-2">
+                    <div class="d-flex align-items-center me-2">
+                      <span class="status-indicator status-connected me-2"></span>
+                      <small class="text-success fw-medium">Temps réel</small>
+                    </div>
+                    <button class="btn btn-outline-primary btn-sm" id="refresh-emails">
+                      <i class="bi bi-arrow-clockwise me-1"></i>Actualiser
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+            
+            <!-- Barre de recherche et filtres -->
+            <div class="card-body border-bottom bg-light p-3">
+              <div class="row g-3">
+                <div class="col-md-4">
+                  <div class="input-group">
+                    <span class="input-group-text bg-white border-end-0">
+                      <i class="bi bi-search text-muted"></i>
+                    </span>
+                    <input type="text" class="form-control border-start-0" id="email-search" 
+                           placeholder="Rechercher par expéditeur, sujet..." style="border-left: none !important;">
+                  </div>
+                </div>
+                <div class="col-md-3">
+                  <select class="form-select" id="folder-filter">
+                    <option value="">📁 Tous les dossiers</option>
+                  </select>
+                </div>
+                <div class="col-md-3">
+                  <select class="form-select" id="date-filter">
+                    <option value="">📅 Toutes les dates</option>
+                    <option value="today">Aujourd'hui</option>
+                    <option value="week">Cette semaine</option>
+                    <option value="month">Ce mois</option>
+                  </select>
+                </div>
+                <div class="col-md-2">
+                  <select class="form-select" id="status-filter">
+                    <option value="">📋 Tous les statuts</option>
+                    <option value="unread">Non lus</option>
+                    <option value="read">Lus</option>
+                  </select>
+                </div>
+                <div class="col-12">
+                  <div class="btn-group" role="group">
+                    <input type="radio" class="btn-check" name="email-filter" id="filter-all" checked>
+                    <label class="btn btn-outline-secondary btn-sm" for="filter-all">Tous</label>
+                    <input type="radio" class="btn-check" name="email-filter" id="filter-unread">
+                    <label class="btn btn-outline-secondary btn-sm" for="filter-unread">Non lus</label>
+                    <input type="radio" class="btn-check" name="email-filter" id="filter-today">
+                    <label class="btn btn-outline-secondary btn-sm" for="filter-today">Aujourd'hui</label>
+                  </div>
+                </div>
+              </div>
+            </div>
+            
+            <div class="card-body p-0">
+              <div class="table-responsive">
+                <table class="table table-hover mb-0">
+                  <thead class="table-light sticky-top">
+                    <tr>
+                      <th class="border-0 ps-3">
+                        <div class="d-flex align-items-center">
+                          <i class="bi bi-calendar me-2 text-muted"></i>Date
+                        </div>
+                      </th>
+                      <th class="border-0">
+                        <div class="d-flex align-items-center">
+                          <i class="bi bi-person me-2 text-muted"></i>Expéditeur
+                        </div>
+                      </th>
+                      <th class="border-0">
+                        <div class="d-flex align-items-center">
+                          <i class="bi bi-chat-quote me-2 text-muted"></i>Sujet
+                        </div>
+                      </th>
+                      <th class="border-0">
+                        <div class="d-flex align-items-center">
+                          <i class="bi bi-folder me-2 text-muted"></i>Dossier
+                        </div>
+                      </th>
+                      <th class="border-0">
+                        <div class="d-flex align-items-center">
+                          <i class="bi bi-check-circle me-2 text-muted"></i>Statut
+                        </div>
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody id="emails-table">
+                    <tr>
+                      <td colspan="5" class="text-center text-muted py-5 border-0">
+                        <div class="d-flex flex-column align-items-center">
+                          <div class="spinner-border text-primary mb-3" role="status">
+                            <span class="visually-hidden">Chargement...</span>
+                          </div>
+                          <h6 class="text-muted mb-2">Chargement des emails...</h6>
+                          <p class="text-muted mb-0 small">Récupération des données depuis Outlook</p>
+                        </div>
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+              
+              <!-- Pagination -->
+              <div class="d-flex justify-content-between align-items-center p-3 border-top bg-light">
+                <div class="text-muted small">
+                  Affichage de <span id="emails-range-start">0</span> à <span id="emails-range-end">0</span> 
+                  sur <span id="emails-total-count">0</span> emails
+                </div>
+                <nav>
+                  <ul class="pagination pagination-sm mb-0">
+                    <li class="page-item disabled" id="prev-page">
+                      <a class="page-link" href="#"><i class="bi bi-chevron-left"></i></a>
+                    </li>
+                    <li class="page-item active">
+                      <a class="page-link" href="#">1</a>
+                    </li>
+                    <li class="page-item" id="next-page">
+                      <a class="page-link" href="#"><i class="bi bi-chevron-right"></i></a>
+                    </li>
+                  </ul>
+                </nav>
+              </div>
+            </div>
+          </div>
+          </div>
+        </div>
+
+        <!-- Weekly Stats Tab (Nouveau) -->
+        <div class="tab-pane fade" id="weekly">
+          <div class="pane-scroll">
+
+            <!-- Nested subtabs to keep content short -->
+            <ul class="nav nav-pills modern-subtabs mb-3" id="weekly-subtabs" role="tablist">
+              <li class="nav-item" role="presentation">
+                <button class="nav-link active" id="weekly-sub-current-tab" data-bs-toggle="tab" data-bs-target="#weekly-sub-current" type="button" role="tab">Semaine courante</button>
+              </li>
+              <li class="nav-item" role="presentation">
+                <button class="nav-link" id="weekly-sub-manual-tab" data-bs-toggle="tab" data-bs-target="#weekly-sub-manual" type="button" role="tab">Commentaires & ADG</button>
+              </li>
+              <li class="nav-item" role="presentation">
+                <button class="nav-link" id="weekly-sub-history-tab" data-bs-toggle="tab" data-bs-target="#weekly-sub-history" type="button" role="tab">Historique</button>
+              </li>
+            </ul>
+            <div class="tab-content">
+              <!-- Semaine courante -->
+              <div class="tab-pane fade show active" id="weekly-sub-current" role="tabpanel" aria-labelledby="weekly-sub-current-tab">
+                <div class="row g-3 mb-3">
+                  <div class="col-12">
+                    <div class="card border-0 shadow-sm">
+                      <div class="card-header bg-primary text-white">
+                        <div class="d-flex justify-content-between align-items-center">
+                          <h6 class="card-title mb-0 fw-semibold">
+                            <i class="bi bi-calendar-check me-2"></i>
+                            Semaine courante: <span id="current-week-title">S-- - ----</span>
+                          </h6>
+                          <div class="d-flex gap-2">
+                            <button class="btn btn-outline-light btn-sm" data-bs-toggle="modal" data-bs-target="#weeklySettingsModal" title="Paramètres">
+                              <i class="bi bi-gear"></i>
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                      <div class="card-body">
+                        <div class="row g-3" id="current-week-stats">
+                          <div class="col-12 text-center text-muted">
+                            <div class="spinner-border spinner-border-sm me-2"></div>
+                            Chargement des statistiques...
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Commentaires & ADG -->
+              <div class="tab-pane fade" id="weekly-sub-manual" role="tabpanel" aria-labelledby="weekly-sub-manual-tab">
+                <div class="row g-3 mb-3">
+                  <div class="col-12">
+                    <div class="card border-0 shadow-sm">
+                      <div class="card-header bg-light">
+                        <div class="d-flex flex-wrap justify-content-between align-items-end gap-2">
+                          <div>
+                            <h6 class="card-title mb-1 fw-semibold">
+                              <i class="bi bi-chat-left-text me-2"></i>
+                              Commentaires par semaine
+                            </h6>
+                            <small class="text-muted">Renseigner des notes explicatives sur une semaine donnée</small>
+                          </div>
+                          <div class="d-flex align-items-end gap-2">
+                            <div>
+                              <label for="comments-week-select" class="form-label small mb-1">Semaine</label>
+                              <select id="comments-week-select" class="form-select form-select-sm"></select>
+                            </div>
+                            <button type="button" class="btn btn-outline-secondary btn-sm" id="refresh-comments" title="Rafraîchir">
+                              <i class="bi bi-arrow-clockwise"></i>
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                      <div class="card-body">
+                        <div class="row g-3 mb-3">
+                          <div class="col-12">
+                            <ul class="list-group" id="weekly-comments-list">
+                              <li class="list-group-item text-muted text-center">Aucun commentaire</li>
+                            </ul>
+                          </div>
+                        </div>
+                        <hr class="text-muted">
+                        <div class="row g-3 mb-3">
+                          <div class="col-12">
+                            <h6 class="fw-semibold mb-2"><i class="bi bi-plus-circle me-2"></i>Ajouter un commentaire</h6>
+                          </div>
+                          <div class="col-md-3">
+                            <label for="comment-category" class="form-label">Catégorie (optionnel)</label>
+                            <select class="form-select" id="comment-category">
+                              <option value="">Toutes</option>
+                              <option value="Déclarations">Déclarations</option>
+                              <option value="Mails simples">Mails simples</option>
+                              <option value="Règlements">Règlements</option>
+                            </select>
+                          </div>
+                          <div class="col-md-7">
+                            <label for="comment-text" class="form-label">Commentaire</label>
+                            <textarea id="comment-text" class="form-control" rows="2" placeholder="Ex: Congés, incident, traitement prioritaire, etc."></textarea>
+                          </div>
+                          <div class="col-md-2 d-flex align-items-end">
+                            <button class="btn btn-primary w-100" id="add-comment-btn">
+                              <i class="bi bi-send me-1"></i>Enregistrer
+                            </button>
+                          </div>
+                        </div>
+                        <form id="manual-adjustment-form" class="row g-3">
+                          <div class="col-md-3">
+                            <label for="adjustment-category" class="form-label">Catégorie</label>
+                            <select class="form-select" id="adjustment-category" required>
+                              <option value="">Sélectionner...</option>
+                              <option value="Déclarations">Déclarations</option>
+                              <option value="Mails simples">Mails simples</option>
+                              <option value="Règlements">Règlements</option>
+                            </select>
+                          </div>
+                          <div class="col-md-2">
+                            <label for="adjustment-value" class="form-label">Quantité</label>
+                            <input type="number" class="form-control" id="adjustment-value" placeholder="ex: 5" required>
+                          </div>
+                          <div class="col-md-3">
+                            <label for="adjustment-type" class="form-label">Type</label>
+                            <select class="form-select" id="adjustment-type" required>
+                              <option value="manual_adjustments">Traité par ADG</option>
+                              <option value="emails_received">Reçu</option>
+                              <option value="emails_treated">Traité</option>
+                            </select>
+                          </div>
+                          <div class="col-md-2">
+                            <label class="form-label">&nbsp;</label>
+                            <button type="submit" class="btn btn-primary d-block">
+                              <i class="bi bi-plus-lg me-1"></i>Ajouter
+                            </button>
+                          </div>
+                          <div class="col-md-2">
+                            <label class="form-label">&nbsp;</label>
+                            <button type="button" class="btn btn-outline-danger d-block" id="negative-adjustment">
+                              <i class="bi bi-dash-lg me-1"></i>Retirer
+                            </button>
+                          </div>
+                        </form>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Historique des semaines -->
+              <div class="tab-pane fade" id="weekly-sub-history" role="tabpanel" aria-labelledby="weekly-sub-history-tab">
+                <div class="row g-3">
+                  <div class="col-12">
+                    <div class="card border-0 shadow-sm">
+                      <div class="card-header bg-light d-flex justify-content-between align-items-center">
+                        <h6 class="card-title mb-0 fw-semibold">
+                          <i class="bi bi-table me-2"></i>
+                          Historique des semaines
+                        </h6>
+                        <small class="text-muted">
+                          <i class="bi bi-info-circle me-1"></i>
+                          Mise à jour en temps réel
+                        </small>
+                      </div>
+                      <div class="card-body">
+                        <div class="table-responsive">
+                          <table class="table table-hover align-middle mb-0" id="weekly-history-table">
+                            <thead class="table-light">
+                              <tr>
+                                <th scope="col" class="border-0 fw-semibold">Semaine</th>
+                                <th scope="col" class="border-0 fw-semibold">Période</th>
+                                <th scope="col" class="border-0 fw-semibold">Catégorie</th>
+                                <th scope="col" class="border-0 fw-semibold text-center">Reçus</th>
+                                <th scope="col" class="border-0 fw-semibold text-center">Traités</th>
+                                <th scope="col" class="border-0 fw-semibold text-center">Traité par ADG</th>
+                                <th scope="col" class="border-0 fw-semibold text-center">Stock fin de semaine</th>
+                                <th scope="col" class="border-0 fw-semibold text-center">Total Stock</th>
+                                <th scope="col" class="border-0 fw-semibold text-center">Évolution S-1</th>
+                                <th scope="col" class="border-0 fw-semibold text-center">Note</th>
+                              </tr>
+                            </thead>
+                            <tbody id="weekly-history-body"></tbody>
+                          </table>
+                        </div>
+                        
+                        <div id="weekly-loading" class="text-center py-5">
+                          <div class="spinner-border text-primary" role="status">
+                            <span class="visually-hidden">Chargement...</span>
+                          </div>
+                          <p class="text-muted mt-3">Chargement de l'historique...</p>
+                        </div>
+                        
+                        <div id="weekly-no-data" class="text-center py-5 d-none">
+                          <i class="bi bi-calendar-x text-muted fs-1 mb-3"></i>
+                          <h6 class="text-muted">Aucune donnée hebdomadaire</h6>
+                          <p class="text-muted mb-0">Les statistiques apparaîtront dès la réception d'emails</p>
+                        </div>
+                        
+                        <div id="weekly-pagination" class="d-flex justify-content-between align-items-center mt-3 d-none">
+                          <div class="small text-muted">
+                            <span id="weekly-page-info">Page 1 / 1</span>
+                            <span class="ms-2">•</span>
+                            <span class="ms-2"><span id="weekly-total-weeks">0</span> semaines</span>
+                          </div>
+                          <div class="btn-group" role="group" aria-label="Pagination historique">
+                            <button type="button" class="btn btn-outline-secondary btn-sm" id="weekly-prev" disabled>
+                              <i class="bi bi-chevron-left"></i> Précédent
+                            </button>
+                            <button type="button" class="btn btn-outline-secondary btn-sm" id="weekly-next" disabled>
+                              Suivant <i class="bi bi-chevron-right"></i>
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Monitoring Tab -->
+        <div class="tab-pane fade" id="monitoring">
+          <div class="pane-scroll">
+            <div class="row g-4">
+              <!-- Monitoring (full width card) -->
+              <div class="col-12">
+                <div class="card border-0 shadow-sm card-modern">
+                  <div class="card-header bg-gradient d-flex justify-content-between align-items-center">
+                    <h5 class="mb-0 fw-semibold d-flex align-items-center gap-2">
+                      <i class="bi bi-folder2-open"></i>
+                      Dossiers surveillés
+                      <span class="badge bg-primary rounded-pill ms-2" id="monitored-folders-count">0</span>
+                    </h5>
+                    <div class="d-flex align-items-center gap-2">
+                      <span id="monitoring-status" class="d-none"></span>
+                      <button class="btn btn-outline-warning btn-sm" id="force-resync" type="button" title="Forcer une resynchronisation complète de tous les dossiers">
+                        <i class="bi bi-arrow-repeat me-1"></i> Resync complète
+                      </button>
+                      <button class="btn btn-outline-secondary btn-sm" id="refresh-folders" type="button">
+                        <i class="bi bi-arrow-clockwise me-1"></i> Actualiser
+                      </button>
+                      <button class="btn btn-primary btn-sm" id="add-folder" type="button">
+                        <i class="bi bi-plus-lg me-1"></i> Ajouter
+                      </button>
+                    </div>
+                  </div>
+                  <div class="card-body p-0 d-flex flex-column">
+                    <!-- Compact Stats Ribbon -->
+                    <div class="border-bottom bg-white stats-ribbon">
+                      <div class="container-fluid py-2">
+                        <div class="d-flex flex-wrap align-items-center gap-3 small">
+                          <div class="ribbon-item">
+                            <i class="bi bi-folder2-open text-primary me-1"></i>
+                            Total: <span id="total-folders" class="fw-semibold ms-1">0</span>
+                          </div>
+                          <div class="ribbon-item">
+                            <i class="bi bi-check2-circle text-success me-1"></i>
+                            Actifs: <span id="active-folders" class="fw-semibold ms-1">0</span>
+                          </div>
+                          <div class="vr"></div>
+                          <div class="ribbon-item">
+                            📋 <span id="declarations-count" class="fw-semibold">0</span>
+                          </div>
+                          <div class="ribbon-item">
+                            💰 <span id="reglements-count" class="fw-semibold">0</span>
+                          </div>
+                          <div class="ribbon-item">
+                            📧 <span id="simples-count" class="fw-semibold">0</span>
+                          </div>
+                          <div class="vr d-none d-md-block"></div>
+                          <div class="ribbon-usage d-flex align-items-center gap-2">
+                            <span class="text-muted">Utilisation</span>
+                            <span id="system-usage" class="fw-semibold">0%</span>
+                            <div class="progress" style="width: 120px; height: 6px;">
+                              <div id="system-progress" class="progress-bar" style="width: 0%"></div>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    <!-- Slim Filters Bar -->
+                    <div class="border-bottom bg-light sticky-filter filters-bar">
+                      <div class="container-fluid py-2">
+                        <div class="d-flex align-items-center gap-2 flex-wrap">
+                          <div class="input-group input-group-sm" style="max-width: 380px;">
+                            <span class="input-group-text bg-white border-end-0"><i class="bi bi-search text-muted"></i></span>
+                            <input type="text" class="form-control border-start-0" id="folder-search" placeholder="Rechercher..." style="border-left: none !important;">
+                          </div>
+                          <!-- Accessible select kept for logic; visually hidden -->
+                          <select class="form-select form-select-sm visually-hidden" id="category-filter" tabindex="-1" aria-hidden="true">
+                            <option value=""></option>
+                            <option value="Déclarations"></option>
+                            <option value="Règlements"></option>
+                            <option value="Mails simples"></option>
+                          </select>
+                          <div class="d-flex align-items-center gap-2 flex-wrap">
+                            <span class="chip" data-filter=""><i class="bi bi-ui-checks"></i> Tous</span>
+                            <span class="chip" data-filter="Déclarations">📋 Déclarations</span>
+                            <span class="chip" data-filter="Règlements">💰 Règlements</span>
+                            <span class="chip" data-filter="Mails simples">📧 Simples</span>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    <!-- Toolbar: view modes + expand/collapse -->
+                    <div class="p-3 border-bottom bg-white monitoring-toolbar d-flex justify-content-between align-items-center flex-wrap gap-2">
+                      <div class="btn-group btn-group-sm" role="group" aria-label="View mode">
+                        <button class="btn btn-outline-primary active" id="view-board" type="button"><i class="bi bi-columns-gap me-1"></i>Tableau</button>
+                        <button class="btn btn-outline-primary" id="view-tree" type="button"><i class="bi bi-diagram-3 me-1"></i>Arborescence</button>
+                        <button class="btn btn-outline-primary" id="view-list" type="button"><i class="bi bi-list-ul me-1"></i>Liste</button>
+                      </div>
+                      <div class="d-flex gap-2">
+                        <button class="btn btn-outline-secondary btn-sm" id="expand-all" type="button"><i class="bi bi-arrows-expand me-1"></i>Déplier tout</button>
+                        <button class="btn btn-outline-secondary btn-sm" id="collapse-all" type="button"><i class="bi bi-arrows-collapse me-1"></i>Replier tout</button>
+                      </div>
+                    </div>
+
+                    <!-- Contenu principal: Board/Tree/List -->
+                    <div class="p-3 monitoring-content">
+                      <div id="monitoring-content">
+                        <div id="folders-board" class="folders-board"></div>
+                        <div id="folders-tree" class="d-none"></div>
+                      </div>
+                    </div>
+                    <!-- Modal de détails -->
+                    <div class="modal fade" id="folderDetailsModal" tabindex="-1" aria-hidden="true">
+                      <div class="modal-dialog modal-md">
+                        <div class="modal-content">
+                          <div class="modal-header">
+                            <h5 class="modal-title" id="folderDetailTitle">Détails du dossier</h5>
+                            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                          </div>
+                          <div class="modal-body" id="folderDetailBody"></div>
+                          <div class="modal-footer" id="folderDetailFooter"></div>
+                        </div>
+                      </div>
+                    </div>
+                  </div><!-- /card-body -->
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Performances personnelles Tab -->
+        <div class="tab-pane fade" id="personal-performance">
+          <div class="pane-scroll">
+
+          <!-- Filtres / Personnalisation -->
+          <div class="card border-0 shadow-sm mb-4">
+            <div class="card-body">
+              <div class="row g-3 align-items-end">
+                <div class="col-12 col-lg-3">
+                  <label class="form-label">Période</label>
+                  <select class="form-select" id="pp-period-mode">
+                    <option value="last-6">6 dernières semaines</option>
+                    <option value="last-13">13 dernières semaines</option>
+                    <option value="last-26">26 dernières semaines</option>
+                    <option value="last-52">52 dernières semaines</option>
+                    <option value="year">Année</option>
+                  </select>
+                </div>
+
+                <div class="col-12 col-lg-2" id="pp-year-wrap" style="display:none;">
+                  <label class="form-label">Année</label>
+                  <select class="form-select" id="pp-year">
+                    <option value="">--</option>
+                  </select>
+                </div>
+
+                <div class="col-12 col-lg-5">
+                  <label class="form-label">Catégories</label>
+                  <div class="d-flex flex-wrap gap-3">
+                    <div class="form-check">
+                      <input class="form-check-input" type="checkbox" id="pp-cat-declarations" checked>
+                      <label class="form-check-label" for="pp-cat-declarations">Déclarations</label>
+                    </div>
+                    <div class="form-check">
+                      <input class="form-check-input" type="checkbox" id="pp-cat-reglements" checked>
+                      <label class="form-check-label" for="pp-cat-reglements">Règlements</label>
+                    </div>
+                    <div class="form-check">
+                      <input class="form-check-input" type="checkbox" id="pp-cat-mails" checked>
+                      <label class="form-check-label" for="pp-cat-mails">Mails simples</label>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="col-12 col-lg-2">
+                  <label class="form-label">Options</label>
+                  <div class="form-check form-switch">
+                    <input class="form-check-input" type="checkbox" id="pp-include-adg">
+                    <label class="form-check-label" for="pp-include-adg">Inclure ADG</label>
+                  </div>
+                </div>
+              </div>
+
+              <div class="mt-3 d-flex align-items-center justify-content-between">
+                <div class="small text-muted">Astuce: utilise “Année” pour préparer un rapport annuel (KPI + graphiques + tableau filtrés).</div>
+                <span class="badge bg-secondary" id="pp-period-badge">--</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- KPIs principaux -->
+          <div class="row g-3 mb-4">
+            <div class="col-md-4">
+              <div class="card border-0 shadow-sm h-100">
+                <div class="card-body text-center">
+                  <div class="text-muted mb-1">Reçus (totaux)</div>
+                  <div class="display-6 text-primary fw-bold" id="personal-arrivals">--</div>
+                </div>
+              </div>
+            </div>
+            <div class="col-md-4">
+              <div class="card border-0 shadow-sm h-100">
+                <div class="card-body text-center">
+                  <div class="text-muted mb-1">Traités</div>
+                  <div class="display-6 text-success fw-bold" id="personal-treated">--</div>
+                </div>
+              </div>
+            </div>
+            <div class="col-md-4">
+              <div class="card border-0 shadow-sm h-100">
+                <div class="card-body text-center">
+                  <div class="text-muted mb-1">Stock fin de semaine</div>
+                  <div class="display-6 text-warning fw-bold" id="personal-stock">--</div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Tendance vs S-1 -->
+          <div class="row g-3 mb-4">
+            <div class="col-12">
+              <div class="card border-0 shadow-sm">
+                <div class="card-header bg-light d-flex justify-content-between align-items-center">
+                  <h6 class="mb-0 fw-semibold"><i class="bi bi-graph-up me-2"></i>Tendance vs S-1</h6>
+                  <span id="personal-trend" class="badge bg-secondary">--</span>
+                </div>
+                <div class="card-body">
+                  <div class="small text-muted mb-2">
+                    Synthèse des 6 dernières semaines. Le <strong>taux de traitement</strong> = Traités / Reçus. 
+                    Le <strong>stock fin</strong> est le stock restant à la fin de chaque semaine (en tenant compte des ajustements ADG).
+                  </div>
+                  <div class="table-responsive">
+                    <table class="table table-sm align-middle mb-0">
+                      <thead class="table-light">
+                        <tr>
+                          <th>Semaine</th>
+                          <th class="text-center">Reçus</th>
+                          <th class="text-center">Traités</th>
+                          <th class="text-center">Stock fin</th>
+                          <th class="text-center">Note</th>
+                        </tr>
+                      </thead>
+                      <tbody id="personal-history-body">
+                        <tr><td colspan="5" class="text-center text-muted py-3">Chargement...</td></tr>
+                      </tbody>
+                    </table>
+                  </div>
+                  <div class="mt-3 small text-muted">
+                    Astuce: un taux > 100% signifie rattrapage de stock (plus traité que reçu cette semaine).
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Analyses complémentaires (compact) -->
+          <div class="row g-3 mb-4">
+            <div class="col-12">
+              <div class="card border-0 shadow-sm">
+                <div class="card-header bg-light d-flex justify-content-between align-items-center">
+                  <h6 class="mb-0 fw-semibold"><i class="bi bi-lightbulb me-2"></i>Analyses complémentaires</h6>
+                </div>
+                <div class="card-body">
+                  <div class="row g-3 text-center small">
+                    <div class="col-6 col-lg-2">
+                      <div class="text-muted" title="Traités / Reçus pour la semaine la plus récente">Taux Semaine</div>
+                      <div class="fw-bold" id="pp-rate-current">--</div>
+                    </div>
+                    <div class="col-6 col-lg-2">
+                      <div class="text-muted" title="Moyenne reçus sur les 6 dernières semaines">Ø 6 sem. Reçus</div>
+                      <div class="fw-bold" id="pp-avg-received">--</div>
+                    </div>
+                    <div class="col-6 col-lg-2">
+                      <div class="text-muted" title="Moyenne traités sur les 6 dernières semaines">Ø 6 sem. Traités</div>
+                      <div class="fw-bold" id="pp-avg-treated">--</div>
+                    </div>
+                    <div class="col-6 col-lg-2">
+                      <div class="text-muted" title="(Ø Traités) / (Ø Reçus) sur 6 semaines">Taux moyen 6 sem.</div>
+                      <div class="fw-bold" id="pp-avg-rate">--</div>
+                    </div>
+                    <div class="col-6 col-lg-2">
+                      <div class="text-muted" title="Semaine avec le plus de reçus">Semaine la + chargée</div>
+                      <div class="fw-bold" id="pp-busiest-week">--</div>
+                    </div>
+                    <div class="col-6 col-lg-2">
+                      <div class="text-muted" title="Semaine au meilleur taux, hors très petits volumes">Meilleure semaine (taux)</div>
+                      <div class="fw-bold" id="pp-best-week">--</div>
+                    </div>
+                    <div class="col-6 col-lg-2">
+                      <div class="text-muted" title="Estimation de semaines nécessaires pour vider le stock actuel au rythme moyen (Ø Traités - Ø Reçus)">Semaines pour vider stock</div>
+                      <div class="fw-bold" id="pp-clear-weeks">--</div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Graphiques -->
+          <div class="row g-3 mb-4">
+            <div class="col-12 col-lg-6">
+              <div class="card border-0 shadow-sm">
+                <div class="card-header bg-light d-flex justify-content-between align-items-center">
+                  <h6 class="mb-0 fw-semibold"><i class="bi bi-bar-chart-line me-2"></i>Reçus vs Traités (6 sem.)</h6>
+                </div>
+                <div class="card-body">
+                  <div class="chart-container" style="height: 260px;">
+                    <canvas id="pp-chart-rt"></canvas>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="col-12 col-lg-6">
+              <div class="card border-0 shadow-sm">
+                <div class="card-header bg-light d-flex justify-content-between align-items-center">
+                  <h6 class="mb-0 fw-semibold"><i class="bi bi-graph-up-arrow me-2"></i>Stock fin (6 sem.)</h6>
+                </div>
+                <div class="card-body">
+                  <div class="chart-container" style="height: 260px;">
+                    <canvas id="pp-chart-stock"></canvas>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="col-12">
+              <div class="card border-0 shadow-sm">
+                <div class="card-header bg-light d-flex justify-content-between align-items-center">
+                  <h6 class="mb-0 fw-semibold"><i class="bi bi-percent me-2"></i>Taux de traitement (6 sem.)</h6>
+                </div>
+                <div class="card-body">
+                  <div class="chart-container" style="height: 260px;">
+                    <canvas id="pp-chart-rate"></canvas>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+          </div>
+        </div>
+
+        <!-- Import Activité (.xlsb) Tab -->
+        <div class="tab-pane fade" id="import-activity">
+          <div class="pane-scroll">
+          <div class="row g-4">
+            <div class="col-12">
+              <div class="card border-0 shadow-sm">
+                <div class="card-header bg-light d-flex justify-content-between align-items-center">
+                  <h5 class="mb-0 fw-semibold"><i class="bi bi-file-earmark-spreadsheet me-2"></i>Import Activité (.xlsb)</h5>
+                  <div>
+                    <button class="btn btn-outline-secondary btn-sm" id="btn-pick-xlsb"><i class="bi bi-folder2-open me-1"></i>Choisir fichier</button>
+                  </div>
+                </div>
+                <div class="card-body">
+                  <div class="row g-3 align-items-end">
+                    <div class="col-md-7">
+                      <label class="form-label">Fichier sélectionné</label>
+                      <input type="text" id="xlsb-path" class="form-control" placeholder="Aucun fichier" readonly>
+                    </div>
+                    <div class="col-md-5 d-flex gap-2">
+                      <button class="btn btn-outline-primary flex-fill" id="btn-preview-xlsb"><i class="bi bi-eye me-1"></i>Vérifier</button>
+                      <button class="btn btn-primary flex-fill" id="btn-import-xlsb"><i class="bi bi-upload me-1"></i>Importer</button>
+                    </div>
+                  </div>
+                  <div class="mt-3 small text-muted" id="import-hint">Toutes les semaines contenant des données seront importées. Les semaines vides seront ignorées automatiquement.</div>
+                  <hr>
+                  <div id="preview-section" class="d-none">
+                    <h6 class="fw-semibold mb-3">Aperçu</h6>
+                    <div id="preview-summary" class="mb-2 text-muted"></div>
+                    <div class="table-responsive">
+                      <table class="table table-sm table-striped">
+                        <thead class="table-light">
+                          <tr>
+                            <th>Année</th><th>Semaine</th><th>Lundi</th><th>Catégorie</th><th class="text-end">Reçu</th><th class="text-end">Traité</th><th class="text-end">Traité ADG</th><th class="text-end">Stock début</th><th class="text-end">Stock fin</th>
+                          </tr>
+                        </thead>
+                        <tbody id="preview-body"></tbody>
+                      </table>
+                    </div>
+                  </div>
+                  <div id="import-progress" class="d-none mt-3">
+                    <div class="d-flex align-items-center gap-2">
+                      <div class="spinner-border spinner-border-sm text-primary" role="status"></div>
+                      <span id="import-status">Import en cours...</span>
+                    </div>
+                    <div class="small text-muted mt-1" id="import-logs"></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+          </div>
+        </div>
+
+        <!-- Settings Tab -->
+        <div class="tab-pane fade" id="settings">
+          <div class="pane-scroll">
+          <div class="card border-0 shadow-sm">
+            <div class="card-header bg-white">
+              <h5 class="mb-0"><i class="bi bi-gear me-2"></i>Paramètres de l'application</h5>
+            </div>
+            <div class="card-body">
+              <form id="settings-form">
+                <div class="row g-3">
+                  <div class="col-md-6">
+                    <label class="form-label">Intervalle de synchronisation</label>
+                    <select class="form-select" id="sync-interval">
+                      <option value="30000">30 secondes (recommandé)</option>
+                      <option value="60000">1 minute</option>
+                      <option value="300000">5 minutes</option>
+                    </select>
+                  </div>
+                  <div class="col-md-6">
+                    <label class="form-label">Nombre d'emails à afficher</label>
+                    <select class="form-select" id="emails-limit">
+                      <option value="20">20 emails</option>
+                      <option value="50">50 emails</option>
+                      <option value="100">100 emails</option>
+                    </select>
+                  </div>
+                  <!-- Contrôle auto-start retiré: le monitoring est automatique par conception -->
+                  <!-- Option avancée masquée: le moteur gère les statuts automatiquement -->
+                </div>
+                <hr>
+                <div class="row g-3">
+                  <div class="col-12">
+                    <label class="form-label fw-semibold">Visibilité des onglets</label>
+                    <div class="row">
+                      <div class="col-md-4">
+                        <div class="form-check">
+                          <input class="form-check-input" type="checkbox" id="tab-dashboard" checked>
+                          <label class="form-check-label" for="tab-dashboard">Tableau de bord</label>
+                        </div>
+                      </div>
+                      <div class="col-md-4">
+                        <div class="form-check">
+                          <input class="form-check-input" type="checkbox" id="tab-emails" checked>
+                          <label class="form-check-label" for="tab-emails">Emails récents</label>
+                        </div>
+                      </div>
+                      <div class="col-md-4">
+                        <div class="form-check">
+                          <input class="form-check-input" type="checkbox" id="tab-weekly" checked>
+                          <label class="form-check-label" for="tab-weekly">Suivi hebdomadaire</label>
+                        </div>
+                      </div>
+                      <div class="col-md-4">
+                        <div class="form-check">
+                          <input class="form-check-input" type="checkbox" id="tab-personal-performance" checked>
+                          <label class="form-check-label" for="tab-personal-performance">Performances personnelles</label>
+                        </div>
+                      </div>
+                      <div class="col-md-4">
+                        <div class="form-check">
+                          <input class="form-check-input" type="checkbox" id="tab-import-activity" checked>
+                          <label class="form-check-label" for="tab-import-activity">Import Activité</label>
+                        </div>
+                      </div>
+                      <div class="col-md-4">
+                        <div class="form-check">
+                          <input class="form-check-input" type="checkbox" id="tab-monitoring" checked>
+                          <label class="form-check-label" for="tab-monitoring">Monitoring</label>
+                        </div>
+                      </div>
+                      <div class="col-md-4">
+                        <div class="form-check">
+                          <input class="form-check-input" type="checkbox" id="tab-db">
+                          <label class="form-check-label" for="tab-db">BDD</label>
+                        </div>
+                      </div>
+                    </div>
+                    <small class="text-muted d-block mt-1">Astuce: l'onglet Paramètres reste toujours visible.</small>
+                  </div>
+                </div>
+                <hr>
+                <div class="d-flex gap-2">
+                  <button type="submit" class="btn btn-primary">
+                    <i class="bi bi-check me-2"></i>Sauvegarder
+                  </button>
+                  <button type="button" class="btn btn-outline-secondary" id="reset-settings">
+                    <i class="bi bi-arrow-clockwise me-2"></i>Réinitialiser
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+          </div>
+        </div>
       </div>
-      <div class="folders" id="foldersList"><div class="empty">Aucun dossier en monitoring.</div></div>
-    </section>
-
-    <section class="grid-2">
-      <div class="panel">
-        <div class="panel-head"><h2>Volume par catégorie</h2></div>
-        <div id="catChart" class="cat-chart"></div>
+      
+      <!-- Modal: Commentaire de semaine -->
+      <div class="modal fade" id="commentModal" tabindex="-1" aria-hidden="true">
+        <div class="modal-dialog">
+          <div class="modal-content">
+            <div class="modal-header">
+              <h5 class="modal-title" id="commentModalTitle">Commentaire</h5>
+              <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+              <div id="commentModalBody" class="text-wrap"></div>
+            </div>
+            <div class="modal-footer">
+              <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Fermer</button>
+            </div>
+          </div>
+        </div>
       </div>
-      <div class="panel">
-        <div class="panel-head"><h2>Activité hebdomadaire</h2><span id="weeklyHint" class="hint">12 dernières semaines</span></div>
-        <div id="weeklyChart" class="weekly-chart"></div>
-      </div>
-    </section>
 
-    <section class="panel">
-      <div class="panel-head"><h2>Mails récents</h2></div>
-      <div class="emails" id="emailsList"></div>
-    </section>
-
-    <section class="panel">
-      <div class="panel-head"><h2>Logs</h2><span class="hint" id="logsCount">0</span></div>
-      <pre class="logs" id="logsBox"></pre>
-    </section>
-  </main>
-
-  <div class="modal" id="addModal" hidden>
-    <div class="modal-card">
-      <div class="modal-head">
-        <h3>Ajouter un dossier à monitorer</h3>
-        <button class="ghost" id="closeModalBtn">✕</button>
+    </div>
+    <!-- Footer avec copyright -->
+    <footer class="border-top mt-3 pt-3">
+      <div class="container-fluid">
+        <div class="row">
+          <div class="col-md-6">
+            <small class="text-muted">
+              <i class="bi bi-envelope-check me-1"></i>
+              <strong>Mail Monitor</strong> <span id="app-version">v--</span>
+            </small>
+          </div>
+          <div class="col-md-6 text-md-end">
+            <small class="text-muted">
+              © 2025 Tanguy Raingeard - Tous droits réservés
+            </small>
+          </div>
+        </div>
       </div>
-      <div class="modal-body">
-        <label>Boîte / Store
-          <select id="storeSelect"></select>
-        </label>
-        <div id="folderTree" class="folder-tree">Chargement…</div>
-        <label>Catégorie
-          <select id="categorySelect">
-            <option value="">Auto (heuristique chemin)</option>
-            <option value="declarations">Déclarations</option>
-            <option value="reglements">Règlements</option>
-            <option value="mails">Mails (générique)</option>
-          </select>
-        </label>
-      </div>
-      <div class="modal-foot">
-        <button id="cancelAddBtn">Annuler</button>
-        <button id="confirmAddBtn" class="primary" disabled>Ajouter</button>
+    </footer>
+  </div>
+
+  <!-- Modal pour ajouter un dossier -->
+  <div class="modal fade" id="addFolderModal" tabindex="-1">
+    <div class="modal-dialog">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title">
+            <i class="bi bi-folder-plus me-2"></i>Ajouter un dossier
+          </h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+          <form id="add-folder-form">
+            <div class="mb-3">
+              <label for="folder-mailbox" class="form-label">Boîte mail</label>
+              <select class="form-select" id="folder-mailbox" required>
+                <option value="">Sélectionnez une boîte mail</option>
+              </select>
+            </div>
+            <div class="mb-3">
+              <label for="folder-path" class="form-label">Chemin du dossier</label>
+              <input type="text" class="form-control" id="folder-path" placeholder="Ex: Boîte de réception/Projets" required>
+            </div>
+            <div class="mb-3">
+              <label for="folder-category" class="form-label">Catégorie</label>
+              <select class="form-select" id="folder-category" required>
+                <option value="">Sélectionnez une catégorie</option>
+                <option value="travail">Travail</option>
+                <option value="personnel">Personnel</option>
+                <option value="projets">Projets</option>
+                <option value="urgent">Urgent</option>
+                <option value="newsletter">Newsletter</option>
+              </select>
+            </div>
+            <div class="mb-3">
+              <label for="folder-name" class="form-label">Nom d'affichage</label>
+              <input type="text" class="form-control" id="folder-name" placeholder="Nom convivial pour ce dossier">
+            </div>
+          </form>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Annuler</button>
+          <button type="button" class="btn btn-primary" id="save-folder">Ajouter</button>
+        </div>
       </div>
     </div>
   </div>
 
-  <script src="/app.js"></script>
+  <!-- Modal pour les paramètres hebdomadaires -->
+  <div class="modal fade" id="weeklySettingsModal" tabindex="-1" aria-labelledby="weeklySettingsModalLabel" aria-hidden="true">
+    <div class="modal-dialog">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title" id="weeklySettingsModalLabel">
+            <i class="bi bi-gear me-2"></i>Paramètres du suivi hebdomadaire
+          </h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+        </div>
+        <div class="modal-body">
+          <form id="weekly-settings-form">
+            <div class="mb-3">
+              <label class="form-label fw-semibold">Comptabilisation des emails traités</label>
+              <div class="form-check">
+                <input class="form-check-input" type="checkbox" id="count-read-as-treated">
+                <label class="form-check-label" for="count-read-as-treated">
+                  Compter les emails "lus" comme "traités"
+                </label>
+              </div>
+              <small class="form-text text-muted">
+                Si activé, chaque email marqué comme "lu" sera automatiquement comptabilisé comme "traité" dans les statistiques hebdomadaires.
+              </small>
+            </div>
+
+            <div class="mb-3">
+              <label class="form-label fw-semibold">Ajustements de lancement (stock initial)</label>
+              <small class="form-text text-muted d-block mb-2">
+                Permet de définir un stock de départ par catégorie (utile lors d'une première installation pour éviter de fausser les "reçus" de la semaine).
+              </small>
+              <div class="row g-2">
+                <div class="col-4">
+                  <label class="form-label small mb-1" for="startup-adjust-declarations">Déclarations</label>
+                  <input class="form-control form-control-sm" type="number" id="startup-adjust-declarations" min="0" step="1" value="0">
+                </div>
+                <div class="col-4">
+                  <label class="form-label small mb-1" for="startup-adjust-reglements">Règlements</label>
+                  <input class="form-control form-control-sm" type="number" id="startup-adjust-reglements" min="0" step="1" value="0">
+                </div>
+                <div class="col-4">
+                  <label class="form-label small mb-1" for="startup-adjust-mails">Mails simples</label>
+                  <input class="form-control form-control-sm" type="number" id="startup-adjust-mails" min="0" step="1" value="0">
+                </div>
+              </div>
+            </div>
+            
+            <div class="mb-3">
+              <label class="form-label fw-semibold">Informations</label>
+              <div class="bg-light p-3 rounded">
+                <p class="mb-2"><strong>Semaines ISO :</strong> Les semaines suivent la norme ISO 8601 (lundi-dimanche)</p>
+                <p class="mb-2"><strong>Catégories :</strong> Les emails sont automatiquement classés selon leur dossier</p>
+                <p class="mb-0"><strong>Traité par ADG :</strong> Vous pouvez ajouter manuellement du courrier papier, appels, etc.</p>
+              </div>
+            </div>
+          </form>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Annuler</button>
+          <button type="button" class="btn btn-primary" id="save-weekly-settings">Sauvegarder</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal: Première configuration (avant première synchronisation) -->
+  <div class="modal fade" id="firstRunReadAsTreatedModal" tabindex="-1" aria-hidden="true" data-bs-backdrop="static" data-bs-keyboard="false">
+    <div class="modal-dialog modal-dialog-centered">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title">
+            <i class="bi bi-sliders me-2"></i>Première configuration
+          </h5>
+        </div>
+        <div class="modal-body">
+          <p class="mb-2 fw-semibold">Souhaitez-vous compter les emails <span class="text-decoration-underline">lus</span> comme <span class="text-decoration-underline">traités</span> ?</p>
+          <p class="mb-0 text-muted small">
+            Ce choix impacte les statistiques hebdomadaires. Vous pourrez le modifier plus tard dans Paramètres.
+          </p>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-outline-secondary" id="first-run-read-as-treated-no">Non</button>
+          <button type="button" class="btn btn-primary" id="first-run-read-as-treated-yes">Oui</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+
+  <!-- WebView2 bridge: émule window.electronAPI au-dessus de window.chrome.webview -->
+  <script src="./preload-shim.js"></script>
+
+  <!-- Script pour la barre de titre personnalisée -->
+  <script>
+    // Gestion des boutons de la barre de titre
+    document.getElementById('minimize-btn').addEventListener('click', () => {
+      if (window.electronAPI && window.electronAPI.minimize) {
+        window.electronAPI.minimize();
+      }
+    });
+    
+    document.getElementById('close-btn').addEventListener('click', () => {
+      if (window.electronAPI && window.electronAPI.close) {
+        window.electronAPI.close();
+      }
+    });
+  </script>
+  
+  <script src="js/folders-tree.js"></script>
+  <script src="js/app.js"></script>
 </body>
 </html>

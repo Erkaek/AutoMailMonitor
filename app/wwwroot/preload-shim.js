@@ -117,19 +117,96 @@
     on,
   };
 
-  // Compat layer : recrée window.electronAPI utilisé par certains scripts legacy.
+  // Compat layer : recrée window.electronAPI utilisé par les scripts legacy.
+  // Couvre l'ensemble des canaux IPC de l'ancien préload Electron.
+  const c = (method, ...args) => call(method, ...args);
   window.electronAPI = {
-    getAppVersion:       window.api.version,
-    getMonitoringStatus: window.api.monitoringStatus,
-    outlookStatus:       window.api.outlookStatus,
-    getStatsSummary:     window.api.statsSummary,
-    getStatsByCategory:  window.api.statsByCategory,
-    getRecentEmails:     window.api.emailsRecent,
-    listWeeklyComments:  window.api.weeklyCommentsList,
-    addWeeklyComment:    window.api.weeklyCommentsAdd,
-    minimize:            window.api.windowMinimize,
-    close:               window.api.windowClose,
-    invoke: (method, ...args) => call(method, ...args),
+    // --- Application / fenêtre ---
+    getAppVersion:       () => c('app.version'),
+    minimize:            () => c('window.minimize'),
+    close:               () => c('window.close'),
+
+    // --- Outlook / monitoring statut ---
+    outlookStatus:        () => c('outlook.status'),
+    getMonitoringStatus:  () => c('monitoring.status'),
+
+    // --- Outlook discovery (stores / dossiers) ---
+    olStores:              () => c('outlook.list-stores'),
+    olFoldersShallow:      (storeId, parentId) => c('outlook.folders-shallow', storeId, parentId),
+    ewsTopLevel:           () => c('outlook.list-stores'),
+    ewsChildren:           (storeId, parentId) => c('outlook.folders-shallow', storeId, parentId),
+    getSubFolders:         (storeId, parentId) => c('outlook.folders-shallow', storeId, parentId),
+    getFolderStructure:    () => c('outlook.folders-tree'),
+    getFolderTreeFromRoot: (storeId, rootId) => c('outlook.folders-tree-from', storeId, rootId),
+    getFoldersTree:        () => c('folders.tree'),
+
+    // --- Dossiers monitorés ---
+    loadFoldersConfig:        () => c('folders.list-monitored'),
+    saveFoldersConfig:        (list) => c('folders.save-config', list),
+    addFolderToMonitoring:    (payload) => c('folders.add', payload),
+    addFoldersToMonitoringBulk: (list) => c('folders.add-bulk', list),
+    removeFolderFromMonitoring: (entryId) => c('folders.remove', entryId),
+    updateFolderCategory:     (entryId, category) => c('folders.update-category', entryId, category),
+    getFolderStats:           (entryId) => c('folders.stats', entryId),
+
+    // --- Stats / Dashboard / Emails ---
+    getStatsSummary:    () => c('stats.summary'),
+    getStatsByCategory: () => c('stats.by-category'),
+    getRecentEmails:    (opts) => c('emails.recent', opts || {}),
+
+    // --- Suivi hebdomadaire ---
+    listWeeklyComments:   (year, week) => c('weekly.comments-list', year, week),
+    addWeeklyComment:     (payload) => c('weekly.comments-add', payload),
+    updateWeeklyComment:  (payload) => c('weekly.comments-update', payload),
+    deleteWeeklyComment:  (id) => c('weekly.comments-delete', id),
+    listWeeksForComments: () => c('weekly.weeks-list'),
+
+    // --- VBA / xlsb stats ---
+    getVBAMetricsSummary:    () => c('vba.metrics-summary'),
+    getVBAFolderDistribution:() => c('vba.folder-distribution'),
+    getVBAWeeklyEvolution:   (weeks) => c('vba.weekly-evolution', weeks || 12),
+
+    // --- Import Activité (XLSB) ---
+    openXlsbFile:         () => c('xlsb.pick-file'),
+    importActivityPreview:(path) => c('xlsb.preview', path),
+    importActivityRun:    (path) => c('xlsb.import', path),
+
+    // --- DB lecteur brut ---
+    getDbTables:        () => c('db.tables'),
+    getDbTablePreview:  (table, limit) => c('db.table-preview', table, limit || 100),
+
+    // --- Settings ---
+    loadAppSettings:    () => c('settings.get-all'),
+    saveAppSettings:    (settings) => c('settings.set-all', settings),
+
+    // --- Logs ---
+    openLogsFolder:     () => c('logs.open-folder'),
+
+    // --- Invocation générique (canaux 'api-xxx') ---
+    invoke: (channel, ...args) => c(channel, ...args),
+
+    // --- Events realtime ---
+    onLogEntry:                 (fn) => on('logs.entry', fn),
+    onStatsUpdate:              (fn) => on('stats.update', fn),
+    onStatsCacheInvalidated:    (fn) => on('stats.cache-invalidated', fn),
+    onWeeklyStatsUpdated:       (fn) => on('weekly.stats-updated', fn),
+    onEmailUpdate:              (fn) => on('email.update', fn),
+    onNewEmail:                 (fn) => on('email.new', fn),
+    onRealtimeEmailUpdate:      (fn) => on('email.realtime-update', fn),
+    onRealtimeNewEmail:         (fn) => on('email.realtime-new', fn),
+    onMonitoringStatus:         (fn) => on('monitoring.status', fn),
+    onMonitoringCycleComplete:  (fn) => on('monitoring.cycle-complete', fn),
+    onFolderCountUpdated:       (fn) => on('folders.count-updated', fn),
+    onCOMListeningStarted:      (fn) => on('com.listening-started', fn),
+    onCOMListeningFailed:       (fn) => on('com.listening-failed', fn),
+    onUpdateAvailable:          (fn) => on('update.available', fn),
+    onUpdateNotAvailable:       (fn) => on('update.not-available', fn),
+    onUpdateChecking:           (fn) => on('update.checking', fn),
+    onUpdateDownloadProgress:   (fn) => on('update.download-progress', fn),
+    onUpdateError:              (fn) => on('update.error', fn),
+    onUpdatePendingRestart:     (fn) => on('update.pending-restart', fn),
+
     on,
   };
 })();
+
