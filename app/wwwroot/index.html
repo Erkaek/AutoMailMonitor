@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8" />
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self' https://app.local; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'">
+  <title>Mail Monitor</title>
+  <link rel="stylesheet" href="/app.css" />
+</head>
+<body class="theme-dark">
+  <header class="topbar">
+    <div class="brand">
+      <div class="logo">📬</div>
+      <div>
+        <div class="title">Mail Monitor</div>
+        <div class="subtitle" id="appVersion">v—</div>
+      </div>
+    </div>
+    <div class="status-cluster">
+      <span class="chip" id="outlookChip" data-state="off">Outlook —</span>
+      <span class="chip" id="monitorChip" data-state="off">Monitoring —</span>
+      <span class="chip" id="updateChip" data-state="ok">À jour</span>
+    </div>
+    <div class="actions">
+      <label class="toggle"><input type="checkbox" id="autostartCb"> <span>Démarrer avec Windows</span></label>
+      <button id="checkUpdatesBtn">Vérifier MAJ</button>
+      <button id="minBtn" title="Réduire">—</button>
+      <button id="closeBtn" title="Vers la tray">✕</button>
+    </div>
+  </header>
+
+  <main>
+    <section class="kpis">
+      <div class="kpi"><div class="kpi-label">Dossiers</div><div class="kpi-value" id="kpiFolders">—</div></div>
+      <div class="kpi"><div class="kpi-label">Mails (total)</div><div class="kpi-value" id="kpiEmails">—</div></div>
+      <div class="kpi"><div class="kpi-label">Non lus</div><div class="kpi-value" id="kpiUnread">—</div></div>
+      <div class="kpi"><div class="kpi-label">7 derniers jours</div><div class="kpi-value" id="kpiRecent">—</div></div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head">
+        <h2>Dossiers monitorés</h2>
+        <button id="addFolderBtn" class="primary">+ Ajouter</button>
+      </div>
+      <div class="folders" id="foldersList"><div class="empty">Aucun dossier en monitoring.</div></div>
+    </section>
+
+    <section class="grid-2">
+      <div class="panel">
+        <div class="panel-head"><h2>Volume par catégorie</h2></div>
+        <div id="catChart" class="cat-chart"></div>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><h2>Activité hebdomadaire</h2><span id="weeklyHint" class="hint">12 dernières semaines</span></div>
+        <div id="weeklyChart" class="weekly-chart"></div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head"><h2>Mails récents</h2></div>
+      <div class="emails" id="emailsList"></div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head"><h2>Logs</h2><span class="hint" id="logsCount">0</span></div>
+      <pre class="logs" id="logsBox"></pre>
+    </section>
+  </main>
+
+  <div class="modal" id="addModal" hidden>
+    <div class="modal-card">
+      <div class="modal-head">
+        <h3>Ajouter un dossier à monitorer</h3>
+        <button class="ghost" id="closeModalBtn">✕</button>
+      </div>
+      <div class="modal-body">
+        <label>Boîte / Store
+          <select id="storeSelect"></select>
+        </label>
+        <div id="folderTree" class="folder-tree">Chargement…</div>
+        <label>Catégorie
+          <select id="categorySelect">
+            <option value="">Auto (heuristique chemin)</option>
+            <option value="declarations">Déclarations</option>
+            <option value="reglements">Règlements</option>
+            <option value="mails">Mails (générique)</option>
+          </select>
+        </label>
+      </div>
+      <div class="modal-foot">
+        <button id="cancelAddBtn">Annuler</button>
+        <button id="confirmAddBtn" class="primary" disabled>Ajouter</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>
