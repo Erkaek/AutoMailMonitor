@@ -47,12 +47,12 @@ jobs:
         run: |
           $tag = "${{ steps.version.outputs.tag }}"
           $exists = "false"
-          try {
-            gh release view $tag --repo "${{ github.repository }}" 1>$null 2>$null
-            if ($LASTEXITCODE -eq 0) { $exists = "true" }
-          } catch { $exists = "false" }
+          gh release view $tag --repo "${{ github.repository }}" 1>$null 2>$null
+          if ($LASTEXITCODE -eq 0) { $exists = "true" }
+          $global:LASTEXITCODE = 0
           Write-Host "Release $tag exists: $exists"
           "exists=$exists" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          exit 0
 
       - name: Restore
         if: steps.check_release.outputs.exists != 'true'
