@@ -1,5 +1,24 @@
 // Mail Monitor — front controller
-const api = window.api;
+const missingApiWarning = '[Mail Monitor] window.api indisponible : exécution hors WebView2 ou preload non injecté.';
+const fallbackApi = new Proxy({
+  version: async () => '?',
+  outlookStatus: async () => ({ connected: false }),
+  monitoringStatus: async () => ({ running: false }),
+  autostartGet: async () => false,
+  statsSummary: async () => ({ folders: 0, emails: 0, unread: 0, last7days: 0 }),
+}, {
+  get(target, prop) {
+    if (prop in target) return target[prop];
+    return async () => {
+      console.warn(missingApiWarning, `Appel ignoré: api.${String(prop)}()`);
+      return null;
+    };
+  }
+});
+const api = window.api ?? fallbackApi;
+if (!window.api) {
+  console.warn(missingApiWarning);
+}
 const $  = (s) => document.querySelector(s);
 const $$ = (s) => Array.from(document.querySelectorAll(s));
 
