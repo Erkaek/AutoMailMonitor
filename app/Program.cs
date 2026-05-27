@@ -34,7 +34,6 @@ internal static class Program
         var autoStart = new AutoStartService(log);
         var updater = new UpdateService(paths, log);
 
-        autoStart.EnsureEnabled();
 
         try
         {
