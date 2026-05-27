@@ -235,8 +235,13 @@ public sealed class OutlookService : IDisposable
     {
         try { _queue.Add(() => { try { _ns?.Logoff(); } catch { } }); } catch { }
         try { _queue.CompleteAdding(); } catch { }
-        try { _cts.Cancel(); } catch { }
-        try { _staThread.Join(TimeSpan.FromSeconds(2)); } catch { }
+        bool stopped = false;
+        try { stopped = _staThread.Join(TimeSpan.FromSeconds(2)); } catch { }
+        if (!stopped)
+        {
+            try { _cts.Cancel(); } catch { }
+            try { _staThread.Join(TimeSpan.FromSeconds(2)); } catch { }
+        }
         try { if (_app is not null) Marshal.FinalReleaseComObject((object)_app); } catch { }
     }
 }
