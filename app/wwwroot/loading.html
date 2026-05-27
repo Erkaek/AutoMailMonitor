@@ -1,0 +1,325 @@
+<!doctype html>
+<html lang="fr">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+        <title>Mail Monitor – Chargement</title>
+        <script>
+                // Appliquer le thème le plus tôt possible pour éviter un flash de mauvais thème
+                (function(){
+                    try {
+                        const stored = localStorage.getItem('uiTheme');
+                        const sys = (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) ? 'dark' : 'light';
+                        const t = (stored === 'dark' || stored === 'light') ? stored : sys;
+                        document.documentElement.setAttribute('data-theme', t);
+                    } catch (_) { /* no-op */ }
+                })();
+        </script>
+        <style>
+                /* Thème clair par défaut (et explicite) */
+                :root, html[data-theme="light"] {
+                        --bg: #f4f6fa;
+                        --fg: #1f2937;
+                        --muted: #6b7280;
+                        --accent: #0d6efd; /* bootstrap primary */
+                        --ok: #198754;     /* bootstrap success */
+                        --err: #dc3545;    /* bootstrap danger */
+                        --card: #ffffff;
+                        --border: #e5e7eb;
+                        --status-bg: rgba(0,0,0,.02);
+                        --status-border: rgba(0,0,0,.06);
+                        --bar: #e9eef6;
+                        --bar-fill: linear-gradient(90deg,#0d6efd,#4da3ff);
+                        --bar-ok: linear-gradient(90deg,#198754,#34d399);
+                        --shadow: 0 12px 30px rgba(0,0,0,.08);
+                    }
+
+                    /* Thème sombre */
+                    html[data-theme="dark"] {
+                        --bg: #0b0f17;
+                        --fg: #e5e7eb;
+                        --muted: #9ca3af;
+                        --accent: #4da3ff;
+                        --ok: #34d399;
+                        --err: #f87171;
+                        --card: #111827;
+                        --border: #1f2937;
+                        --status-bg: rgba(255,255,255,.04);
+                        --status-border: rgba(255,255,255,.08);
+                        --bar: #111827;
+                        --bar-fill: linear-gradient(90deg,#3b82f6,#60a5fa);
+                        --bar-ok: linear-gradient(90deg,#10b981,#34d399);
+                        --shadow: 0 12px 30px rgba(0,0,0,.4);
+                }
+
+        * { box-sizing: border-box; }
+    html, body { height: 100%; background: transparent; }
+        body {
+            margin: 0;
+            /* Transparent window: remove page background so only the card is visible */
+            background: transparent;
+            color: var(--fg);
+            font: 14px/1.5 system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans, "Helvetica Neue", Arial;
+            display: grid;
+            place-items: center;
+            overflow: hidden;
+            padding: 16px;
+            /* Ne pas mettre tout le body en drag, on gère le drag sur la carte visible */
+            -webkit-user-select: none;
+            user-select: none;
+        }
+
+        .wrap {
+            width: 520px;
+            max-width: 92vw;
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 14px;
+            padding: 18px 18px 14px;
+            box-shadow: var(--shadow);
+            /* Rendre la carte elle-même déplaçable */
+            -webkit-app-region: drag;
+        }
+
+        .head { display: flex; align-items: center; gap: 12px; margin-bottom: 6px; }
+        .logo { width: 28px; height: 28px; border-radius: 6px; box-shadow: 0 2px 8px rgba(0,0,0,.3); }
+        .title { font-size: 16px; font-weight: 600; letter-spacing: .2px; }
+        .subtitle { color: var(--muted); font-size: 12px; margin-bottom: 14px; }
+
+    .status { background: var(--status-bg); border: 1px solid var(--status-border); border-radius: 10px; padding: 10px 12px; margin-bottom: 12px; min-height: 40px; display: flex; align-items: center; }
+    .status span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; width: 100%; }
+    /* Les éléments interactifs à l'intérieur ne doivent pas être drag pour permettre les clics */
+    button, a, input, textarea { -webkit-app-region: no-drag; user-select: text; }
+
+        /* Minimal hero with big percentage */
+    .hero { display: grid; place-items: center; margin: 10px 0 6px; padding: 6px 0; }
+        .big-percent { font-size: 28px; font-weight: 700; letter-spacing: .5px; color: var(--accent); }
+    .spinner {
+            width: 28px; height: 28px; border: 2px solid rgba(13,110,253,.2); border-top-color: var(--accent); border-radius: 50%;
+          animation: spin 1s linear infinite; margin-bottom: 8px;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        .foot { display: flex; justify-content: space-between; align-items: center; margin-top: 12px; }
+    .overall { height: 10px; background: var(--bar); border-radius: 999px; overflow: hidden; flex: 1; margin-right: 10px; border: 1px solid var(--border); }
+    .overall .fill { width: 0%; height: 100%; background: var(--bar-fill); transition: width .25s ease; box-shadow: 0 1px 2px rgba(13,110,253,.15) inset; }
+
+        .retry { display: none; background: transparent; color: var(--fg); border: 1px solid var(--status-border); padding: 6px 10px; border-radius: 8px; font-size: 12px; cursor: pointer; }
+        .retry:hover { background: var(--status-bg); }
+        .error { color: var(--err); }
+
+        /* Hide detailed task list by default for a cleaner look */
+        .bars { display: none; }
+        .task { display: none; }
+    </style>
+</head>
+<body>
+    <div class="wrap" id="wrap">
+        <div class="head">
+            <img class="logo" src="../resources/new%20logo/logo_128x128.png" alt="Logo" />
+            <div class="title">Mail Monitor</div>
+        </div>
+        <div class="subtitle">Initialisation en cours…</div>
+
+        <div class="status" id="status"><span>Préparation de l'environnement…</span></div>
+
+        <div class="hero">
+          <div class="spinner" aria-hidden="true"></div>
+          <div class="big-percent" id="overall-percent">0%</div>
+        </div>
+
+        <!-- Detailed tasks grid kept in DOM but hidden by CSS (for future debug if needed) -->
+        <div class="bars" id="bars" aria-hidden="true">
+            <div class="task" id="task-configuration">
+                <div class="task-head"><div class="task-label">Vérification système</div><div class="task-pct" id="pct-configuration">0%</div></div>
+                <div class="bar"><div class="fill" id="fill-configuration"></div></div>
+            </div>
+            <div class="task" id="task-connection">
+                <div class="task-head"><div class="task-label">Connexion Outlook</div><div class="task-pct" id="pct-connection">0%</div></div>
+                <div class="bar"><div class="fill" id="fill-connection"></div></div>
+            </div>
+            <div class="task" id="task-stats">
+                <div class="task-head"><div class="task-label">Statistiques</div><div class="task-pct" id="pct-stats">0%</div></div>
+                <div class="bar"><div class="fill" id="fill-stats"></div></div>
+            </div>
+            <div class="task" id="task-categories">
+                <div class="task-head"><div class="task-label">Catégories</div><div class="task-pct" id="pct-categories">0%</div></div>
+                <div class="bar"><div class="fill" id="fill-categories"></div></div>
+            </div>
+            <div class="task" id="task-folders">
+                <div class="task-head"><div class="task-label">Structure dossiers</div><div class="task-pct" id="pct-folders">0%</div></div>
+                <div class="bar"><div class="fill" id="fill-folders"></div></div>
+            </div>
+            <div class="task" id="task-vba">
+                <div class="task-head"><div class="task-label">Configuration VBA</div><div class="task-pct" id="pct-vba">0%</div></div>
+                <div class="bar"><div class="fill" id="fill-vba"></div></div>
+            </div>
+            <div class="task" id="task-monitoring">
+                <div class="task-head"><div class="task-label" id="label-monitoring">Monitoring automatique</div><div class="task-pct" id="pct-monitoring">0%</div></div>
+                <div class="bar"><div class="fill" id="fill-monitoring"></div></div>
+            </div>
+            <div class="task" id="task-weekly">
+                <div class="task-head"><div class="task-label">Suivi hebdomadaire</div><div class="task-pct" id="pct-weekly">0%</div></div>
+                <div class="bar"><div class="fill" id="fill-weekly"></div></div>
+            </div>
+        </div>
+
+        <div class="foot">
+            <div class="overall"><div class="fill" id="fill-overall"></div></div>
+            <button class="retry" id="retry">Réessayer</button>
+        </div>
+    </div>
+
+        <script>
+        (function(){
+                        // Ajuster le thème en fonction des paramètres sauvegardés (BDD) dès que possible
+                        try {
+                            if (window.electronAPI && window.electronAPI.loadAppSettings) {
+                                window.electronAPI.loadAppSettings().then((res)=>{
+                                    const tRaw = res?.success && res.settings?.ui?.theme;
+                                    const t = (tRaw === 'dark') ? 'dark' : (tRaw === 'light') ? 'light' : null;
+                                    if (t) document.documentElement.setAttribute('data-theme', t);
+                                }).catch(()=>{});
+                            }
+                        } catch(_) {}
+
+            const steps = ["configuration","connection","stats","categories","folders","vba","monitoring","weekly"]; // 8 étapes réelles
+            const total = steps.length;
+            const stepPercents = new Array(total).fill(0);
+            let fallbackTimer = null;
+            let gotRealEvents = false;
+
+            const qs = id => document.getElementById(id);
+            const clamp = (v,min=0,max=100)=>Math.max(min,Math.min(max,v));
+            const setStatus = (msg) => { const s = qs('status'); if (s) s.firstElementChild.textContent = msg; };
+
+            const setTaskPct = (name, pct) => {
+                const fill = qs(`fill-${name}`);
+                const label = qs(`pct-${name}`);
+                if (fill) fill.style.width = clamp(pct) + '%';
+                if (label) label.textContent = Math.round(clamp(pct)) + '%';
+            };
+
+            const setOverallPct = (pct) => {
+                const overallFill = qs('fill-overall');
+                const overallText = qs('overall-percent');
+                const val = Math.round(clamp(pct));
+                if (overallFill) overallFill.style.width = val + '%';
+                if (overallText) overallText.textContent = val + '%';
+            };
+
+            const recomputeOverall = () => {
+                const sum = stepPercents.reduce((a,b)=>a+b,0);
+                const overall = sum / total; // moyenne simple
+                setOverallPct(overall);
+                adjustSize();
+            };
+
+            function adjustSize(){
+                if (!window.electronAPI || !window.electronAPI.resizeToContent) return;
+                const w = Math.ceil(qs('wrap').getBoundingClientRect().width + 24);
+                const h = Math.ceil(qs('wrap').getBoundingClientRect().height + 24);
+                const W = Math.max(420, Math.min(700, w));
+                const H = Math.max(240, Math.min(560, h));
+                window.electronAPI.resizeToContent(W, H);
+            }
+
+            // IPC wiring
+            if (window.electronAPI){
+                window.electronAPI.onLoadingProgress?.((data)=>{
+                    gotRealEvents = true; if (fallbackTimer){ clearTimeout(fallbackTimer); fallbackTimer = null; }
+                    if (data?.message) setStatus(data.message);
+                    if (typeof data?.step === 'number' && typeof data?.progress === 'number'){
+                        const idx = data.step;
+                        if (idx >= 0 && idx < total){
+                            const name = steps[idx];
+                            setTaskPct(name, data.progress); // invisible UI but kept for debug
+                            stepPercents[idx] = clamp(data.progress);
+                            recomputeOverall();
+                        }
+                    }
+                });
+
+                window.electronAPI.onTaskProgress?.(({taskId, description, completed, error})=>{
+                    if (description) setStatus(description);
+                    const idx = steps.indexOf(taskId);
+                    if (idx !== -1){
+                        setTaskPct(taskId, completed && !error ? 100 : stepPercents[idx]);
+                        if (completed && !error) stepPercents[idx] = 100;
+                        recomputeOverall();
+                    }
+                });
+
+                // Utiliser la zone de statut pour les messages PowerShell
+                window.electronAPI.onPowerShellAnalysisProgress?.((ps)=>{
+                    if (ps?.message){
+                        let msg = ps.message.replace(/.*: /,'')
+                            .replace(/\[(PROGRESS|GLOBAL|BATCH|PERIODE|ADAPTIVE|STATS|TERMINE)\]/g,'').trim();
+                        msg = msg.replace(/´┐¢/g,'é').replace(/├®/g,'è').replace(/├á/g,'à');
+                        setStatus(`${ps.folder ? ps.folder+': ' : ''}${msg}`);
+                    }
+
+                    const m = ps?.message && ps.message.match(/\[([0-9.]+)%\]/);
+                    if (m){
+                        const p = Math.min(100, parseFloat(m[1]));
+                        // map sur "monitoring"
+                        const idx = steps.indexOf('monitoring');
+                        if (idx !== -1){ stepPercents[idx] = p; setTaskPct('monitoring', p); recomputeOverall(); }
+                    }
+                });
+
+                window.electronAPI.onLoadingComplete?.(()=>{
+                    for (let i=0;i<total;i++){ stepPercents[i] = 100; setTaskPct(steps[i], 100); }
+                    recomputeOverall();
+                    setStatus('Initialisation terminée. Ouverture…');
+                    setTimeout(()=>{ window.electronAPI.closeLoadingWindow ? window.electronAPI.closeLoadingWindow() : window.location.replace('index.html'); }, 700);
+                });
+
+                window.electronAPI.onLoadingError?.((err)=>{
+                    const btn = qs('retry');
+                    if (err && err.kind === 'UPDATE_AVAILABLE') {
+                        setStatus(err.message || `Mise à jour disponible${err.version ? ' v'+err.version : ''}.`);
+                        btn.style.display = 'none';
+                        adjustSize();
+                        return;
+                    }
+
+                    setStatus(`Erreur: ${(err && (err.message||err)) || 'inconnue'}`);
+                    btn.style.display = 'inline-block';
+                    btn.onclick = ()=>{
+                        btn.style.display='none'; setStatus('Relance…');
+                        for (let i=0;i<total;i++){ stepPercents[i] = 0; setTaskPct(steps[i], 0); }
+                        setOverallPct(0);
+                        window.electronAPI.retryLoading ? window.electronAPI.retryLoading() : startFallback();
+                    };
+                    adjustSize();
+                });
+            }
+
+            // Fallback simulation si aucun événement n'arrive
+            function startFallback(){
+                let i = 0; const tick = ()=>{
+                    if (i>=steps.length){ setTimeout(()=>finishFallback(), 400); return; }
+                    const name = steps[i];
+                    let p = 0; const iv = setInterval(()=>{
+                        p += 18+Math.random()*10;
+                        p = Math.min(100,p);
+                        setTaskPct(name, p);
+                        stepPercents[i] = p;
+                        recomputeOverall();
+                        if (p>=100){ clearInterval(iv); i++; setTimeout(tick, 180); }
+                    }, 140);
+                }; tick();
+            }
+            function finishFallback(){ for (let i=0;i<total;i++){ stepPercents[i]=100; setTaskPct(steps[i],100);} recomputeOverall(); setStatus('Initialisation terminée. Ouverture…'); setTimeout(()=>window.location.replace('index.html'), 650); }
+
+            // Armer le fallback seulement si aucun événement réel rapidement
+            fallbackTimer = setTimeout(()=>{ if (!gotRealEvents) startFallback(); }, 1400);
+
+            // Initial
+            setOverallPct(0);
+            setTimeout(adjustSize, 120);
+        })();
+    </script>
+</body>
+</html>

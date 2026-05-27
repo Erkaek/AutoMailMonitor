@@ -59,3 +59,8 @@ coverage/
 .DS_Store
 Thumbs.db
 desktop.ini
+app/bin/
+app/obj/
+app/publish/
+app/smoke-*.log
+
