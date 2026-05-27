@@ -67,10 +67,50 @@ public sealed class MainForm : Form
 
     private async Task InitWebViewAsync()
     {
+        // Mail Monitor embarque le runtime Edge WebView2 « Fixed Version » à
+        // côté de l'exe (dossier WebView2\ généré par le package NuGet).
+        // → Aucune installation requise sur le poste, fonctionne sur PC verrouillé.
+        var bundledRuntimeFolder = Path.Combine(AppContext.BaseDirectory, "WebView2");
+        var bundledExe = Path.Combine(bundledRuntimeFolder, "msedgewebview2.exe");
+        string? browserExecutableFolder = null;
+
+        if (File.Exists(bundledExe))
+        {
+            browserExecutableFolder = bundledRuntimeFolder;
+            _log.Info("WEBVIEW", "Runtime embarqué détecté: " + bundledRuntimeFolder);
+        }
+        else
+        {
+            // Fallback : runtime Evergreen installé sur le système (cas dev local).
+            string? installedVersion = null;
+            try { installedVersion = CoreWebView2Environment.GetAvailableBrowserVersionString(); }
+            catch { installedVersion = null; }
+
+            if (string.IsNullOrEmpty(installedVersion))
+            {
+                _log.Error("WEBVIEW", "Aucun runtime trouvé (ni embarqué, ni système).");
+                MessageBox.Show(
+                    "WebView2 indisponible : runtime introuvable.\r\n\r\n" +
+                    "Cette build ne contient pas le runtime Edge embarqué et aucun runtime " +
+                    "n'est installé sur le système. Réinstallez Mail Monitor depuis la release officielle.",
+                    "Mail Monitor", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                Application.Exit();
+                return;
+            }
+            _log.Info("WEBVIEW", "Runtime système détecté: " + installedVersion);
+        }
+
         try
         {
+            try { Directory.CreateDirectory(_paths.WebView2UserData); }
+            catch (Exception ex)
+            {
+                _log.Error("WEBVIEW", "Création UserDataFolder KO: " + _paths.WebView2UserData, ex);
+                throw;
+            }
+
             var env = await CoreWebView2Environment.CreateAsync(
-                browserExecutableFolder: null,
+                browserExecutableFolder: browserExecutableFolder,
                 userDataFolder: _paths.WebView2UserData);
 
             await _web.EnsureCoreWebView2Async(env);
