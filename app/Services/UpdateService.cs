@@ -93,9 +93,16 @@ public sealed class UpdateService
             var pending = Path.Combine(_paths.UpdatesDir, "pending.json");
             if (!File.Exists(pending)) return;
             var json = File.ReadAllText(pending);
-            var match = System.Text.RegularExpressions.Regex.Match(json, "\"file\"\\s*:\\s*\"([^\"]+)\"");
-            if (!match.Success) return;
-            var newExe = match.Groups[1].Value.Replace("\\\\", "\\");
+            string? newExe = null;
+            try
+            {
+                using var doc = System.Text.Json.JsonDocument.Parse(json);
+                if (doc.RootElement.TryGetProperty("file", out var fileProp))
+                    newExe = fileProp.GetString();
+            }
+            catch { }
+            if (string.IsNullOrWhiteSpace(newExe)) return;
+            newExe = newExe.Replace("\\\\", "\\");
             var currentExe = Process.GetCurrentProcess().MainModule!.FileName!;
             var bat = Path.Combine(_paths.UpdatesDir, "swap.bat");
             File.WriteAllText(bat, $"""
