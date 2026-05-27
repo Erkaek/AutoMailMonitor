@@ -258,6 +258,11 @@ class MailMonitor {
       this.registerLoadingTask('weekly', 'Initialisation du suivi hebdomadaire...');
       
       this.setupEventListeners();
+
+      // Initialiser les onglets utilitaires tôt pour éviter qu'un chargement long
+      // bloque l'activation du Journal/BDD.
+      this.initLogsTab();
+      this.initDbTab();
       
       await this.completeLoadingTask('configuration', this.loadConfiguration());
       await this.completeLoadingTask('connection', this.checkConnection());
@@ -273,11 +278,7 @@ class MailMonitor {
         this.completeLoadingTask('settings', this.loadSettings())
       ]);
       
-      await this.completeLoadingTask('weekly', this.initWeeklyTracking());
-  // Initialize logs tab
-  this.initLogsTab();
-  // Initialize DB tab (if enabled/visible, activation happens on tab change)
-  this.initDbTab();
+        await this.completeLoadingTask('weekly', this.initWeeklyTracking());
       
       this.startPeriodicUpdates();
   // setupAutoRefresh is already invoked in setupEventListeners(); avoid double wiring
@@ -974,6 +975,7 @@ class MailMonitor {
 
   // ====== LOGS TAB ======
   initLogsTab() {
+    if (this._logsTabInitialized) return;
     const view = document.getElementById('logs-view');
     const countEl = document.getElementById('logs-count');
     const bufferedEl = document.getElementById('logs-buffered');
@@ -986,7 +988,9 @@ class MailMonitor {
   const openFolderBtn = document.getElementById('logs-open-folder');
     const copyAllBtn = document.getElementById('logs-copy-all');
     const container = document.getElementById('logs-container') || view?.parentElement;
-  if (!view || !countEl || !bufferedEl || !statusEl || !searchEl || !levelEl || !categoryEl || !refreshBtn || !exportBtn || !openFolderBtn || !copyAllBtn) return;
+  if (!view || !countEl || !bufferedEl || !statusEl || !searchEl || !levelEl || !categoryEl || !refreshBtn || !exportBtn || !openFolderBtn || !copyAllBtn || !container) return;
+    this._logsTabInitialized = true;
+    statusEl.textContent = 'Initialisation du journal...';
 
     // Update autoScroll based on user scroll position
     container.addEventListener('scroll', () => {
@@ -1056,6 +1060,9 @@ class MailMonitor {
         bufferedEl.textContent = '—';
       }
     };
+
+    // Hook public pour pouvoir forcer un refresh quand l'onglet est affiché.
+    this._logsRefreshNow = fetchHistory;
 
     // Bind filters
     levelEl.addEventListener('change', async () => {
@@ -3911,7 +3918,8 @@ class MailMonitor {
       }
     } catch (error) {
       console.error('❌ Erreur lors du chargement des emails:', error);
-      this.showEmailsError();
+      try { window.__lastEmailsError = String(error && (error.stack || error.message || error)); } catch (_) {}
+      this.showEmailsError(error);
     }
   }
 
@@ -4080,9 +4088,10 @@ class MailMonitor {
     `;
   }
 
-  showEmailsError() {
+  showEmailsError(err) {
     const tbody = document.getElementById('emails-table');
     if (!tbody) return;
+    const detail = err ? String(err && (err.message || err)).slice(0, 300) : '';
 
     tbody.innerHTML = `
       <tr>
@@ -4090,7 +4099,8 @@ class MailMonitor {
           <div class="d-flex flex-column align-items-center">
             <i class="bi bi-exclamation-triangle display-1 text-warning mb-3"></i>
             <h6 class="text-muted mb-2">Erreur de chargement</h6>
-            <p class="text-muted mb-3 small">Impossible de charger les emails</p>
+            <p class="text-muted mb-2 small">Impossible de charger les emails</p>
+            ${detail ? `<pre class="small text-danger mb-3" style="max-width:600px;white-space:pre-wrap;text-align:left;">${this.escapeHtml(detail)}</pre>` : ''}
             <button class="btn btn-primary btn-sm" onclick="mailMonitor.loadRecentEmails()">
               <i class="bi bi-arrow-clockwise me-1"></i>Réessayer
             </button>
@@ -5102,6 +5112,12 @@ class MailMonitor {
         try {
           this._dbStart?.();
           this._dbRefreshNow?.();
+        } catch (_) {}
+        break;
+      case '#logs':
+        try {
+          this.initLogsTab();
+          this._logsRefreshNow?.();
         } catch (_) {}
         break;
     }

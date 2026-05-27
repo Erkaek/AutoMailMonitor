@@ -173,7 +173,7 @@
 
     // --- DB lecteur brut ---
     getDbTables:        () => c('db.tables'),
-    getDbTablePreview:  (table, limit) => c('db.table-preview', table, limit || 100),
+    getDbTablePreview:  (a, b) => (a && typeof a === 'object') ? c('db.table-preview', a) : c('db.table-preview', a, b || 100),
 
     // --- Settings ---
     loadAppSettings:    () => c('settings.get-all'),

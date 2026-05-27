@@ -186,6 +186,7 @@ public sealed class OutlookService : IDisposable
             dynamic? folder = null;
             dynamic? itemsRaw = null;
             dynamic? items = null;
+            dynamic? table = null;
             try
             {
                 try { folder = ns.GetFolderFromID(folderEntryId, storeId); }
@@ -193,48 +194,71 @@ public sealed class OutlookService : IDisposable
 
                 itemsRaw = folder.Items;
                 items = itemsRaw;
-                try { items.SetColumns("EntryID,Subject,ReceivedTime,SenderName,UnRead"); } catch { }
 
+                // Restriction par date avant GetTable (Restrict reste rapide et silencieux).
                 if (since.HasValue)
                 {
                     try
                     {
                         string filter = "[ReceivedTime] >= '" + since.Value.ToString("g") + "'";
                         var restricted = items.Restrict(filter);
-                        items = restricted; // l'ancien items (itemsRaw) sera lib\u00e9r\u00e9 dans le finally
-                        try { items.SetColumns("EntryID,Subject,ReceivedTime,SenderName,UnRead"); } catch { }
+                        items = restricted; // l'ancien items (itemsRaw) sera libéré dans le finally
                     }
                     catch { }
                 }
-                try { items.Sort("[ReceivedTime]", true); } catch { }
 
-                int count;
-                try { count = (int)items.Count; } catch { return list; }
-                for (int i = 1; i <= count; i++)
+                // Outlook 2007+ Table object : lit les propriétés via MAPI sans matérialiser
+                // d'objet MailItem côté OOM → AUCUN déclenchement de l'Outlook Object Model
+                // Guardian (« un programme tente d'accéder aux informations d'adresse… »).
+                // Référence : docs.microsoft.com Office.Interop.Outlook.Table
+                try { table = items.GetTable(); } catch (Exception ex) { _log.Warn("OUTLOOK", "GetTable KO: " + ex.Message); return list; }
+                try
                 {
-                    dynamic? mi = null;
-                    try { mi = items[i]; } catch { continue; }
+                    var cols = table.Columns;
+                    try { cols.RemoveAll(); } catch { }
+                    try { cols.Add("EntryID"); } catch { }
+                    try { cols.Add("Subject"); } catch { }
+                    try { cols.Add("ReceivedTime"); } catch { }
+                    try { cols.Add("SenderName"); } catch { }
+                    try { cols.Add("UnRead"); } catch { }
+                    try { cols.Add("MessageClass"); } catch { }
+                    try { Marshal.ReleaseComObject((object)cols); } catch { }
+                }
+                catch { }
+                try { table.Sort("ReceivedTime", true); } catch { }
+
+                while (true)
+                {
+                    bool eot;
+                    try { eot = (bool)table.EndOfTable; } catch { break; }
+                    if (eot) break;
+                    dynamic? row = null;
+                    try { row = table.GetNextRow(); } catch { break; }
+                    if (row is null) break;
                     try
                     {
-                        string? cls = SafeStr(() => (string)mi.MessageClass);
-                        if (cls is not null && !cls.StartsWith("IPM.Note", StringComparison.OrdinalIgnoreCase)) continue;
-                        list.Add(new OutlookMailItem
+                        string cls = SafeStr(() => (string)row["MessageClass"]) ?? "";
+                        if (cls.Length == 0 || cls.StartsWith("IPM.Note", StringComparison.OrdinalIgnoreCase))
                         {
-                            EntryId = SafeStr(() => (string)mi.EntryID) ?? "",
-                            Subject = SafeStr(() => (string)mi.Subject) ?? "",
-                            Sender  = SafeStr(() => (string)mi.SenderName) ?? "",
-                            ReceivedTime = SafeDt(() => (DateTime)mi.ReceivedTime),
-                            IsUnread = SafeBool(() => (bool)mi.UnRead)
-                        });
+                            list.Add(new OutlookMailItem
+                            {
+                                EntryId = SafeStr(() => (string)row["EntryID"]) ?? "",
+                                Subject = SafeStr(() => (string)row["Subject"]) ?? "",
+                                Sender  = SafeStr(() => (string)row["SenderName"]) ?? "",
+                                ReceivedTime = SafeDt(() => (DateTime)row["ReceivedTime"]),
+                                IsUnread = SafeBool(() => (bool)row["UnRead"])
+                            });
+                        }
                     }
                     catch { }
-                    finally { try { Marshal.ReleaseComObject((object)mi!); } catch { } }
+                    finally { try { Marshal.ReleaseComObject((object)row!); } catch { } }
                 }
                 return list;
             }
             finally
             {
-                // Lib\u00e9ration COM explicite (review Copilot)
+                if (table is not null) try { Marshal.ReleaseComObject((object)table!); } catch { }
+                // Libération COM explicite (review Copilot)
                 if (items is not null && !ReferenceEquals(items, itemsRaw))
                     try { Marshal.ReleaseComObject((object)items!); } catch { }
                 if (itemsRaw is not null)
