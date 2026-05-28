@@ -10,7 +10,7 @@
     <AssemblyName>MailMonitor</AssemblyName>
     <RootNamespace>MailMonitor</RootNamespace>
     <ApplicationManifest>app.manifest</ApplicationManifest>
-    <Version>0.13.6</Version>
+    <Version>0.13.7</Version>
     <Product>Mail Monitor</Product>
     <Company>Tanguy Raingeard</Company>
     <Copyright>Copyright (c) 2026 Tanguy Raingeard</Copyright>

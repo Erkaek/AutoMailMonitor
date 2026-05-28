@@ -70,54 +70,63 @@ public sealed class MainForm : Form
     private async Task InitWebViewAsync()
     {
         // Stratégie zéro-install pour PC verrouillé :
-        //   1) Si un runtime Edge WebView2 est déjà disponible (Evergreen système OU
-        //      install per-user précédente dans %LocalAppData%\Microsoft\EdgeWebView)
-        //      → on l'utilise.
-        //   2) Sinon, on extrait le bootstrapper MicrosoftEdgeWebview2Setup.exe
-        //      embarqué dans l'exe et on le lance en mode silencieux per-user
-        //      (--install --webview --runtime --msedge --user-level-install). Pas
-        //      de droits admin requis, install dans %LocalAppData%.
-        string? installedVersion = null;
-        try { installedVersion = CoreWebView2Environment.GetAvailableBrowserVersionString(); }
-        catch { installedVersion = null; }
-
-        if (string.IsNullOrEmpty(installedVersion))
+        //   1) On TENTE directement CreateAsync. Si ça marche → fin.
+        //   2) Sinon (runtime absent OU registry pointant vers un dossier inexistant
+        //      → erreur 0x80040003), on exécute le bootstrapper embarqué en mode
+        //      silencieux per-user (zéro droit admin, install %LocalAppData%).
+        //   3) On retente CreateAsync.
+        try { Directory.CreateDirectory(_paths.WebView2UserData); }
+        catch (Exception ex)
         {
-            _log.Info("WEBVIEW", "Runtime absent → lancement bootstrapper per-user…");
-            var installed = await TryInstallEvergreenPerUserAsync();
-            if (!installed)
-            {
-                _log.Error("WEBVIEW", "Installation auto du runtime KO.");
-                MessageBox.Show(
-                    "WebView2 indisponible : impossible d'installer automatiquement le runtime Edge.\r\n\r\n" +
-                    "Téléchargez et installez manuellement (sans droits admin) :\r\n" +
-                    "https://go.microsoft.com/fwlink/p/?LinkId=2124703",
-                    "Mail Monitor", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                Application.Exit();
-                return;
-            }
-            try { installedVersion = CoreWebView2Environment.GetAvailableBrowserVersionString(); }
-            catch { installedVersion = null; }
-            if (string.IsNullOrEmpty(installedVersion))
-            {
-                _log.Error("WEBVIEW", "Runtime toujours introuvable après install.");
-                MessageBox.Show("WebView2 installé mais introuvable. Redémarrez l'application.",
-                    "Mail Monitor", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                Application.Exit();
-                return;
-            }
+            _log.Error("WEBVIEW", "Création UserDataFolder KO: " + _paths.WebView2UserData, ex);
         }
-        _log.Info("WEBVIEW", "Runtime détecté: " + installedVersion);
+
+        var firstError = await TryInitOnceAsync();
+        if (firstError is null) return; // OK
+
+        _log.Warn("WEBVIEW", "1er essai KO (" + firstError + ") → tentative install bootstrapper…");
+        var installed = await TryInstallEvergreenPerUserAsync();
+        if (!installed)
+        {
+            _log.Error("WEBVIEW", "Installation auto du runtime KO.");
+            MessageBox.Show(
+                "WebView2 indisponible : impossible d'installer automatiquement le runtime Edge.\r\n\r\n" +
+                "Détail : " + firstError + "\r\n\r\n" +
+                "Téléchargez et installez manuellement (sans droits admin) :\r\n" +
+                "https://go.microsoft.com/fwlink/p/?LinkId=2124703",
+                "Mail Monitor", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            Application.Exit();
+            return;
+        }
+
+        var secondError = await TryInitOnceAsync();
+        if (secondError is null) return; // OK après install
+
+        _log.Error("WEBVIEW", "Init KO après install: " + secondError);
+        MessageBox.Show(
+            "WebView2 installé mais l'initialisation a échoué.\r\n\r\n" +
+            "Détail : " + secondError + "\r\n\r\n" +
+            "Essayez de relancer Mail Monitor. Si l'erreur persiste, redémarrez la session Windows.",
+            "Mail Monitor", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        Application.Exit();
+    }
+
+    /// <summary>
+    /// Tente une init WebView2 complète. Renvoie null si OK, sinon le message d'erreur.
+    /// </summary>
+    private async Task<string?> TryInitOnceAsync()
+    {
+        string? version = null;
+        try { version = CoreWebView2Environment.GetAvailableBrowserVersionString(); }
+        catch (Exception ex) { _log.Warn("WEBVIEW", "GetAvailableBrowserVersionString KO: " + ex.Message); }
+
+        if (string.IsNullOrEmpty(version))
+            return "Runtime Edge WebView2 introuvable (GetAvailableBrowserVersionString=null).";
+
+        _log.Info("WEBVIEW", "Version détectée: " + version);
 
         try
         {
-            try { Directory.CreateDirectory(_paths.WebView2UserData); }
-            catch (Exception ex)
-            {
-                _log.Error("WEBVIEW", "Création UserDataFolder KO: " + _paths.WebView2UserData, ex);
-                throw;
-            }
-
             var env = await CoreWebView2Environment.CreateAsync(
                 browserExecutableFolder: null,
                 userDataFolder: _paths.WebView2UserData);
@@ -127,7 +136,6 @@ public sealed class MainForm : Form
             _web.CoreWebView2.SetVirtualHostNameToFolderMapping(
                 "app.local", _paths.WwwRoot, CoreWebView2HostResourceAccessKind.Allow);
 
-            // Sécurité : restreindre strictement la navigation à app.local (review Copilot)
             _web.CoreWebView2.NavigationStarting += (_, e) =>
             {
                 if (!string.IsNullOrEmpty(e.Uri) &&
@@ -151,12 +159,14 @@ public sealed class MainForm : Form
             _bridge.Attach();
 
             _web.CoreWebView2.Navigate("https://app.local/index.html");
+            return null;
         }
         catch (Exception ex)
         {
-            _log.Error("WEBVIEW", "Init KO", ex);
-            MessageBox.Show("WebView2 indisponible : " + ex.Message, "Mail Monitor",
-                MessageBoxButtons.OK, MessageBoxIcon.Error);
+            _log.Error("WEBVIEW", "CreateAsync/EnsureCoreWebView2 KO", ex);
+            // Cas typique sur PC d'entreprise : registry pointe vers un dossier purgé.
+            // → renvoie l'erreur pour permettre au caller de tenter le bootstrapper.
+            return ex.Message + (ex.HResult != 0 ? $" (HRESULT 0x{ex.HResult:X8})" : "");
         }
     }
 
@@ -175,28 +185,39 @@ public sealed class MainForm : Form
         try
         {
             var asm = Assembly.GetExecutingAssembly();
-            using var stream = asm.GetManifestResourceStream("MicrosoftEdgeWebview2Setup.exe");
+
+            // Log de toutes les ressources embarquées pour diagnostiquer un éventuel
+            // problème de nommage si le bootstrapper n'a pas été embarqué par le CI.
+            var allRes = asm.GetManifestResourceNames();
+            _log.Info("WEBVIEW", "Ressources embarquées: " + string.Join(", ", allRes));
+
+            var resName = allRes.FirstOrDefault(n =>
+                n.Equals("MicrosoftEdgeWebview2Setup.exe", StringComparison.OrdinalIgnoreCase) ||
+                n.EndsWith(".MicrosoftEdgeWebview2Setup.exe", StringComparison.OrdinalIgnoreCase));
+
+            using var stream = resName is null ? null : asm.GetManifestResourceStream(resName);
             if (stream is null)
             {
-                _log.Error("WEBVIEW", "Ressource bootstrapper introuvable dans l'exe.");
+                _log.Error("WEBVIEW", "Bootstrapper Edge non embarqué dans l'exe (ressource introuvable).");
                 return false;
             }
             var tmp = Path.Combine(Path.GetTempPath(), "MailMonitor-WebView2Setup-" + Guid.NewGuid().ToString("N") + ".exe");
             using (var fs = File.Create(tmp)) await stream.CopyToAsync(fs);
+            _log.Info("WEBVIEW", $"Bootstrapper extrait: {tmp} ({new FileInfo(tmp).Length / 1024} KB)");
 
-            // Progress UI minimal pour ne pas laisser l'utilisateur sans feedback (DL peut prendre 1-2 min)
             var splash = new Form
             {
                 Text = "Mail Monitor — Première installation",
                 StartPosition = FormStartPosition.CenterScreen,
                 FormBorderStyle = FormBorderStyle.FixedDialog,
                 MaximizeBox = false, MinimizeBox = false, ControlBox = false,
-                ClientSize = new Size(480, 110), TopMost = true
+                ClientSize = new Size(520, 130), TopMost = true
             };
             var lbl = new Label
             {
-                Text = "Installation du runtime Edge WebView2 (per-user, sans droits admin)…\r\n" +
-                       "Cette étape ne se produit qu'au premier lancement.",
+                Text = "Installation du runtime Edge WebView2…\r\n" +
+                       "Mode per-user, sans droits administrateur. Cette étape ne se produit\r\n" +
+                       "qu'au premier lancement et peut prendre 1 à 2 minutes.",
                 AutoSize = false, Dock = DockStyle.Fill, Padding = new Padding(16),
                 TextAlign = ContentAlignment.MiddleCenter
             };
@@ -209,15 +230,35 @@ public sealed class MainForm : Form
                 var psi = new ProcessStartInfo
                 {
                     FileName = tmp,
-                    // Args silencieux per-user documentés Microsoft pour le bootstrapper Evergreen.
                     Arguments = "/silent /install",
                     UseShellExecute = false,
-                    CreateNoWindow = true
+                    CreateNoWindow = true,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
                 };
                 using var proc = Process.Start(psi);
-                if (proc is null) return false;
-                await Task.Run(() => proc.WaitForExit(5 * 60 * 1000));
-                _log.Info("WEBVIEW", "Bootstrapper exit code: " + proc.ExitCode);
+                if (proc is null)
+                {
+                    _log.Error("WEBVIEW", "Process.Start a renvoyé null pour le bootstrapper.");
+                    return false;
+                }
+                var stdOutTask = proc.StandardOutput.ReadToEndAsync();
+                var stdErrTask = proc.StandardError.ReadToEndAsync();
+                var exited = await Task.Run(() => proc.WaitForExit(5 * 60 * 1000));
+                var stdOut = await stdOutTask; var stdErr = await stdErrTask;
+                if (!exited)
+                {
+                    _log.Error("WEBVIEW", "Bootstrapper timeout (5 min).");
+                    try { proc.Kill(); } catch { }
+                    return false;
+                }
+                _log.Info("WEBVIEW", $"Bootstrapper exit={proc.ExitCode}");
+                if (!string.IsNullOrWhiteSpace(stdOut)) _log.Info("WEBVIEW", "STDOUT: " + stdOut.Trim());
+                if (!string.IsNullOrWhiteSpace(stdErr)) _log.Warn("WEBVIEW", "STDERR: " + stdErr.Trim());
+
+                // L'installer Edge peut renvoyer 0 (succès) ou des codes positifs valides
+                // (ex: 17 = déjà installé). On considère exit != 0 comme un échec mais on
+                // tentera quand même un retry d'init au cas où.
                 return proc.ExitCode == 0;
             }
             finally
