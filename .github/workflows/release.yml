@@ -1,4 +1,4 @@
-name: Release on Push (Windows .NET)
+name: Release on Push (Electron)
 
 on:
   push:
@@ -10,11 +10,12 @@ jobs:
   build-and-publish:
     runs-on: windows-latest
     env:
-      DOTNET_NOLOGO: 'true'
-      DOTNET_CLI_TELEMETRY_OPTOUT: 'true'
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
-      CODE_SIGNING_CERT_BASE64: ${{ secrets.CODE_SIGNING_CERT_BASE64 }}
-      CODE_SIGNING_CERT_PASSWORD: ${{ secrets.CODE_SIGNING_CERT_PASSWORD }}
+      # electron-builder code signing (lu automatiquement)
+      CSC_LINK: ${{ secrets.CODE_SIGNING_CERT_BASE64 }}
+      CSC_KEY_PASSWORD: ${{ secrets.CODE_SIGNING_CERT_PASSWORD }}
+      # Publication GitHub via electron-builder
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     permissions:
       contents: write
     steps:
@@ -23,28 +24,27 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Setup .NET SDK
-        uses: actions/setup-dotnet@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
         with:
-          dotnet-version: '8.0.x'
+          node-version: '20'
+          cache: 'npm'
 
-      - name: Read version from csproj
+      - name: Read version from package.json
         id: version
         shell: pwsh
         run: |
-          [xml]$proj = Get-Content app/MailMonitor.csproj
-          $v = $proj.Project.PropertyGroup.Version | Where-Object { $_ } | Select-Object -First 1
-          if (-not $v) { Write-Error "Version introuvable dans MailMonitor.csproj" }
+          $pkg = Get-Content package.json -Raw | ConvertFrom-Json
+          $v = $pkg.version
+          if (-not $v) { Write-Error "Version introuvable dans package.json" }
           $tag = "v$v"
           Write-Host "Version=$v Tag=$tag"
-          "version=$v"  | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-          "tag=$tag"    | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "version=$v" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "tag=$tag"   | Out-File -FilePath $env:GITHUB_OUTPUT -Append
 
       - name: Check if release already exists
         id: check_release
         shell: pwsh
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           $tag = "${{ steps.version.outputs.tag }}"
           $exists = "false"
@@ -55,105 +55,19 @@ jobs:
           "exists=$exists" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
           exit 0
 
-      - name: Restore
+      - name: Install dependencies
         if: steps.check_release.outputs.exists != 'true'
-        run: dotnet restore app/MailMonitor.csproj
+        run: npm ci
 
-      - name: Download Edge WebView2 bootstrapper (Evergreen)
-        if: steps.check_release.outputs.exists != 'true'
-        shell: pwsh
-        run: |
-          # Bootstrapper officiel Microsoft (~2 Mo). Embarqué dans l'exe comme
-          # ressource via le csproj. Au 1er lancement, si Edge WebView2 est
-          # absent du poste, l'app l'extrait et le lance avec /silent /install
-          # → install per-user dans %LocalAppData% (zéro droit admin).
-          $dst = "app/Resources/MicrosoftEdgeWebview2Setup.exe"
-          New-Item -ItemType Directory -Force -Path (Split-Path $dst) | Out-Null
-          Invoke-WebRequest -Uri "https://go.microsoft.com/fwlink/p/?LinkId=2124703" -OutFile $dst
-          $size = [math]::Round((Get-Item $dst).Length/1KB, 0)
-          Write-Host "Bootstrapper téléchargé: $dst ($size KB)"
-
-      - name: Publish (single-file, self-contained win-x64)
-        if: steps.check_release.outputs.exists != 'true'
-        run: >
-          dotnet publish app/MailMonitor.csproj
-          -c Release
-          -r win-x64
-          --self-contained true
-          -p:PublishSingleFile=true
-          -p:IncludeNativeLibrariesForSelfExtract=true
-          -p:EnableCompressionInSingleFile=true
-          -p:DebugType=embedded
-          -o publish
-
-      - name: Stage release artifact
-        if: steps.check_release.outputs.exists != 'true'
-        id: stage
-        shell: pwsh
-        run: |
-          $version = "${{ steps.version.outputs.version }}"
-          $exeSrc = "publish/MailMonitor.exe"
-          if (-not (Test-Path $exeSrc)) { Write-Error "MailMonitor.exe introuvable dans publish/" }
-
-          New-Item -ItemType Directory -Force -Path artifacts | Out-Null
-          $exeDest = "artifacts/MailMonitor-v$version.exe"
-          Copy-Item $exeSrc $exeDest
-          $sz = [math]::Round((Get-Item $exeDest).Length/1MB,1)
-          Write-Host "Exe: $exeDest ($sz MB)"
-          if ($sz -gt 120) { Write-Warning "Exe > 120 Mo (attendu ~70 Mo) — vérifier que le bundle WebView2 n'est PAS inclus" }
-
-          "exe=$exeDest" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-
-      - name: Sign Windows executable
-        if: steps.check_release.outputs.exists != 'true' && env.CODE_SIGNING_CERT_BASE64 != '' && env.CODE_SIGNING_CERT_PASSWORD != ''
-        shell: pwsh
-        run: |
-          $pfxPath = Join-Path $env:RUNNER_TEMP 'codesign.pfx'
-          [IO.File]::WriteAllBytes($pfxPath, [Convert]::FromBase64String($env:CODE_SIGNING_CERT_BASE64))
-          $signtool = (Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin" -Recurse -Filter signtool.exe -ErrorAction SilentlyContinue |
-                       Where-Object { $_.FullName -match 'x64\\signtool.exe$' } |
-                       Sort-Object FullName -Descending | Select-Object -First 1).FullName
-          if (-not $signtool) { Write-Error "signtool.exe introuvable" }
-          Write-Host "signtool: $signtool"
-          & $signtool sign /fd SHA256 /td SHA256 /tr "http://timestamp.digicert.com" `
-            /f $pfxPath /p $env:CODE_SIGNING_CERT_PASSWORD `
-            "${{ steps.stage.outputs.exe }}"
-          if ($LASTEXITCODE -ne 0) { Write-Error "Signature échouée" }
-          Remove-Item $pfxPath -Force
-
-      - name: Compute SHA256
+      - name: Build & Publish (electron-builder → GitHub release)
         if: steps.check_release.outputs.exists != 'true'
         shell: pwsh
         run: |
-          $artifact = "${{ steps.stage.outputs.exe }}"
-          $hash = (Get-FileHash $artifact -Algorithm SHA256).Hash
-          "$hash  $(Split-Path $artifact -Leaf)" | Out-File -FilePath "$artifact.sha256" -Encoding ascii
-          Write-Host "SHA256 = $hash"
-
-      - name: Create GitHub Release
-        if: steps.check_release.outputs.exists != 'true'
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          $tag = "${{ steps.version.outputs.tag }}"
-          $exe = "${{ steps.stage.outputs.exe }}"
-          $exeName = Split-Path $exe -Leaf
-          $notesPath = Join-Path $env:RUNNER_TEMP 'release-notes.md'
-          $lines = @(
-            "Mail Monitor $tag",
-            "",
-            "Telechargez ``$exeName`` et lancez-le. Aucune installation, aucun droit administrateur requis.",
-            "",
-            "Au tout premier lancement, si Edge WebView2 n'est pas deja present sur le poste, l'app installera automatiquement le runtime en mode per-user (dans ``%LocalAppData%\Microsoft\EdgeWebView``). Connexion internet requise uniquement a cette etape."
-          )
-          Set-Content -Path $notesPath -Value $lines -Encoding utf8
-          gh release create $tag $exe "$exe.sha256" `
-            --repo "${{ github.repository }}" `
-            --title "Mail Monitor $tag" `
-            --notes-file $notesPath
-          if ($LASTEXITCODE -ne 0) { Write-Error "gh release create a échoué" }
+          # electron-builder lit les secrets CSC_* pour la signature et GH_TOKEN
+          # pour publier sur la release. Le tag publié = "v" + version package.json.
+          npx electron-builder --win --x64 --publish always
+          if ($LASTEXITCODE -ne 0) { Write-Error "electron-builder a échoué" }
 
       - name: Skip notice
         if: steps.check_release.outputs.exists == 'true'
-        run: echo "Release ${{ steps.version.outputs.tag }} existe déjà — build sauté. Bump <Version> dans app/MailMonitor.csproj pour publier une nouvelle release."
+        run: echo "Release ${{ steps.version.outputs.tag }} existe déjà — build sauté. Bump la version dans package.json pour publier."

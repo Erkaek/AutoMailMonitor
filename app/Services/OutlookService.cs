@@ -233,13 +233,13 @@ public sealed class OutlookService : IDisposable
                 try
                 {
                     dynamic st = stores.Item(i);
-                    var dn = (string)st.DisplayName;
+                    var dn = Convert.ToString(st.DisplayName) ?? "";
                     if (string.Equals(dn, storeName, StringComparison.OrdinalIgnoreCase))
                     {
                         matchedStore = st;
-                        res.StoreId = (string)st.StoreID;
+                        res.StoreId = Convert.ToString(st.StoreID) ?? "";
                         res.StoreName = dn;
-                        try { res.StoreSmtp = (string)st.GetRootFolder().Store.ExchangeStore?.PrimarySmtpAddress ?? ""; }
+                        try { res.StoreSmtp = Convert.ToString(st.GetRootFolder().Store.ExchangeStore?.PrimarySmtpAddress) ?? ""; }
                         catch { res.StoreSmtp = ""; }
                         break;
                     }
