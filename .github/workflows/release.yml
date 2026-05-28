@@ -59,6 +59,20 @@ jobs:
         if: steps.check_release.outputs.exists != 'true'
         run: dotnet restore app/MailMonitor.csproj
 
+      - name: Download Edge WebView2 bootstrapper (Evergreen)
+        if: steps.check_release.outputs.exists != 'true'
+        shell: pwsh
+        run: |
+          # Bootstrapper officiel Microsoft (~2 Mo). Embarqué dans l'exe comme
+          # ressource via le csproj. Au 1er lancement, si Edge WebView2 est
+          # absent du poste, l'app l'extrait et le lance avec /silent /install
+          # → install per-user dans %LocalAppData% (zéro droit admin).
+          $dst = "app/Resources/MicrosoftEdgeWebview2Setup.exe"
+          New-Item -ItemType Directory -Force -Path (Split-Path $dst) | Out-Null
+          Invoke-WebRequest -Uri "https://go.microsoft.com/fwlink/p/?LinkId=2124703" -OutFile $dst
+          $size = [math]::Round((Get-Item $dst).Length/1KB, 0)
+          Write-Host "Bootstrapper téléchargé: $dst ($size KB)"
+
       - name: Publish (single-file, self-contained win-x64)
         if: steps.check_release.outputs.exists != 'true'
         run: >
@@ -78,15 +92,17 @@ jobs:
         shell: pwsh
         run: |
           $version = "${{ steps.version.outputs.version }}"
-          $src = "publish/MailMonitor.exe"
-          if (-not (Test-Path $src)) {
-            Write-Error "MailMonitor.exe introuvable dans publish/"
-          }
+          $exeSrc = "publish/MailMonitor.exe"
+          if (-not (Test-Path $exeSrc)) { Write-Error "MailMonitor.exe introuvable dans publish/" }
+
           New-Item -ItemType Directory -Force -Path artifacts | Out-Null
-          $dest = "artifacts/MailMonitor-v$version.exe"
-          Copy-Item $src $dest
-          Write-Host "Artifact: $dest"
-          "artifact=$dest" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          $exeDest = "artifacts/MailMonitor-v$version.exe"
+          Copy-Item $exeSrc $exeDest
+          $sz = [math]::Round((Get-Item $exeDest).Length/1MB,1)
+          Write-Host "Exe: $exeDest ($sz MB)"
+          if ($sz -gt 120) { Write-Warning "Exe > 120 Mo (attendu ~70 Mo) — vérifier que le bundle WebView2 n'est PAS inclus" }
+
+          "exe=$exeDest" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
 
       - name: Sign Windows executable
         if: steps.check_release.outputs.exists != 'true' && env.CODE_SIGNING_CERT_BASE64 != '' && env.CODE_SIGNING_CERT_PASSWORD != ''
@@ -101,7 +117,7 @@ jobs:
           Write-Host "signtool: $signtool"
           & $signtool sign /fd SHA256 /td SHA256 /tr "http://timestamp.digicert.com" `
             /f $pfxPath /p $env:CODE_SIGNING_CERT_PASSWORD `
-            "${{ steps.stage.outputs.artifact }}"
+            "${{ steps.stage.outputs.exe }}"
           if ($LASTEXITCODE -ne 0) { Write-Error "Signature échouée" }
           Remove-Item $pfxPath -Force
 
@@ -109,10 +125,10 @@ jobs:
         if: steps.check_release.outputs.exists != 'true'
         shell: pwsh
         run: |
-          $artifact = "${{ steps.stage.outputs.artifact }}"
+          $artifact = "${{ steps.stage.outputs.exe }}"
           $hash = (Get-FileHash $artifact -Algorithm SHA256).Hash
           "$hash  $(Split-Path $artifact -Leaf)" | Out-File -FilePath "$artifact.sha256" -Encoding ascii
-          Write-Host "SHA256=$hash"
+          Write-Host "SHA256 = $hash"
 
       - name: Create GitHub Release
         if: steps.check_release.outputs.exists != 'true'
@@ -121,11 +137,15 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           $tag = "${{ steps.version.outputs.tag }}"
-          $version = "${{ steps.version.outputs.version }}"
-          $artifact = "${{ steps.stage.outputs.artifact }}"
-          $sha = "$artifact.sha256"
-          $notes = "Mail Monitor $tag`n`nBuild automatique depuis main."
-          gh release create $tag $artifact $sha `
+          $exe = "${{ steps.stage.outputs.exe }}"
+          $notes = @"
+Mail Monitor $tag
+
+Téléchargez ``$(Split-Path $exe -Leaf)`` et lancez-le. Aucune installation, aucun droit administrateur requis.
+
+Au tout premier lancement, si Edge WebView2 n'est pas déjà présent sur le poste, l'app installera automatiquement le runtime en mode per-user (dans ``%LocalAppData%\Microsoft\EdgeWebView``). Connexion internet requise uniquement à cette étape.
+"@
+          gh release create $tag $exe "$exe.sha256" `
             --repo "${{ github.repository }}" `
             --title "Mail Monitor $tag" `
             --notes "$notes"

@@ -287,6 +287,23 @@ public sealed class WebBridge
             case "folders.tree":
                 return BuildFoldersTree();
 
+            case "outlook.folder-tree-from-path":
+                {
+                    var rootPath = RequireString(args, 0, method);
+                    int maxDepth = 4;
+                    if (args.GetArrayLength() > 1 && args[1].ValueKind == JsonValueKind.Number)
+                        maxDepth = Math.Max(1, Math.Min(12, args[1].GetInt32()));
+                    var tree = await _monitor.Outlook.GetFolderTreeFromPathAsync(rootPath, maxDepth);
+                    if (!tree.Success || tree.Root is null)
+                        return new { success = false, error = tree.Error ?? "Échec de la résolution du chemin" };
+                    return new
+                    {
+                        success = true,
+                        root = tree.Root,
+                        store = new { id = tree.StoreId, name = tree.StoreName, smtp = tree.StoreSmtp }
+                    };
+                }
+
             // Folders config bulk + update
             case "folders.list-stats-shape":
                 return new { stats = BuildFolderStatsList() };

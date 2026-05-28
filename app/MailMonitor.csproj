@@ -10,7 +10,7 @@
     <AssemblyName>MailMonitor</AssemblyName>
     <RootNamespace>MailMonitor</RootNamespace>
     <ApplicationManifest>app.manifest</ApplicationManifest>
-    <Version>0.13.3</Version>
+    <Version>0.13.6</Version>
     <Product>Mail Monitor</Product>
     <Company>Tanguy Raingeard</Company>
     <Copyright>Copyright (c) 2026 Tanguy Raingeard</Copyright>
@@ -19,7 +19,6 @@
     <SelfContained>true</SelfContained>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
-    <IncludeAllContentForSelfExtract>true</IncludeAllContentForSelfExtract>
     <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
     <DebugType>embedded</DebugType>
     <InvariantGlobalization>false</InvariantGlobalization>
@@ -31,24 +30,25 @@
     <PackageReference Include="Microsoft.Data.Sqlite" Version="9.0.0" />
     <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" Version="2.1.10" />
     <!-- Outlook : late-binding via ProgID/IDispatch (zéro dépendance PIA, fonctionne Outlook 2013→365 sans office.dll) -->
-
-    <!--
-      Edge WebView2 « Fixed Version » runtime embarqué (~170 Mo).
-      Repackaging communautaire (ProKn1fe) du runtime officiel Microsoft :
-        https://github.com/ProKn1fe/WebView2.Runtime
-      Le package copie automatiquement les fichiers du runtime sous
-      <output>\WebView2\ via ses propres targets MSBuild.
-      Combiné à IncludeAllContentForSelfExtract=true + PublishSingleFile=true,
-      le runtime est embarqué dans l'exe et extrait au lancement → zéro install
-      requise sur le poste (PC d'entreprise verrouillé).
-    -->
-    <PackageReference Include="WebView2.Runtime.X64" Version="148.0.3967.83" PrivateAssets="all" />
   </ItemGroup>
 
   <ItemGroup>
     <None Update="wwwroot\**\*">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
+  </ItemGroup>
+
+  <!--
+    Bootstrapper Edge WebView2 Evergreen (~2 Mo).
+    Téléchargé par le workflow CI dans Resources/ avant le build.
+    Embarqué comme ressource → installation per-user (sans droits admin,
+    dans %LocalAppData%\Microsoft\EdgeWebView) au 1er lancement si le runtime
+    est absent du poste. Comportement documenté Microsoft pour PC verrouillé.
+  -->
+  <ItemGroup Condition="Exists('Resources\MicrosoftEdgeWebview2Setup.exe')">
+    <EmbeddedResource Include="Resources\MicrosoftEdgeWebview2Setup.exe">
+      <LogicalName>MicrosoftEdgeWebview2Setup.exe</LogicalName>
+    </EmbeddedResource>
   </ItemGroup>
 
 </Project>

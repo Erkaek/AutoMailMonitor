@@ -137,7 +137,7 @@
     ewsChildren:           (storeId, parentId) => c('outlook.folders-shallow', storeId, parentId),
     getSubFolders:         (storeId, parentId) => c('outlook.folders-shallow', storeId, parentId),
     getFolderStructure:    () => c('outlook.folders-tree'),
-    getFolderTreeFromRoot: (storeId, rootId) => c('outlook.folders-tree-from', storeId, rootId),
+    getFolderTreeFromRoot: (rootPath, maxDepth) => c('outlook.folder-tree-from-path', rootPath, maxDepth ?? 4),
     getFoldersTree:        () => c('folders.tree'),
 
     // --- Dossiers monitorés ---

@@ -1,3 +1,5 @@
+using System.Diagnostics;
+using System.Reflection;
 using System.Text.Json;
 using MailMonitor.Services;
 using Microsoft.Web.WebView2.Core;
@@ -67,38 +69,45 @@ public sealed class MainForm : Form
 
     private async Task InitWebViewAsync()
     {
-        // Mail Monitor embarque le runtime Edge WebView2 « Fixed Version » à
-        // côté de l'exe (dossier WebView2\ généré par le package NuGet).
-        // → Aucune installation requise sur le poste, fonctionne sur PC verrouillé.
-        var bundledRuntimeFolder = Path.Combine(AppContext.BaseDirectory, "WebView2");
-        var bundledExe = Path.Combine(bundledRuntimeFolder, "msedgewebview2.exe");
-        string? browserExecutableFolder = null;
+        // Stratégie zéro-install pour PC verrouillé :
+        //   1) Si un runtime Edge WebView2 est déjà disponible (Evergreen système OU
+        //      install per-user précédente dans %LocalAppData%\Microsoft\EdgeWebView)
+        //      → on l'utilise.
+        //   2) Sinon, on extrait le bootstrapper MicrosoftEdgeWebview2Setup.exe
+        //      embarqué dans l'exe et on le lance en mode silencieux per-user
+        //      (--install --webview --runtime --msedge --user-level-install). Pas
+        //      de droits admin requis, install dans %LocalAppData%.
+        string? installedVersion = null;
+        try { installedVersion = CoreWebView2Environment.GetAvailableBrowserVersionString(); }
+        catch { installedVersion = null; }
 
-        if (File.Exists(bundledExe))
+        if (string.IsNullOrEmpty(installedVersion))
         {
-            browserExecutableFolder = bundledRuntimeFolder;
-            _log.Info("WEBVIEW", "Runtime embarqué détecté: " + bundledRuntimeFolder);
-        }
-        else
-        {
-            // Fallback : runtime Evergreen installé sur le système (cas dev local).
-            string? installedVersion = null;
-            try { installedVersion = CoreWebView2Environment.GetAvailableBrowserVersionString(); }
-            catch { installedVersion = null; }
-
-            if (string.IsNullOrEmpty(installedVersion))
+            _log.Info("WEBVIEW", "Runtime absent → lancement bootstrapper per-user…");
+            var installed = await TryInstallEvergreenPerUserAsync();
+            if (!installed)
             {
-                _log.Error("WEBVIEW", "Aucun runtime trouvé (ni embarqué, ni système).");
+                _log.Error("WEBVIEW", "Installation auto du runtime KO.");
                 MessageBox.Show(
-                    "WebView2 indisponible : runtime introuvable.\r\n\r\n" +
-                    "Cette build ne contient pas le runtime Edge embarqué et aucun runtime " +
-                    "n'est installé sur le système. Réinstallez Mail Monitor depuis la release officielle.",
+                    "WebView2 indisponible : impossible d'installer automatiquement le runtime Edge.\r\n\r\n" +
+                    "Téléchargez et installez manuellement (sans droits admin) :\r\n" +
+                    "https://go.microsoft.com/fwlink/p/?LinkId=2124703",
                     "Mail Monitor", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 Application.Exit();
                 return;
             }
-            _log.Info("WEBVIEW", "Runtime système détecté: " + installedVersion);
+            try { installedVersion = CoreWebView2Environment.GetAvailableBrowserVersionString(); }
+            catch { installedVersion = null; }
+            if (string.IsNullOrEmpty(installedVersion))
+            {
+                _log.Error("WEBVIEW", "Runtime toujours introuvable après install.");
+                MessageBox.Show("WebView2 installé mais introuvable. Redémarrez l'application.",
+                    "Mail Monitor", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                Application.Exit();
+                return;
+            }
         }
+        _log.Info("WEBVIEW", "Runtime détecté: " + installedVersion);
 
         try
         {
@@ -110,7 +119,7 @@ public sealed class MainForm : Form
             }
 
             var env = await CoreWebView2Environment.CreateAsync(
-                browserExecutableFolder: browserExecutableFolder,
+                browserExecutableFolder: null,
                 userDataFolder: _paths.WebView2UserData);
 
             await _web.EnsureCoreWebView2Async(env);
@@ -155,5 +164,72 @@ public sealed class MainForm : Form
     {
         _tray.Visible = false; _tray.Dispose();
         base.OnFormClosed(e);
+    }
+
+    /// <summary>
+    /// Extrait le bootstrapper Edge WebView2 embarqué et l'exécute en mode
+    /// per-user silencieux (zéro droit admin, install dans %LocalAppData%).
+    /// </summary>
+    private async Task<bool> TryInstallEvergreenPerUserAsync()
+    {
+        try
+        {
+            var asm = Assembly.GetExecutingAssembly();
+            using var stream = asm.GetManifestResourceStream("MicrosoftEdgeWebview2Setup.exe");
+            if (stream is null)
+            {
+                _log.Error("WEBVIEW", "Ressource bootstrapper introuvable dans l'exe.");
+                return false;
+            }
+            var tmp = Path.Combine(Path.GetTempPath(), "MailMonitor-WebView2Setup-" + Guid.NewGuid().ToString("N") + ".exe");
+            using (var fs = File.Create(tmp)) await stream.CopyToAsync(fs);
+
+            // Progress UI minimal pour ne pas laisser l'utilisateur sans feedback (DL peut prendre 1-2 min)
+            var splash = new Form
+            {
+                Text = "Mail Monitor — Première installation",
+                StartPosition = FormStartPosition.CenterScreen,
+                FormBorderStyle = FormBorderStyle.FixedDialog,
+                MaximizeBox = false, MinimizeBox = false, ControlBox = false,
+                ClientSize = new Size(480, 110), TopMost = true
+            };
+            var lbl = new Label
+            {
+                Text = "Installation du runtime Edge WebView2 (per-user, sans droits admin)…\r\n" +
+                       "Cette étape ne se produit qu'au premier lancement.",
+                AutoSize = false, Dock = DockStyle.Fill, Padding = new Padding(16),
+                TextAlign = ContentAlignment.MiddleCenter
+            };
+            splash.Controls.Add(lbl);
+            splash.Show(this);
+            Application.DoEvents();
+
+            try
+            {
+                var psi = new ProcessStartInfo
+                {
+                    FileName = tmp,
+                    // Args silencieux per-user documentés Microsoft pour le bootstrapper Evergreen.
+                    Arguments = "/silent /install",
+                    UseShellExecute = false,
+                    CreateNoWindow = true
+                };
+                using var proc = Process.Start(psi);
+                if (proc is null) return false;
+                await Task.Run(() => proc.WaitForExit(5 * 60 * 1000));
+                _log.Info("WEBVIEW", "Bootstrapper exit code: " + proc.ExitCode);
+                return proc.ExitCode == 0;
+            }
+            finally
+            {
+                splash.Close(); splash.Dispose();
+                try { File.Delete(tmp); } catch { }
+            }
+        }
+        catch (Exception ex)
+        {
+            _log.Error("WEBVIEW", "Bootstrapper KO", ex);
+            return false;
+        }
     }
 }

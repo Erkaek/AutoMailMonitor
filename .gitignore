@@ -64,3 +64,5 @@ app/obj/
 app/publish/
 app/smoke-*.log
 
+
+app/Resources/MicrosoftEdgeWebview2Setup.exe

@@ -12,6 +12,26 @@ public sealed class OutlookFolderRef
     public int    ItemCount { get; init; }
 }
 
+public sealed class FolderTreeNode
+{
+    public string Name { get; set; } = "";
+    public string FolderPath { get; set; } = "";
+    public string EntryID { get; set; } = "";
+    public int UnreadCount { get; set; }
+    public int ChildCount { get; set; }
+    public List<FolderTreeNode> SubFolders { get; set; } = new();
+}
+
+public sealed class FolderTreeResult
+{
+    public bool Success { get; set; }
+    public string? Error { get; set; }
+    public FolderTreeNode? Root { get; set; }
+    public string StoreId { get; set; } = "";
+    public string StoreName { get; set; } = "";
+    public string StoreSmtp { get; set; } = "";
+}
+
 public sealed class OutlookMailItem
 {
     public string EntryId { get; init; } = "";
@@ -178,6 +198,157 @@ public sealed class OutlookService : IDisposable
         }
         static int SafeCount(dynamic f) { try { return (int)f.Items.Count; } catch { return 0; } }
     });
+
+    /// <summary>
+    /// Résout un chemin Outlook style <c>\\FlotteAuto\Boîte de réception\Sous-dossier</c>
+    /// (ou avec <c>/</c>) puis renvoie l'arborescence à partir de ce dossier.
+    /// Le premier segment est le DisplayName du store (boîte aux lettres, partagée ou non).
+    /// </summary>
+    public Task<FolderTreeResult> GetFolderTreeFromPathAsync(string rootPath, int maxDepth = 4) =>
+        InvokeAsync<FolderTreeResult>((_, ns) =>
+        {
+            var res = new FolderTreeResult();
+            if (string.IsNullOrWhiteSpace(rootPath))
+            {
+                res.Error = "Chemin vide";
+                return res;
+            }
+
+            // Tokenisation : supporte \\ et / comme séparateurs, ignore les segments vides
+            var segments = rootPath
+                .Replace('/', '\\')
+                .Split('\\', StringSplitOptions.RemoveEmptyEntries);
+            if (segments.Length == 0)
+            {
+                res.Error = "Chemin invalide";
+                return res;
+            }
+
+            var storeName = segments[0];
+            dynamic? matchedStore = null;
+            dynamic stores = ns.Stores;
+            int sc = (int)stores.Count;
+            for (int i = 1; i <= sc; i++)
+            {
+                try
+                {
+                    dynamic st = stores.Item(i);
+                    var dn = (string)st.DisplayName;
+                    if (string.Equals(dn, storeName, StringComparison.OrdinalIgnoreCase))
+                    {
+                        matchedStore = st;
+                        res.StoreId = (string)st.StoreID;
+                        res.StoreName = dn;
+                        try { res.StoreSmtp = (string)st.GetRootFolder().Store.ExchangeStore?.PrimarySmtpAddress ?? ""; }
+                        catch { res.StoreSmtp = ""; }
+                        break;
+                    }
+                }
+                catch { }
+            }
+            if (matchedStore is null)
+            {
+                res.Error = $"Boîte aux lettres introuvable : « {storeName} ». Vérifiez qu'elle est ouverte dans Outlook.";
+                return res;
+            }
+
+            dynamic current;
+            try { current = matchedStore.GetRootFolder(); }
+            catch (Exception ex)
+            {
+                res.Error = "Impossible d'accéder à la racine du store : " + ex.Message;
+                return res;
+            }
+
+            // Descente segment par segment dans l'arborescence
+            var traversed = new List<string> { (string)current.Name };
+            for (int i = 1; i < segments.Length; i++)
+            {
+                var seg = segments[i];
+                dynamic? child = null;
+                try
+                {
+                    dynamic subs = current.Folders;
+                    int n = (int)subs.Count;
+                    for (int j = 1; j <= n; j++)
+                    {
+                        try
+                        {
+                            dynamic c = subs.Item(j);
+                            if (string.Equals((string)c.Name, seg, StringComparison.OrdinalIgnoreCase))
+                            {
+                                child = c; break;
+                            }
+                        }
+                        catch { }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    res.Error = "Énumération des sous-dossiers KO : " + ex.Message;
+                    return res;
+                }
+                if (child is null)
+                {
+                    res.Error = $"Sous-dossier introuvable : « {seg} » sous « {string.Join('\\', traversed)} ».";
+                    return res;
+                }
+                current = child;
+                traversed.Add(seg);
+            }
+
+            // Construire l'arbre depuis 'current' avec une profondeur limitée
+            try
+            {
+                res.Root = BuildNode(current, "\\\\" + string.Join('\\', traversed), 0, maxDepth);
+                res.Success = true;
+            }
+            catch (Exception ex)
+            {
+                res.Error = "Construction de l'arbre KO : " + ex.Message;
+            }
+            return res;
+
+            static FolderTreeNode BuildNode(dynamic f, string fullPath, int depth, int max)
+            {
+                var node = new FolderTreeNode
+                {
+                    Name = (string)f.Name,
+                    FolderPath = fullPath,
+                    EntryID = SafeStr(() => (string)f.EntryID),
+                    UnreadCount = SafeInt(() => (int)f.UnReadItemCount),
+                };
+                if (depth >= max)
+                {
+                    // Profondeur max : on remonte ChildCount pour signaler "lazy"
+                    node.ChildCount = SafeInt(() => (int)f.Folders.Count);
+                    node.SubFolders = new List<FolderTreeNode>();
+                    return node;
+                }
+                var subs = new List<FolderTreeNode>();
+                try
+                {
+                    dynamic ff = f.Folders;
+                    int n = (int)ff.Count;
+                    for (int i = 1; i <= n; i++)
+                    {
+                        try
+                        {
+                            dynamic c = ff.Item(i);
+                            var name = (string)c.Name;
+                            subs.Add(BuildNode(c, fullPath + "\\" + name, depth + 1, max));
+                        }
+                        catch { }
+                    }
+                }
+                catch { }
+                node.SubFolders = subs;
+                node.ChildCount = subs.Count;
+                return node;
+            }
+            static string SafeStr(Func<string> f) { try { return f() ?? ""; } catch { return ""; } }
+            static int SafeInt(Func<int> f) { try { return f(); } catch { return 0; } }
+        });
 
     public Task<List<OutlookMailItem>> ScanFolderAsync(string storeId, string folderEntryId, DateTime? since = null) =>
         InvokeAsync<List<OutlookMailItem>>((_, ns) =>
