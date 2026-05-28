@@ -138,17 +138,20 @@ jobs:
         run: |
           $tag = "${{ steps.version.outputs.tag }}"
           $exe = "${{ steps.stage.outputs.exe }}"
-          $notes = @"
-Mail Monitor $tag
-
-Téléchargez ``$(Split-Path $exe -Leaf)`` et lancez-le. Aucune installation, aucun droit administrateur requis.
-
-Au tout premier lancement, si Edge WebView2 n'est pas déjà présent sur le poste, l'app installera automatiquement le runtime en mode per-user (dans ``%LocalAppData%\Microsoft\EdgeWebView``). Connexion internet requise uniquement à cette étape.
-"@
+          $exeName = Split-Path $exe -Leaf
+          $notesPath = Join-Path $env:RUNNER_TEMP 'release-notes.md'
+          $lines = @(
+            "Mail Monitor $tag",
+            "",
+            "Telechargez ``$exeName`` et lancez-le. Aucune installation, aucun droit administrateur requis.",
+            "",
+            "Au tout premier lancement, si Edge WebView2 n'est pas deja present sur le poste, l'app installera automatiquement le runtime en mode per-user (dans ``%LocalAppData%\Microsoft\EdgeWebView``). Connexion internet requise uniquement a cette etape."
+          )
+          Set-Content -Path $notesPath -Value $lines -Encoding utf8
           gh release create $tag $exe "$exe.sha256" `
             --repo "${{ github.repository }}" `
             --title "Mail Monitor $tag" `
-            --notes "$notes"
+            --notes-file $notesPath
           if ($LASTEXITCODE -ne 0) { Write-Error "gh release create a échoué" }
 
       - name: Skip notice
