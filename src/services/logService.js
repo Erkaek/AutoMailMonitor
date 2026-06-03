@@ -137,36 +137,33 @@ class LogService {
   }
 
   getHistory(filters = {}) {
-    let logs = [...this.logHistory];
+    const limit = Number.isFinite(filters.limit) ? Math.max(1, Number(filters.limit)) : 0;
+    const levelValue = (filters.level && filters.level !== 'ALL') ? this.levels[filters.level]?.value : undefined;
+    const category = (filters.category && filters.category !== 'ALL') ? filters.category : null;
+    const searchLower = (filters.search && String(filters.search).trim()) ? String(filters.search).toLowerCase() : null;
 
-    // Filtre par niveau
-    if (filters.level && filters.level !== 'ALL') {
-      const levelValue = this.levels[filters.level]?.value;
-      if (levelValue !== undefined) {
-        logs = logs.filter(log => log.levelValue >= levelValue);
+    const out = [];
+    // Parcours inverse pour récupérer d'abord les logs les plus récents et
+    // pouvoir s'arrêter tôt dès que la limite est atteinte.
+    for (let i = this.logHistory.length - 1; i >= 0; i--) {
+      const log = this.logHistory[i];
+      if (!log) continue;
+
+      if (levelValue !== undefined && log.levelValue < levelValue) continue;
+      if (category && log.category !== category) continue;
+      if (searchLower) {
+        const msg = String(log.message || '').toLowerCase();
+        const data = log.data ? String(log.data).toLowerCase() : '';
+        if (!msg.includes(searchLower) && !data.includes(searchLower)) continue;
       }
+
+      out.push(log);
+      if (limit > 0 && out.length >= limit) break;
     }
 
-    // Filtre par catégorie
-    if (filters.category && filters.category !== 'ALL') {
-      logs = logs.filter(log => log.category === filters.category);
-    }
-
-    // Filtre par recherche texte
-    if (filters.search) {
-      const searchLower = filters.search.toLowerCase();
-      logs = logs.filter(log => 
-        log.message.toLowerCase().includes(searchLower) ||
-        (log.data && log.data.toLowerCase().includes(searchLower))
-      );
-    }
-
-    // Limite
-    if (filters.limit) {
-      logs = logs.slice(-filters.limit);
-    }
-
-    return logs;
+    // Repasser dans l'ordre chronologique attendu par l'UI.
+    out.reverse();
+    return out;
   }
 
   getStats() {

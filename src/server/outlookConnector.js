@@ -491,6 +491,16 @@ class OutlookConnector extends EventEmitter {
       let storeName = null;
       let smtpAddress = null;
 
+      // Cache chaud court: évite les appels COM/PowerShell répétés quand
+      // plusieurs écrans demandent les boîtes successivement.
+      if (Array.isArray(this.lastMailboxes) && this.lastMailboxes.length > 0) {
+        const ageMs = Date.now() - (this.lastMailboxesAt || 0);
+        const hotTtlMs = 30_000;
+        if (ageMs >= 0 && ageMs < hotTtlMs) {
+          return this.lastMailboxes;
+        }
+      }
+
       const ok = await this.ensureConnected();
       if (!ok) {
         return [];

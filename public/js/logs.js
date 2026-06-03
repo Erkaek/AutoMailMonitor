@@ -48,11 +48,14 @@ async function loadHistory() {
     
     // Réinitialiser les stats
     stats = { DEBUG: 0, INFO: 0, SUCCESS: 0, WARN: 0, ERROR: 0 };
-    
+
+    const fragment = document.createDocumentFragment();
     history.forEach(log => {
-      appendLogEntry(log, false);
+      const entry = createLogEntryElement(log);
+      fragment.appendChild(entry);
       stats[log.level] = (stats[log.level] || 0) + 1;
     });
+    container.appendChild(fragment);
     
     totalLogs = history.length;
     updateStats();
@@ -149,27 +152,7 @@ function matchesFilters(log) {
 
 function appendLogEntry(log, updateStat = true) {
   const container = document.getElementById('logs-container');
-  const entry = document.createElement('div');
-  entry.className = `log-entry ${log.level}`;
-  
-  const time = new Date(log.timestamp).toLocaleTimeString('fr-FR', {
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit'
-  });
-  
-  let html = `
-    <span class="log-timestamp">${time}</span>
-    <span class="log-category">${log.categoryLabel || log.category}</span>
-    <span class="log-level" style="color: ${log.levelColor}">${log.levelEmoji} ${log.level}</span>
-    <span class="log-message">${escapeHtml(log.message)}</span>
-  `;
-  
-  if (log.data) {
-    html += `<div class="log-data">${escapeHtml(log.data)}</div>`;
-  }
-  
-  entry.innerHTML = html;
+  const entry = createLogEntryElement(log);
   container.appendChild(entry);
   
   // Limiter le nombre d'entrées visibles pour éviter les ralentissements
@@ -177,6 +160,31 @@ function appendLogEntry(log, updateStat = true) {
   if (container.children.length > maxVisible) {
     container.removeChild(container.firstChild);
   }
+}
+
+function createLogEntryElement(log) {
+  const entry = document.createElement('div');
+  entry.className = `log-entry ${log.level}`;
+
+  const time = new Date(log.timestamp).toLocaleTimeString('fr-FR', {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit'
+  });
+
+  let html = `
+    <span class="log-timestamp">${time}</span>
+    <span class="log-category">${log.categoryLabel || log.category}</span>
+    <span class="log-level" style="color: ${log.levelColor}">${log.levelEmoji} ${log.level}</span>
+    <span class="log-message">${escapeHtml(log.message)}</span>
+  `;
+
+  if (log.data) {
+    html += `<div class="log-data">${escapeHtml(log.data)}</div>`;
+  }
+
+  entry.innerHTML = html;
+  return entry;
 }
 
 function escapeHtml(text) {
