@@ -2564,6 +2564,18 @@ class MailMonitor {
           folderTree.innerHTML = '<div class="text-warning"><i class="bi bi-info-circle me-2"></i>Aucun dossier trouvé pour ce chemin</div>';
           return;
         }
+
+        // Cas prod observé sur boîtes partagées Exchange:
+        // parent résolu mais ChildCount renvoyé à 0 alors que des enfants existent.
+        // On force la racine à rester expandable pour déclencher le lazy-load.
+        try {
+          const hasInline = Array.isArray(rootNode.SubFolders) && rootNode.SubFolders.length > 0;
+          const cc = Number(rootNode.ChildCount || 0);
+          if (!hasInline && cc <= 0) {
+            rootNode.ChildCount = 1;
+          }
+        } catch (_) {}
+
         folderTree.dataset.mailbox = meta?.storeName || '';
         folderTree.dataset.mailboxDisplay = meta?.storeName || '';
         folderTree.dataset.smtp = meta?.smtp || '';
@@ -4749,7 +4761,7 @@ class MailMonitor {
       this.showNotification('Resynchronisation', 'Resynchronisation complète en cours...', 'info');
       
       console.log('🔄 Démarrage resynchronisation complète forcée...');
-      const response = await window.api.invoke('api-force-full-resync');
+      const response = await window.electronAPI.invoke('api-force-full-resync');
       
       if (response.success) {
         console.log('✅ Resynchronisation terminée:', response.stats);

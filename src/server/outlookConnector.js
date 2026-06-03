@@ -1167,6 +1167,9 @@ class OutlookConnector extends EventEmitter {
       const storeId = matchedStore?.StoreID || storeHint;
       const storeName = matchedStore?.Name || storeHint;
       const smtpAddress = matchedStore?.SmtpAddress || null;
+      try {
+        logService.info('COM', `Arborescence racine demandée: path="${normalizedPath}" store="${storeName}"`);
+      } catch {}
 
       // --- FAST PATH ---
       // Résoudre le dossier par chemin (sans énumération globale) puis charger les sous-dossiers en BFS via EntryID.
@@ -1451,6 +1454,9 @@ class OutlookConnector extends EventEmitter {
 
         const duration = Date.now() - started;
         console.log(`📂 getFolderTreeFromRootPath(FAST): path=${normalizedPath} -> children=${rootNode.SubFolders.length} in ${duration}ms`);
+        try {
+          logService.info('COM', `Arborescence (fast path): ${rootNode.SubFolders.length} enfant(s) en ${duration}ms pour "${normalizedPath}"`);
+        } catch {}
 
         return {
           success: true,
@@ -1460,6 +1466,9 @@ class OutlookConnector extends EventEmitter {
         };
       } catch (fastErr) {
         console.warn('[COM-REC] Fast folder-tree resolution failed; falling back to global enumeration:', fastErr?.message || fastErr);
+        try {
+          logService.warn('COM', `Fast path KO, fallback global: ${fastErr?.message || fastErr}`);
+        } catch {}
       }
 
       const userStoreSegment = parts[0];
@@ -1701,6 +1710,10 @@ class OutlookConnector extends EventEmitter {
         throw new Error('Impossible de localiser le dossier racine demandé');
       }
 
+      try {
+        logService.info('COM', `Arborescence (fallback): racine="${rootNode.FolderPath}" enfants initiaux=${Array.isArray(rootNode.SubFolders) ? rootNode.SubFolders.length : 0}`);
+      } catch {}
+
       // If the requested root exists but came from a shallow or empty structure, fetch its direct children.
       if (Array.isArray(rootNode.SubFolders) && rootNode.SubFolders.length === 0) {
         const parentId = rootNode.EntryID || '';
@@ -1768,6 +1781,10 @@ class OutlookConnector extends EventEmitter {
       };
 
       await deepenSubtree();
+
+      try {
+        logService.info('COM', `Arborescence finale: ${Array.isArray(rootNode.SubFolders) ? rootNode.SubFolders.length : 0} enfant(s) directs pour "${rootNode.FolderPath}"`);
+      } catch {}
 
       const ensureManualChildren = () => {
         const rootLc = rootNode.FolderPath.toLowerCase();
