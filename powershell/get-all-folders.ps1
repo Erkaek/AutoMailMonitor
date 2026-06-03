@@ -56,7 +56,23 @@ function Get-StoreRoot {
 
 try {
 	# Ne pas charger Microsoft.Office.Interop.Outlook pour éviter les problèmes de cast (32/64 bits)
-	$ol = New-Object -ComObject Outlook.Application
+	function Get-OutlookApplication {
+		param([int]$TimeoutSeconds = 20)
+		$deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+		while ([DateTime]::UtcNow -lt $deadline) {
+			try {
+				try { return [Runtime.InteropServices.Marshal]::GetActiveObject('Outlook.Application') } catch {}
+				return New-Object -ComObject Outlook.Application
+			} catch [System.Runtime.InteropServices.COMException] {
+				Start-Sleep -Milliseconds 750
+			} catch {
+				Start-Sleep -Milliseconds 750
+			}
+		}
+		throw 'Outlook.Application indisponible'
+	}
+
+	$ol = Get-OutlookApplication
 	# Préférer Session pour éviter le cast COM Interop
 	$ns = $null
 	try { $ns = $ol.Session } catch {}

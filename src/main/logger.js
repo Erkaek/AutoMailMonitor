@@ -3,7 +3,7 @@ const fs = require('fs');
 const path = require('path');
 const { app } = require('electron');
 
-const MAX_BUFFER = 5000; // keep last N entries in memory
+const MAX_BUFFER = 20000; // mode verbeux: keep more entries in memory
 let buffer = []; // { id, ts, level, message }
 let nextId = 1;
 let listeners = new Set();

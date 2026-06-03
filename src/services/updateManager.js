@@ -170,6 +170,22 @@ class UpdateManager {
    * Gère les erreurs de mise à jour avec retry automatique
    */
   handleUpdateError(errorMsg = '') {
+    const msg = String(errorMsg || '').toLowerCase();
+    const isNetworkBlocked =
+      msg.includes('net::err_network_access_denied') ||
+      msg.includes('err_network_access_denied') ||
+      msg.includes('econnrefused') ||
+      msg.includes('enotfound') ||
+      msg.includes('etimedout') ||
+      msg.includes('network access denied') ||
+      msg.includes('access denied');
+
+    if (isNetworkBlocked) {
+      logService.warn('INIT', 'Erreur réseau bloquante détectée, pas de retry automatique pour cette session.');
+      this.updateCheckAttempts = 0;
+      return;
+    }
+
     if (this.updateCheckAttempts < this.config.maxRetries) {
       // Éviter les retries à 0s (ex: erreur après update-available où attempts peut être retombé à 0)
       const attempts = Math.max(1, Number(this.updateCheckAttempts) || 0);

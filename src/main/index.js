@@ -145,6 +145,7 @@ function logClean(message, ...args) {
 
 let mainWindow = null;
 let loadingWindow = null;
+let logsWindow = null;
 let tray = null;
 
 // Coalesce cache invalidations for bursty realtime events (COUNT/status/etc.)
@@ -258,6 +259,15 @@ ipcMain.handle('api-logs-open-folder', async () => {
     if (!fs.existsSync(dir)) return { success: false, error: 'Dossier de logs introuvable' };
     await shell.openPath(dir);
     return { success: true };
+  } catch (e) {
+    return { success: false, error: e.message };
+  }
+});
+
+ipcMain.handle('api-open-logs-window', async () => {
+  try {
+    const win = createLogsWindow();
+    return { success: !!win };
   } catch (e) {
     return { success: false, error: e.message };
   }
@@ -796,6 +806,21 @@ function createWindow() {
 
   mainWindow.loadFile(path.join(__dirname, '../../public/index.html'));
 
+  // Raccourci clavier global à la fenêtre: Ctrl+Shift+L ouvre la fenêtre de logs.
+  try {
+    mainWindow.webContents.on('before-input-event', (event, input) => {
+      if (!input) return;
+      const key = String(input.key || '').toLowerCase();
+      const isLogsShortcut = (input.control || input.meta) && input.shift && key === 'l';
+      if (isLogsShortcut) {
+        event.preventDefault();
+        createLogsWindow();
+      }
+    });
+  } catch (e) {
+    console.warn('Raccourci logs non configuré:', e?.message || e);
+  }
+
   mainWindow.once('ready-to-show', () => {
     mainWindow.show();
     logClean('🎉 Application prete !');
@@ -857,6 +882,49 @@ function createWindow() {
   } catch {}
 
   return mainWindow;
+}
+
+function createLogsWindow() {
+  try {
+    if (logsWindow && !logsWindow.isDestroyed()) {
+      if (logsWindow.isMinimized()) logsWindow.restore();
+      logsWindow.focus();
+      return logsWindow;
+    }
+
+    logsWindow = new BrowserWindow({
+      width: 1100,
+      height: 760,
+      minWidth: 900,
+      minHeight: 620,
+      title: 'Mail Monitor - Logs',
+      autoHideMenuBar: true,
+      show: false,
+      parent: mainWindow || undefined,
+      webPreferences: {
+        nodeIntegration: false,
+        contextIsolation: true,
+        enableRemoteModule: false,
+        devTools: !app.isPackaged,
+        preload: path.join(__dirname, 'preload.js')
+      }
+    });
+
+    logsWindow.loadFile(path.join(__dirname, '../../public/logs.html'));
+
+    logsWindow.once('ready-to-show', () => {
+      try { logsWindow.show(); } catch {}
+    });
+
+    logsWindow.on('closed', () => {
+      logsWindow = null;
+    });
+
+    return logsWindow;
+  } catch (e) {
+    console.error('❌ Impossible d\'ouvrir la fenêtre de logs:', e);
+    return null;
+  }
 }
 
 async function initializeOutlook() {

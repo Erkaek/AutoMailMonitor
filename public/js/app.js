@@ -258,6 +258,7 @@ class MailMonitor {
       this.registerLoadingTask('weekly', 'Initialisation du suivi hebdomadaire...');
       
       this.setupEventListeners();
+      this.initGlobalLogsLauncher();
       
       await this.completeLoadingTask('configuration', this.loadConfiguration());
       await this.completeLoadingTask('connection', this.checkConnection());
@@ -307,6 +308,69 @@ class MailMonitor {
       console.error('❌ Erreur lors de l\'initialisation:', error);
       this.showNotification('Erreur d\'initialisation', error.message, 'danger');
       this.finishLoading();
+    }
+  }
+
+  initGlobalLogsLauncher() {
+    try {
+      if (!document.body) return;
+
+      let btn = document.getElementById('global-logs-launcher');
+      if (!btn) {
+        btn = document.createElement('button');
+        btn.id = 'global-logs-launcher';
+        btn.type = 'button';
+        btn.title = 'Ouvrir les logs (Ctrl+Shift+L)';
+        btn.setAttribute('aria-label', 'Ouvrir les logs');
+        btn.innerHTML = '<i class="bi bi-journal-text" aria-hidden="true"></i> Logs';
+        btn.style.position = 'fixed';
+        btn.style.right = '18px';
+        btn.style.bottom = '18px';
+        btn.style.zIndex = '2147483000';
+        btn.style.border = 'none';
+        btn.style.borderRadius = '999px';
+        btn.style.padding = '10px 14px';
+        btn.style.fontSize = '13px';
+        btn.style.fontWeight = '600';
+        btn.style.cursor = 'pointer';
+        btn.style.background = '#0d6efd';
+        btn.style.color = '#fff';
+        btn.style.boxShadow = '0 8px 24px rgba(0,0,0,0.22)';
+        btn.style.display = 'inline-flex';
+        btn.style.alignItems = 'center';
+        btn.style.gap = '8px';
+        btn.style.opacity = '0.95';
+        document.body.appendChild(btn);
+      }
+
+      const openLogs = async () => {
+        try {
+          const res = await window.electronAPI?.openLogsWindow?.();
+          if (res && res.success === false) {
+            this.showNotification('Logs', res.error || 'Impossible d\'ouvrir la fenêtre de logs', 'warning');
+          }
+        } catch (e) {
+          this.showNotification('Logs', e?.message || 'Impossible d\'ouvrir la fenêtre de logs', 'warning');
+        }
+      };
+
+      if (!btn.dataset.boundLogs) {
+        btn.dataset.boundLogs = '1';
+        btn.addEventListener('click', openLogs);
+      }
+
+      if (!this._logsShortcutBound) {
+        this._logsShortcutBound = true;
+        document.addEventListener('keydown', (e) => {
+          const key = String(e.key || '').toLowerCase();
+          if ((e.ctrlKey || e.metaKey) && e.shiftKey && key === 'l') {
+            e.preventDefault();
+            openLogs();
+          }
+        });
+      }
+    } catch (e) {
+      console.warn('Impossible d\'initialiser le lanceur global de logs:', e?.message || e);
     }
   }
 

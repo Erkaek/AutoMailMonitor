@@ -6,7 +6,8 @@ class LogService {
   constructor() {
     this.listeners = new Set();
     this.logHistory = [];
-    this.maxHistorySize = 2000;
+    // Mode debug constant: conserver davantage d'historique en mémoire.
+    this.maxHistorySize = 10000;
     
     // Niveaux de log
     this.levels = {
@@ -36,7 +37,8 @@ class LogService {
       AUTO: '🤖 Auto'
     };
     
-    this.currentLevel = this.levels.INFO.value;
+    // Mode très verbeux: DEBUG toujours actif.
+    this.currentLevel = this.levels.DEBUG.value;
     this.stats = { DEBUG: 0, INFO: 0, WARN: 0, ERROR: 0, SUCCESS: 0 };
   }
 

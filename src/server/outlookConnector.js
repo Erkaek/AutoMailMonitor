@@ -26,7 +26,7 @@ class OutlookConnector extends EventEmitter {
     this.config = {
       timeout: 15000,
       realtimePollingInterval: 15000,
-      enableDetailedLogs: false,
+      enableDetailedLogs: true,
       autoReconnect: true,
       maxRetries: 3
     };
@@ -504,7 +504,7 @@ class OutlookConnector extends EventEmitter {
 
         try {
           $ErrorActionPreference = 'SilentlyContinue'
-          $outlook = New-Object -ComObject Outlook.Application
+          $outlook = Get-OutlookApplication -TimeoutSeconds 20
           $ns = $outlook.GetNamespace("MAPI")
           $accounts = $null
           try { $accounts = $outlook.Session.Accounts } catch {}
@@ -817,7 +817,7 @@ class OutlookConnector extends EventEmitter {
           try { $outlook = [System.Runtime.Interopservices.Marshal]::GetActiveObject('Outlook.Application') } catch {}
           if (-not $outlook) { 
             Write-Warning "GetActiveObject failed, creating new instance..."
-            $outlook = New-Object -ComObject Outlook.Application 
+            $outlook = Get-OutlookApplication -TimeoutSeconds 20 
           }
           
           # Vérifier timeout
@@ -834,7 +834,7 @@ class OutlookConnector extends EventEmitter {
           if (-not $ns) {
             # Retenter en recréant l'objet COM une fois
             try {
-              $outlook = New-Object -ComObject Outlook.Application
+              $outlook = Get-OutlookApplication -TimeoutSeconds 20
               try { $ns = $outlook.Session } catch {}
               if (-not $ns) { try { $ns = $outlook.GetNamespace("MAPI") } catch {} }
             } catch {}
@@ -1170,7 +1170,7 @@ class OutlookConnector extends EventEmitter {
           [Console]::OutputEncoding = $enc
           $OutputEncoding = $enc
           try {
-            $outlook = New-Object -ComObject Outlook.Application
+            $outlook = Get-OutlookApplication -TimeoutSeconds 20
             $ns = $outlook.GetNamespace("MAPI")
             $store = $null
             $targetStoreId = '${safeStoreId}'
@@ -1808,7 +1808,7 @@ class OutlookConnector extends EventEmitter {
         [Console]::OutputEncoding = $enc
         $OutputEncoding = $enc
         try {
-          $outlook = New-Object -ComObject Outlook.Application
+          $outlook = Get-OutlookApplication -TimeoutSeconds 20
           $ns = $outlook.GetNamespace("MAPI")
           $store = $null
           foreach ($st in $ns.Stores) { if ($st.StoreID -eq "${safeStoreId}") { $store = $st; break } }
@@ -2605,6 +2605,23 @@ class OutlookConnector extends EventEmitter {
     const backoff = (tryIndex) => (this.settings?.exchange?.retry?.backoff === 'exponential') ? baseTimeout * Math.pow(2, tryIndex) : baseTimeout;
     const startedAll = Date.now();
     let lastResult = { success: false, error: 'PS_FAILED' };
+    const outlookPrelude = `
+function Get-OutlookApplication {
+  param([int]$TimeoutSeconds = 20)
+  $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+  while ([DateTime]::UtcNow -lt $deadline) {
+    try {
+      try { return [Runtime.InteropServices.Marshal]::GetActiveObject('Outlook.Application') } catch {}
+      return New-Object -ComObject Outlook.Application
+    } catch [System.Runtime.InteropServices.COMException] {
+      Start-Sleep -Milliseconds 750
+    } catch {
+      Start-Sleep -Milliseconds 750
+    }
+  }
+  throw 'Outlook.Application indisponible'
+}
+`;
 
     for (let i = 0; i < attempts; i++) {
       const attemptStart = Date.now();
@@ -2615,7 +2632,8 @@ class OutlookConnector extends EventEmitter {
       const BOM = '\uFEFF';
       try {
         const fs = require('fs');
-        fs.writeFileSync(tempFile, BOM + script, { encoding: 'utf8' });
+        const payload = script.includes('Get-OutlookApplication') ? script : `${outlookPrelude}\n${script}`;
+        fs.writeFileSync(tempFile, BOM + payload, { encoding: 'utf8' });
         const psResult = await this.runPowerShell(['-File', tempFile], { timeoutMs: attemptTimeout, force32Bit: force32 });
         const cmdLabel = `${path.basename(psResult.exe)} ${this.sanitizePsArgs(psResult.args || []).join(' ')}`;
         if (psResult.timedOut) {
@@ -2952,7 +2970,7 @@ class OutlookConnector extends EventEmitter {
         $enc = New-Object System.Text.UTF8Encoding $false; [Console]::OutputEncoding = $enc; $OutputEncoding = $enc
         $ErrorActionPreference = 'SilentlyContinue'; $ProgressPreference = 'SilentlyContinue'
         try {
-          $ol = New-Object -ComObject Outlook.Application
+          $ol = Get-OutlookApplication -TimeoutSeconds 20
           $ns = $ol.Session
           $stores = @()
           foreach ($st in $ns.Stores) { try { $stores += $st } catch {} }
@@ -3155,7 +3173,7 @@ ${safeTarget}
     try {
       const script = `
         $enc = New-Object System.Text.UTF8Encoding $false; [Console]::OutputEncoding = $enc; $OutputEncoding=$enc
-        $outlook = New-Object -ComObject Outlook.Application
+        $outlook = Get-OutlookApplication -TimeoutSeconds 20
         $ns = $outlook.GetNamespace('MAPI')
         $stores = @()
         foreach ($st in $ns.Stores) {
