@@ -24,6 +24,9 @@ class UpdateManager {
 
     // Si une MAJ échoue pour signature (Windows), on évite de re-télécharger en boucle.
     this.disableAutoDownloadForSession = false;
+    // Si le réseau bloque systématiquement l'accès update (ERR_NETWORK_ACCESS_DENIED),
+    // on coupe les checks pour la session afin d'éviter du bruit/perte CPU.
+    this.disableUpdateChecksForSession = false;
 
     this.releaseUrl = process.env.UPDATE_RELEASES_URL || 'https://github.com/Erkaek/AutoMailMonitor/releases/latest';
   }
@@ -182,6 +185,7 @@ class UpdateManager {
 
     if (isNetworkBlocked) {
       logService.warn('INIT', 'Erreur réseau bloquante détectée, pas de retry automatique pour cette session.');
+      this.disableUpdateChecksForSession = true;
       this.updateCheckAttempts = 0;
       return;
     }
@@ -252,6 +256,11 @@ class UpdateManager {
    */
   async checkForUpdates() {
     try {
+      if (this.disableUpdateChecksForSession) {
+        logService.debug('INIT', 'Vérification MAJ ignorée (désactivée pour la session: réseau bloqué).');
+        return null;
+      }
+
       if (this.disableAutoDownloadForSession) {
         logService.warn('INIT', 'Auto-download désactivé pour la session (erreur signature précédente)');
       }
@@ -319,6 +328,9 @@ class UpdateManager {
    */
   startPeriodicCheck() {
     setInterval(() => {
+      if (this.disableUpdateChecksForSession) {
+        return;
+      }
       logService.info('INIT', 'Vérification périodique des mises à jour...');
       this.checkForUpdates().catch(e => {
         logService.warn('INIT', 'Échec vérification périodique MAJ', e.message);

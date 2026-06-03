@@ -72,6 +72,9 @@ class OutlookConnector extends EventEmitter {
     this._lastHealthCheckAt = 0;
     this._consecutiveTimeouts = 0;
     this._healthCheckIntervalMs = 60000; // Vérifier la santé toutes les 60s
+
+    // Cache court pour éviter de spawn PowerShell trop souvent juste pour tester OUTLOOK.exe.
+    this._outlookProcessCheckCache = { at: 0, running: false };
   }
 
   /**
@@ -164,6 +167,12 @@ class OutlookConnector extends EventEmitter {
    */
   async checkOutlookProcess() {
     try {
+      const now = Date.now();
+      const ttlMs = 1500;
+      if ((now - (this._outlookProcessCheckCache.at || 0)) < ttlMs) {
+        return !!this._outlookProcessCheckCache.running;
+      }
+
       const { spawn } = require('child_process');
       
       return new Promise((resolve) => {
@@ -182,18 +191,21 @@ class OutlookConnector extends EventEmitter {
           // Si le processus retourne quelque chose avec "OUTLOOK", c'est que le processus existe
           const isRunning = output.includes('OUTLOOK');
           console.log(`🔍 Vérification processus Outlook: ${isRunning ? 'Trouvé' : 'Non trouvé'}`);
+          this._outlookProcessCheckCache = { at: Date.now(), running: isRunning };
           resolve(isRunning);
         });
         
         // Timeout de 5 secondes pour la vérification
         setTimeout(() => {
           powershell.kill();
+          this._outlookProcessCheckCache = { at: Date.now(), running: false };
           resolve(false);
         }, 5000);
       });
       
     } catch (error) {
       console.error('❌ Erreur vérification processus Outlook:', error);
+      this._outlookProcessCheckCache = { at: Date.now(), running: false };
       return false;
     }
   }

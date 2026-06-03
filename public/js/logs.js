@@ -9,6 +9,8 @@ let autoScroll = true;
 let isPaused = false;
 let stats = { DEBUG: 0, INFO: 0, SUCCESS: 0, WARN: 0, ERROR: 0 };
 let totalLogs = 0;
+let liveQueue = [];
+let liveFlushTimer = null;
 
 function invokeBridge(channel, payload) {
   if (window.electronAPI?.invoke) {
@@ -84,18 +86,52 @@ function setupListeners() {
 
   if (onLogEntry) onLogEntry((logEntry) => {
     if (isPaused) return;
-    
-    // Vérifier si le log passe les filtres
-    if (matchesFilters(logEntry)) {
-      appendLogEntry(logEntry, true);
-      stats[logEntry.level] = (stats[logEntry.level] || 0) + 1;
-      totalLogs++;
-      updateStats();
-      if (autoScroll) {
-        scrollToBottom();
-      }
-    }
+    if (!matchesFilters(logEntry)) return;
+
+    liveQueue.push(logEntry);
+    scheduleLiveFlush();
   });
+}
+
+function scheduleLiveFlush() {
+  if (liveFlushTimer) return;
+  liveFlushTimer = setTimeout(() => {
+    liveFlushTimer = null;
+    flushLiveQueue();
+  }, 75);
+}
+
+function flushLiveQueue() {
+  if (!liveQueue.length) return;
+
+  const container = document.getElementById('logs-container');
+  if (!container) {
+    liveQueue = [];
+    return;
+  }
+
+  const fragment = document.createDocumentFragment();
+  const batch = liveQueue.splice(0, 200);
+  for (const logEntry of batch) {
+    const entry = createLogEntryElement(logEntry);
+    fragment.appendChild(entry);
+    stats[logEntry.level] = (stats[logEntry.level] || 0) + 1;
+    totalLogs++;
+  }
+  container.appendChild(fragment);
+
+  // Limiter le nombre d'entrées visibles pour éviter les ralentissements
+  const maxVisible = 500;
+  while (container.children.length > maxVisible) {
+    container.removeChild(container.firstChild);
+  }
+
+  updateStats();
+  if (autoScroll) scrollToBottom();
+
+  if (liveQueue.length) {
+    scheduleLiveFlush();
+  }
 }
 
 function setupFilterListeners() {
