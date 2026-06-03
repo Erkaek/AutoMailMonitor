@@ -327,9 +327,12 @@ ipcMain.handle('api-export-log-history', async (event, filters) => {
 ipcMain.handle('api-clear-logs', async () => {
   try {
     logService.clear();
-    // Notifier tous les clients
-    if (global.mainWindow && !global.mainWindow.isDestroyed()) {
-      global.mainWindow.webContents.send('logs-cleared');
+    // Notifier toutes les fenêtres actives.
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('logs-cleared');
+    }
+    if (logsWindow && !logsWindow.isDestroyed()) {
+      logsWindow.webContents.send('logs-cleared');
     }
     return { success: true };
   } catch (e) {
@@ -835,6 +838,9 @@ function createWindow() {
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send('log-entry', entry);
       }
+      if (logsWindow && !logsWindow.isDestroyed()) {
+        logsWindow.webContents.send('log-entry', entry);
+      }
     });
   } catch (e) {
     console.warn('Log streaming setup failed:', e);
@@ -844,6 +850,9 @@ function createWindow() {
   logService.addListener((logEntry) => {
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('log-entry', logEntry);
+    }
+    if (logsWindow && !logsWindow.isDestroyed()) {
+      logsWindow.webContents.send('log-entry', logEntry);
     }
   });
 

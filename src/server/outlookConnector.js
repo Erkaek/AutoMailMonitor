@@ -1163,6 +1163,7 @@ class OutlookConnector extends EventEmitter {
         // On injecte donc des littéraux entre quotes simples et on échappe uniquement les apostrophes.
         const psSingleQuote = (value) => String(value ?? '').replace(/'/g, "''");
         const safeStoreId = psSingleQuote(storeId || '');
+        const safeStoreName = psSingleQuote(storeName || storeHint || '');
         const safeParentPath = psSingleQuote(normalizedPath || '');
 
         const script = `
@@ -1174,7 +1175,14 @@ class OutlookConnector extends EventEmitter {
             $ns = $outlook.GetNamespace("MAPI")
             $store = $null
             $targetStoreId = '${safeStoreId}'
-            foreach ($st in $ns.Stores) { if ($st.StoreID -eq $targetStoreId) { $store = $st; break } }
+            $targetStoreName = '${safeStoreName}'
+            foreach ($st in $ns.Stores) {
+              try {
+                if ($st.StoreID -eq $targetStoreId -or $st.DisplayName -eq $targetStoreName -or $st.DisplayName -like ("*" + $targetStoreName + "*")) {
+                  $store = $st; break
+                }
+              } catch {}
+            }
             if (-not $store) { throw "Store introuvable" }
             $root = $store.GetRootFolder()
             $mbName = $store.DisplayName
@@ -1360,6 +1368,25 @@ class OutlookConnector extends EventEmitter {
         };
 
         attachChildren(rootNode, resolved.children);
+
+        // Cas observé en prod sur boîtes partagées: le parent est trouvé mais
+        // l'énumération initiale retourne 0 enfant alors que ChildCount > 0.
+        // On force une tentative via getSubFolders(root) avant de conclure.
+        if (rootNode.SubFolders.length === 0 && Number(rootInfo?.ChildCount || 0) > 0 && rootNode.EntryID) {
+          let rootKids = [];
+          try {
+            rootKids = await this.getSubFolders(storeId, rootNode.EntryID, rootNode.FolderPath);
+          } catch { rootKids = []; }
+          if (Array.isArray(rootKids) && rootKids.length) {
+            attachChildren(rootNode, rootKids);
+          }
+        }
+
+        // Si toujours vide alors que le parent annonce des enfants, forcer le
+        // fallback legacy (scan global + filtrage) au lieu de renvoyer un arbre incomplet.
+        if (rootNode.SubFolders.length === 0 && Number(rootInfo?.ChildCount || 0) > 0) {
+          throw new Error('Fast path incomplet: parent avec enfants mais sous-dossiers non résolus');
+        }
 
         // BFS: enrichir les enfants (et petits-enfants) via EntryID.
         const depthLimit = Number.isFinite(maxDepth) ? maxDepth : 3;
@@ -1800,6 +1827,7 @@ class OutlookConnector extends EventEmitter {
       }
 
       const safeStoreId = String(storeId || '').replace(/`/g, '``').replace(/"/g, '\"');
+      const safeStoreName = String(storeId || '').replace(/`/g, '``').replace(/"/g, '\"');
       const safeParentId = String(parentEntryId || '').replace(/`/g, '``').replace(/"/g, '\"');
       const safeParentPath = String(parentPath || '').replace(/`/g, '``').replace(/"/g, '\"');
 
@@ -1811,7 +1839,13 @@ class OutlookConnector extends EventEmitter {
           $outlook = Get-OutlookApplication -TimeoutSeconds 20
           $ns = $outlook.GetNamespace("MAPI")
           $store = $null
-          foreach ($st in $ns.Stores) { if ($st.StoreID -eq "${safeStoreId}") { $store = $st; break } }
+          foreach ($st in $ns.Stores) {
+            try {
+              if ($st.StoreID -eq "${safeStoreId}" -or $st.DisplayName -eq "${safeStoreName}" -or $st.DisplayName -like ("*" + "${safeStoreName}" + "*")) {
+                $store = $st; break
+              }
+            } catch {}
+          }
           if (-not $store) { throw "Store introuvable" }
           $root = $store.GetRootFolder()
           $mbName = $store.DisplayName

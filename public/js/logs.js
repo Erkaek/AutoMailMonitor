@@ -10,6 +10,16 @@ let isPaused = false;
 let stats = { DEBUG: 0, INFO: 0, SUCCESS: 0, WARN: 0, ERROR: 0 };
 let totalLogs = 0;
 
+function invokeBridge(channel, payload) {
+  if (window.electronAPI?.invoke) {
+    return window.electronAPI.invoke(channel, payload);
+  }
+  if (window.api?.invoke) {
+    return window.api.invoke(channel, payload);
+  }
+  throw new Error('Bridge IPC indisponible');
+}
+
 // Initialisation
 document.addEventListener('DOMContentLoaded', () => {
   console.log('📱 Initialisation de la page logs...');
@@ -21,7 +31,7 @@ document.addEventListener('DOMContentLoaded', () => {
 async function loadHistory() {
   try {
     console.log('📥 Chargement de l\'historique des logs...');
-    const history = await window.api.invoke('api-get-log-history', currentFilters);
+    const history = await invokeBridge('api-get-log-history', currentFilters);
     const container = document.getElementById('logs-container');
     container.innerHTML = '';
     
@@ -63,7 +73,13 @@ async function loadHistory() {
 
 function setupListeners() {
   // Écouter les nouveaux logs en temps réel
-  window.api.on('log-entry', (logEntry) => {
+  const onLogEntry = window.electronAPI?.onLogEntry
+    ? (cb) => window.electronAPI.onLogEntry(cb)
+    : window.api?.on
+      ? (cb) => window.api.on('log-entry', cb)
+      : null;
+
+  if (onLogEntry) onLogEntry((logEntry) => {
     if (isPaused) return;
     
     // Vérifier si le log passe les filtres
@@ -76,19 +92,6 @@ function setupListeners() {
         scrollToBottom();
       }
     }
-  });
-
-  // Écouter l'événement de clear
-  window.api.on('logs-cleared', () => {
-    document.getElementById('logs-container').innerHTML = `
-      <div class="text-center text-muted py-5">
-        <i class="bi bi-inbox" style="font-size: 48px;"></i>
-        <p class="mt-3">Logs effacés</p>
-      </div>
-    `;
-    stats = { DEBUG: 0, INFO: 0, SUCCESS: 0, WARN: 0, ERROR: 0 };
-    totalLogs = 0;
-    updateStats();
   });
 }
 
@@ -210,7 +213,7 @@ async function clearLogs() {
   }
   
   try {
-    await window.api.invoke('api-clear-logs');
+    await invokeBridge('api-clear-logs');
     document.getElementById('logs-container').innerHTML = `
       <div class="text-center text-success py-5">
         <i class="bi bi-check-circle" style="font-size: 48px;"></i>
@@ -247,7 +250,7 @@ function pauseUpdates() {
 
 async function exportLogs() {
   try {
-    const history = await window.api.invoke('api-get-log-history', currentFilters);
+    const history = await invokeBridge('api-get-log-history', currentFilters);
     
     // Créer un fichier texte
     let content = '=== LOGS MAIL MONITOR ===\n';
