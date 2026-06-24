@@ -2469,63 +2469,84 @@ class OutlookConnector extends EventEmitter {
           const rawEws = await this.execPowerShellFile(psPathEws, argsEws, timeoutMs);
           parsed = OutlookConnector.parseJsonOutput(rawEws) || {};
 
-          if (parsed.success) {
+          if (parsed.success && Array.isArray(parsed.emails)) {
             if (this.config?.enableDetailedLogs) {
-              console.log(`✅ [EWS] ${parsed.count || 0} emails récupérés pour ${folderPath}`);
+              console.log(`✅ [EWS] ${parsed.count || parsed.emails.length} emails récupérés pour ${folderPath}`);
             }
             const emails = Array.isArray(parsed.emails) ? parsed.emails : [];
             const count = emails.length;
             return Object.assign({ emails, count, source: 'ews' }, parsed);
-          } else {
-            lastError = parsed.error || 'Échec EWS';
+          } else if (parsed.error) {
+            lastError = parsed.error;
+            console.warn(`⚠️ EWS emails échoué: ${lastError}`);
             if (this.config?.enableDetailedLogs) {
-              console.log(`⚠️ EWS a échoué: ${lastError}, tentative COM...`);
+              console.log(`ℹ️ Fallback sur COM pour emails...`);
             }
+          } else if (!Array.isArray(parsed.emails)) {
+            lastError = 'Format invalide (pas de array emails)';
+            console.warn(`⚠️ EWS retourné format invalide pour emails`);
+          } else {
+            lastError = 'Résultat vide';
+            console.warn(`⚠️ EWS retourné 0 emails`);
           }
         } catch (ewsErr) {
-          lastError = ewsErr.message;
+          lastError = ewsErr?.message || String(ewsErr);
+          console.warn(`⚠️ EWS emails exception: ${lastError}`);
           if (this.config?.enableDetailedLogs) {
-            console.log(`⚠️ EWS exception: ${lastError}, tentative COM...`);
+            console.log(`ℹ️ Fallback sur COM pour emails...`);
           }
         }
       }
 
       // Fallback: utiliser COM
-      const psRes = resolveResource(['powershell'], 'get-folder-emails-by-id.ps1');
-      const psPath = psRes.path || path.join(__dirname, '../../powershell/get-folder-emails-by-id.ps1');
+      try {
+        const psRes = resolveResource(['powershell'], 'get-folder-emails-by-id.ps1');
+        const psPath = psRes.path || path.join(__dirname, '../../powershell/get-folder-emails-by-id.ps1');
 
-      const args = ['-FolderPath', folderPath, '-MaxItems', String(limit), '-HoursBack', String(hoursBack)];
-      if (unreadOnly) { args.push('-UnreadOnly'); }
-      if (opts.storeId) { args.push('-StoreId', String(opts.storeId)); }
-      if (opts.storeName) { args.push('-StoreName', String(opts.storeName)); }
-      if (opts.folderEntryId) { args.push('-FolderEntryId', String(opts.folderEntryId)); }
+        const args = ['-FolderPath', folderPath, '-MaxItems', String(limit), '-HoursBack', String(hoursBack)];
+        if (unreadOnly) { args.push('-UnreadOnly'); }
+        if (opts.storeId) { args.push('-StoreId', String(opts.storeId)); }
+        if (opts.storeName) { args.push('-StoreName', String(opts.storeName)); }
+        if (opts.folderEntryId) { args.push('-FolderEntryId', String(opts.folderEntryId)); }
 
-      if (allItems) { args.push('-AllItems'); }
-      if (useLastModificationTime) { args.push('-UseLastModificationTime'); }
-      if (opts.modifiedSince instanceof Date && !Number.isNaN(opts.modifiedSince.getTime())) {
-        args.push('-ModifiedSince', opts.modifiedSince.toISOString());
-      } else if (typeof opts.modifiedSince === 'string' && opts.modifiedSince.trim()) {
-        args.push('-ModifiedSince', opts.modifiedSince.trim());
+        if (allItems) { args.push('-AllItems'); }
+        if (useLastModificationTime) { args.push('-UseLastModificationTime'); }
+        if (opts.modifiedSince instanceof Date && !Number.isNaN(opts.modifiedSince.getTime())) {
+          args.push('-ModifiedSince', opts.modifiedSince.toISOString());
+        } else if (typeof opts.modifiedSince === 'string' && opts.modifiedSince.trim()) {
+          args.push('-ModifiedSince', opts.modifiedSince.trim());
+        }
+        if (opts.modifiedBefore instanceof Date && !Number.isNaN(opts.modifiedBefore.getTime())) {
+          args.push('-ModifiedBefore', opts.modifiedBefore.toISOString());
+        } else if (typeof opts.modifiedBefore === 'string' && opts.modifiedBefore.trim()) {
+          args.push('-ModifiedBefore', opts.modifiedBefore.trim());
+        }
+
+        const raw = await this.execPowerShellFile(psPath, args, timeoutMs);
+        parsed = OutlookConnector.parseJsonOutput(raw) || {};
+
+        if (!parsed.success) {
+          throw new Error(parsed.error || 'Échec récupération emails COM');
+        }
+
+        const emails = Array.isArray(parsed.emails) ? parsed.emails : (Array.isArray(parsed.Emails) ? parsed.Emails : []);
+        const count = emails.length;
+        if (this.config?.enableDetailedLogs) {
+          try { console.log(`✅ [OUTLOOK] ${count} emails récupérés pour ${folderPath} (limit=${limit}, hoursBack=${hoursBack}${unreadOnly ? ', unreadOnly' : ''}${lastError ? `, EWS échoué: ${lastError}` : ''})`); } catch {}
+        }
+        return Object.assign({ emails, count, source: 'com' }, parsed);
+      } catch (comErr) {
+        // Log COM error with full context
+        const comErrorMsg = comErr?.message || String(comErr);
+        console.error(`❌ [COM] Récupération emails échouée: ${comErrorMsg}${lastError ? ` (EWS préalablement échoué: ${lastError})` : ''}`);
+        
+        // Check if it's an Outlook availability issue
+        if (comErrorMsg.includes('Get-OutlookApplication') || comErrorMsg.includes('Outlook.Application')) {
+          console.error(`⚠️ [COM] Outlook n'est pas disponible sur ce système. EWS est requis pour continuer.`);
+        }
+        
+        throw comErr;
       }
-      if (opts.modifiedBefore instanceof Date && !Number.isNaN(opts.modifiedBefore.getTime())) {
-        args.push('-ModifiedBefore', opts.modifiedBefore.toISOString());
-      } else if (typeof opts.modifiedBefore === 'string' && opts.modifiedBefore.trim()) {
-        args.push('-ModifiedBefore', opts.modifiedBefore.trim());
-      }
-
-      const raw = await this.execPowerShellFile(psPath, args, timeoutMs);
-      parsed = OutlookConnector.parseJsonOutput(raw) || {};
-
-      if (!parsed.success) {
-        throw new Error(parsed.error || 'Échec récupération emails');
-      }
-
-      const emails = Array.isArray(parsed.emails) ? parsed.emails : (Array.isArray(parsed.Emails) ? parsed.Emails : []);
-      const count = emails.length;
-      if (this.config?.enableDetailedLogs) {
-        try { console.log(`✅ [OUTLOOK] ${count} emails récupérés pour ${folderPath} (limit=${limit}, hoursBack=${hoursBack}${unreadOnly ? ', unreadOnly' : ''}${lastError ? `, EWS échoué: ${lastError}` : ''})`); } catch {}
-      }
-      return Object.assign({ emails, count, source: 'com' }, parsed);
 
       } catch (error) {
         console.error(`❌ Erreur récupération emails ${folderPath}:`, error.message);
@@ -3208,13 +3229,21 @@ ${safeTarget}
                 console.log(`✅ [EWS-TREE] ${lst.length} dossiers récupérés pour ${targetStoreId}`);
               }
             } else if (parsedEws.error) {
+              const ewsError = parsedEws.error;
+              console.warn(`⚠️ EWS tree échoué: ${ewsError}`);
               if (this.config?.enableDetailedLogs) {
-                console.log(`⚠️ EWS tree échoué: ${parsedEws.error}, tentative COM...`);
+                console.log(`ℹ️ Fallback sur COM inline pour tree...`);
               }
+            } else if (!Array.isArray(parsedEws.folders)) {
+              console.warn(`⚠️ EWS tree retourné un format invalide (pas de array 'folders')`);
+            } else {
+              console.warn(`⚠️ EWS tree retourné un résultat vide`);
             }
           } catch (ewsErr) {
+            const ewsErrorMsg = ewsErr?.message || String(ewsErr);
+            console.warn(`⚠️ EWS tree exception: ${ewsErrorMsg}`);
             if (this.config?.enableDetailedLogs) {
-              console.log(`⚠️ EWS tree exception: ${ewsErr.message}, tentative COM...`);
+              console.log(`ℹ️ Fallback sur COM inline pour tree...`);
             }
           }
         }
@@ -3247,9 +3276,21 @@ ${safeTarget}
                 : (Array.isArray(json2.folders) ? json2.folders : []);
             } else if (inline && inline.output) {
               console.warn('[COM-REC] Inline PS returned non-success, output head:', String(inline.output).slice(0,200));
+            } else if (inline && inline.error) {
+              const comErr = inline.error;
+              if (comErr.includes('Get-OutlookApplication') || comErr.includes('Outlook.Application')) {
+                console.error(`⚠️ [COM] Outlook n'est pas disponible: ${comErr}`);
+              } else {
+                console.warn(`[COM-REC] Inline PS error: ${comErr}`);
+              }
             }
           } catch (epsInline) {
-            console.warn('[COM-REC] Inline PS fallback failed:', epsInline.message);
+            const comErrorMsg = epsInline?.message || String(epsInline);
+            if (comErrorMsg.includes('Get-OutlookApplication') || comErrorMsg.includes('Outlook.Application')) {
+              console.error(`⚠️ [COM] Outlook n'est pas disponible sur ce système: ${comErrorMsg}`);
+            } else {
+              console.warn('[COM-REC] Inline PS fallback failed:', comErrorMsg);
+            }
           }
         }  // Close if (!lst.length) condition
 
