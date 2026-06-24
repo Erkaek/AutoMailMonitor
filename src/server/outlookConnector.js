@@ -3176,9 +3176,53 @@ ${safeTarget}
 
         let lst = [];
 
-        // Try inline script first (short timeout) to avoid packaged-script pipeline glitches
-        try {
-          const inline = await this.executePowerShellScript(script, 30000);
+        // Try EWS first if configured
+        const ewsUrl = (this.settings?.exchange?.ewsUrlOverride || '').trim();
+        if (ewsUrl && targetStoreId) {
+          try {
+            if (this.config?.enableDetailedLogs) {
+              console.log(`🔄 Tentative EWS tree pour store: ${targetStoreId}...`);
+            }
+
+            const { resolveResource } = require('./scriptPathResolver');
+            const psResEws = resolveResource(['powershell'], 'get-folder-structure-ews.ps1');
+            const psPathEws = psResEws.path || path.join(__dirname, '../../powershell/get-folder-structure-ews.ps1');
+
+            const argsEws = ['-EwsUrl', ewsUrl, '-Mailbox', targetStoreId, '-MaxDepth', String(effectiveMaxDepth)];
+            const timeoutMs = Number.isFinite(this.settings?.exchange?.timeoutMs) ? Number(this.settings.exchange.timeoutMs) : 240000;
+            const rawEws = await this.execPowerShellFile(psPathEws, argsEws, timeoutMs);
+            const parsedEws = OutlookConnector.parseJsonOutput(rawEws) || {};
+
+            if (parsedEws.success && Array.isArray(parsedEws.folders) && parsedEws.folders.length > 0) {
+              // Transform EWS format to standard format
+              lst = parsedEws.folders.map(f => ({
+                StoreEntryID: f.StoreEntryID || '',
+                StoreDisplayName: f.StoreDisplayName || targetStoreId,
+                FolderName: f.FolderName,
+                FolderEntryID: f.FolderEntryID,
+                FullPath: f.FullPath,
+                ChildCount: Number(f.ChildCount || 0)
+              }));
+
+              if (this.config?.enableDetailedLogs) {
+                console.log(`✅ [EWS-TREE] ${lst.length} dossiers récupérés pour ${targetStoreId}`);
+              }
+            } else if (parsedEws.error) {
+              if (this.config?.enableDetailedLogs) {
+                console.log(`⚠️ EWS tree échoué: ${parsedEws.error}, tentative COM...`);
+              }
+            }
+          } catch (ewsErr) {
+            if (this.config?.enableDetailedLogs) {
+              console.log(`⚠️ EWS tree exception: ${ewsErr.message}, tentative COM...`);
+            }
+          }
+        }
+
+        // Try inline script if EWS didn't provide results (short timeout) to avoid packaged-script pipeline glitches
+        if (!lst.length) {
+          try {
+            const inline = await this.executePowerShellScript(script, 30000);
           if (inline && inline.success) {
             const json2 = OutlookConnector.parseJsonOutput(inline.output) || {};
             lst = Array.isArray(json2.stores)
@@ -3207,6 +3251,7 @@ ${safeTarget}
         } catch (epsInline) {
           console.warn('[COM-REC] Inline PS fallback failed:', epsInline.message);
         }
+        }  // Close if (!lst.length) condition
 
         let flat = lst.map(f => ({
           storeId: f.StoreEntryID,
