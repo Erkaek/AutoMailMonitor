@@ -1,0 +1,234 @@
+=== LOGS MAIL MONITOR ===
+Exporté le: 24/06/2026 09:39:05
+Filtres: Niveau=ALL, Catégorie=ALL
+Total: 76 entrées
+================================================================================
+
+[24/06/2026 09:37:29] [INFO] [INIT]
+  Création d'une nouvelle instance OutlookConnector optimisée
+
+[24/06/2026 09:37:29] [INFO] [INIT]
+  Auto-updater configuré
+
+[24/06/2026 09:37:29] [SUCCESS] [INIT]
+  Événements auto-updater configurés
+
+[24/06/2026 09:37:29] [SUCCESS] [INIT]
+  UpdateManager initialisé
+
+[24/06/2026 09:37:29] [INFO] [INIT]
+  Vérification périodique activée (toutes les 120 minutes)
+
+[24/06/2026 09:37:30] [INFO] [INIT]
+  Vérification de mise à jour démarrée (tentative 1)
+
+[24/06/2026 09:37:32] [INFO] [INIT]
+  Aucune mise à jour disponible (version actuelle: v0.13.17)
+
+[24/06/2026 09:37:40] [INFO] [INIT]
+  🔧 Initialisation du service de monitoring unifié...
+
+[24/06/2026 09:37:40] [INFO] [DB]
+  🔧 Vérification de l'état de la base de données...
+
+[24/06/2026 09:37:40] [INFO] [DB]
+  ✅ Base de données prête et fonctionnelle
+
+[24/06/2026 09:37:40] [INFO] [CONFIG]
+  📁 19 dossiers configurés pour le monitoring
+
+[24/06/2026 09:37:40] [INFO] [COM]
+  🔧 Configuration des listeners COM modernes...
+
+[24/06/2026 09:37:40] [INFO] [COM]
+  ✅ Listeners événements COM modernes configurés
+
+[24/06/2026 09:37:40] [SUCCESS] [SUCCESS]
+  ✅ Service de monitoring unifié initialisé
+
+[24/06/2026 09:37:40] [INFO] [CONFIG]
+  👁️ Surveillance de la configuration démarrée (intervalle: 30000ms)
+
+[24/06/2026 09:37:40] [INFO] [AUTO]
+  🚀 Démarrage automatique du monitoring...
+
+[24/06/2026 09:37:40] [INFO] [START]
+  🚀 Démarrage du monitoring unifié - Stratégie PowerShell + COM...
+
+[24/06/2026 09:37:40] [INFO] [SYNC]
+  🔄 PHASE 1: Synchronisation PowerShell complète (mise à jour BDD)
+
+[24/06/2026 09:37:40] [INFO] [INFO]
+  📊 PowerShell va récupérer TOUS les emails des dossiers configurés...
+
+[24/06/2026 09:37:40] [INFO] [SYNC]
+  🔄 Début de la synchronisation complète...
+
+[24/06/2026 09:37:40] [INFO] [SYNC]
+  📁 Synchronisation du dossier: FlotteAuto\Boîte de réception\11- Tanguy
+
+[24/06/2026 09:37:50] [INFO] [INFO]
+  📧 5 changement(s) appliqué(s) dans 11- Tanguy
+
+[24/06/2026 09:37:50] [SUCCESS] [SUCCESS]
+  ✅ Dossier 11- Tanguy synchronisé
+
+[24/06/2026 09:37:50] [INFO] [SYNC]
+  📁 Synchronisation du dossier: FlotteAuto\Boîte de réception\11- Tanguy\1- DECLARATION
+
+[24/06/2026 09:37:52] [SUCCESS] [SUCCESS]
+  ✅ Dossier 1- DECLARATION synchronisé
+
+[24/06/2026 09:37:52] [INFO] [SYNC]
+  📁 Synchronisation du dossier: FlotteAuto\Boîte de réception\11- Tanguy\1- DECLARATION\ALCOPA AUCTION
+
+[24/06/2026 09:37:53] [SUCCESS] [SUCCESS]
+  ✅ Dossier ALCOPA AUCTION synchronisé
+
+[24/06/2026 09:37:53] [INFO] [SYNC]
+  📁 Synchronisation du dossier: FlotteAuto\Boîte de réception\11- Tanguy\1- DECLARATION\AU GROUP
+
+[24/06/2026 09:37:55] [SUCCESS] [SUCCESS]
+  ✅ Dossier AU GROUP synchronisé
+
+[24/06/2026 09:37:55] [INFO] [SYNC]
+  📁 Synchronisation du dossier: FlotteAuto\Boîte de réception\11- Tanguy\1- DECLARATION\RENAULT
+
+[24/06/2026 09:38:07] [INFO] [INFO]
+  📧 5 changement(s) appliqué(s) dans RENAULT
+
+[24/06/2026 09:38:07] [SUCCESS] [SUCCESS]
+  ✅ Dossier RENAULT synchronisé
+
+[24/06/2026 09:38:07] [INFO] [SYNC]
+  📁 Synchronisation du dossier: FlotteAuto\Boîte de réception\11- Tanguy\1- DECLARATION\SANOFI
+
+[24/06/2026 09:38:11] [INFO] [INFO]
+  📧 1 changement(s) appliqué(s) dans SANOFI
+
+[24/06/2026 09:38:11] [SUCCESS] [SUCCESS]
+  ✅ Dossier SANOFI synchronisé
+
+[24/06/2026 09:38:11] [INFO] [SYNC]
+  📁 Synchronisation du dossier: FlotteAuto\Boîte de réception\11- Tanguy\1- DECLARATION\WEISS FE
+
+[24/06/2026 09:38:12] [SUCCESS] [SUCCESS]
+  ✅ Dossier WEISS FE synchronisé
+
+[24/06/2026 09:38:12] [INFO] [SYNC]
+  📁 Synchronisation du dossier: FlotteAuto\Boîte de réception\11- Tanguy\2- COURRIERS
+
+[24/06/2026 09:38:14] [SUCCESS] [SUCCESS]
+  ✅ Dossier 2- COURRIERS synchronisé
+
+[24/06/2026 09:38:14] [INFO] [SYNC]
+  📁 Synchronisation du dossier: FlotteAuto\Boîte de réception\11- Tanguy\2- COURRIERS\ALCOPA AUCTION
+
+[24/06/2026 09:38:17] [SUCCESS] [SUCCESS]
+  ✅ Dossier ALCOPA AUCTION synchronisé
+
+[24/06/2026 09:38:17] [INFO] [SYNC]
+  📁 Synchronisation du dossier: FlotteAuto\Boîte de réception\11- Tanguy\2- COURRIERS\AU GROUP
+
+[24/06/2026 09:38:18] [SUCCESS] [SUCCESS]
+  ✅ Dossier AU GROUP synchronisé
+
+[24/06/2026 09:38:18] [INFO] [SYNC]
+  📁 Synchronisation du dossier: FlotteAuto\Boîte de réception\11- Tanguy\2- COURRIERS\RENAULT
+
+[24/06/2026 09:38:23] [INFO] [INFO]
+  📧 2 changement(s) appliqué(s) dans RENAULT
+
+[24/06/2026 09:38:23] [SUCCESS] [SUCCESS]
+  ✅ Dossier RENAULT synchronisé
+
+[24/06/2026 09:38:23] [INFO] [SYNC]
+  📁 Synchronisation du dossier: FlotteAuto\Boîte de réception\11- Tanguy\2- COURRIERS\SANOFI
+
+[24/06/2026 09:38:23] [INFO] [COM]
+  Arborescence racine demandée: path="FlotteAuto\Boîte de réception\11- Tanguy" store="FlotteAuto"
+
+[24/06/2026 09:38:26] [WARN] [COM]
+  Fast path KO, fallback global: Le terme « Get-OutlookApplication » n'est pas reconnu comme nom d'applet de commande, fonction, fichier de script ou programme exécutable. Vérifiez l'orthographe du nom, ou si un chemin d'accès existe, vérifiez que le chemin d'accès est correct et réessayez.
+
+[24/06/2026 09:38:28] [INFO] [INFO]
+  📧 2 changement(s) appliqué(s) dans SANOFI
+
+[24/06/2026 09:38:28] [SUCCESS] [SUCCESS]
+  ✅ Dossier SANOFI synchronisé
+
+[24/06/2026 09:38:28] [INFO] [SYNC]
+  📁 Synchronisation du dossier: FlotteAuto\Boîte de réception\11- Tanguy\2- COURRIERS\WEISS FE
+
+[24/06/2026 09:38:32] [INFO] [INFO]
+  📧 1 changement(s) appliqué(s) dans WEISS FE
+
+[24/06/2026 09:38:32] [SUCCESS] [SUCCESS]
+  ✅ Dossier WEISS FE synchronisé
+
+[24/06/2026 09:38:32] [INFO] [SYNC]
+  📁 Synchronisation du dossier: FlotteAuto\Boîte de réception\11- Tanguy\3- REGLEMENT
+
+[24/06/2026 09:38:34] [SUCCESS] [SUCCESS]
+  ✅ Dossier 3- REGLEMENT synchronisé
+
+[24/06/2026 09:38:34] [INFO] [SYNC]
+  📁 Synchronisation du dossier: FlotteAuto\Boîte de réception\11- Tanguy\3- REGLEMENT\ALCOPA AUCTION
+
+[24/06/2026 09:38:40] [INFO] [COM]
+  Arborescence (fallback): racine="FlotteAuto\Boîte de réception\11- Tanguy" enfants initiaux=0
+
+[24/06/2026 09:38:43] [INFO] [INFO]
+  📧 1 changement(s) appliqué(s) dans ALCOPA AUCTION
+
+[24/06/2026 09:38:43] [SUCCESS] [SUCCESS]
+  ✅ Dossier ALCOPA AUCTION synchronisé
+
+[24/06/2026 09:38:43] [INFO] [SYNC]
+  📁 Synchronisation du dossier: FlotteAuto\Boîte de réception\11- Tanguy\3- REGLEMENT\AU GROUP
+
+[24/06/2026 09:38:45] [INFO] [COM]
+  Arborescence finale: 0 enfant(s) directs pour "FlotteAuto\Boîte de réception\11- Tanguy"
+
+[24/06/2026 09:38:49] [INFO] [INFO]
+  📧 3 changement(s) appliqué(s) dans AU GROUP
+
+[24/06/2026 09:38:49] [SUCCESS] [SUCCESS]
+  ✅ Dossier AU GROUP synchronisé
+
+[24/06/2026 09:38:49] [INFO] [SYNC]
+  📁 Synchronisation du dossier: FlotteAuto\Boîte de réception\11- Tanguy\3- REGLEMENT\RENAULT
+
+[24/06/2026 09:38:54] [INFO] [INFO]
+  📧 2 changement(s) appliqué(s) dans RENAULT
+
+[24/06/2026 09:38:54] [SUCCESS] [SUCCESS]
+  ✅ Dossier RENAULT synchronisé
+
+[24/06/2026 09:38:54] [INFO] [SYNC]
+  📁 Synchronisation du dossier: FlotteAuto\Boîte de réception\11- Tanguy\3- REGLEMENT\SANOFI
+
+[24/06/2026 09:38:57] [INFO] [INFO]
+  📧 1 changement(s) appliqué(s) dans SANOFI
+
+[24/06/2026 09:38:57] [SUCCESS] [SUCCESS]
+  ✅ Dossier SANOFI synchronisé
+
+[24/06/2026 09:38:57] [INFO] [SYNC]
+  📁 Synchronisation du dossier: FlotteAuto\Boîte de réception\11- Tanguy\3- REGLEMENT\WEISS FE
+
+[24/06/2026 09:38:58] [SUCCESS] [SUCCESS]
+  ✅ Dossier WEISS FE synchronisé
+
+[24/06/2026 09:38:58] [SUCCESS] [SUCCESS]
+  ✅ Synchronisation terminée en 77.6s (0 ajoutés, 23 mis à jour)
+
+[24/06/2026 09:38:58] [SUCCESS] [SUCCESS]
+  ✅ PHASE 1 terminée: Base de données synchronisée avec Outlook
+
+[24/06/2026 09:38:58] [INFO] [COM]
+  🎧 PHASE 2: Activation monitoring temps réel PowerShell...
+
+[24/06/2026 09:38:58] [INFO] [REALTIME]
+  🚀 Démarrage du monitoring en temps réel complet...
+

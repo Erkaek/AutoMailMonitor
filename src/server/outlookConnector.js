@@ -2772,7 +2772,10 @@ function Get-OutlookApplication {
       const BOM = '\uFEFF';
       try {
         const fs = require('fs');
-        const payload = script.includes('Get-OutlookApplication') ? script : `${outlookPrelude}\n${script}`;
+        // IMPORTANT: inject prelude ONLY if script calls Get-OutlookApplication
+        // The prelude defines the function, so we need it when the script calls it
+        const callsGetOutlookApplication = script.includes('Get-OutlookApplication');
+        const payload = callsGetOutlookApplication ? `${outlookPrelude}\n${script}` : script;
         fs.writeFileSync(tempFile, BOM + payload, { encoding: 'utf8' });
         const psResult = await this.runPowerShell(['-File', tempFile], { timeoutMs: attemptTimeout, force32Bit: force32 });
         const cmdLabel = `${path.basename(psResult.exe)} ${this.sanitizePsArgs(psResult.args || []).join(' ')}`;
