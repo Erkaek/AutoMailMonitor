@@ -640,8 +640,13 @@ try {
     
     # Fonction pour obtenir les informations d'un email
     function Get-EmailInfo($item) {
+        $parent = $null
+        try { $parent = $item.Parent } catch {}
+        $store = $null
+        try { if ($parent -ne $null) { $store = $parent.Store } } catch {}
         return @{
             EntryID = $item.EntryID
+            InternetMessageId = if($item.InternetMessageId) { $item.InternetMessageId } elseif($item.InternetMessageID) { $item.InternetMessageID } else { "" }
             Subject = if($item.Subject) { $item.Subject } else { "(Sans objet)" }
             SenderName = if($item.SenderName) { $item.SenderName } else { "Inconnu" }
             ReceivedTime = $item.ReceivedTime.ToString("yyyy-MM-dd HH:mm:ss")
@@ -650,6 +655,9 @@ try {
             LastModificationTime = $item.LastModificationTime.ToString("yyyy-MM-dd HH:mm:ss.fff")
             Importance = $item.Importance
             Categories = if($item.Categories) { $item.Categories } else { "" }
+            FolderPath = if($parent -ne $null) { $parent.FolderPath } else { "" }
+            StoreId = if($store -ne $null) { $store.StoreID } else { "" }
+            StoreName = if($store -ne $null) { $store.DisplayName } else { "" }
         }
     }
     
@@ -757,10 +765,13 @@ try {
                                     ReceivedTime = $emailInfo.ReceivedTime
                                     FolderPath = $folderPath
                                     FolderName = $folderName
+                                    StoreId = $folderInfo.StoreId
+                                    StoreName = $folderInfo.StoreName
                                     IsRead = $emailInfo.UnRead -eq $false
                                     Size = $emailInfo.Size
                                     Importance = $emailInfo.Importance
                                     Categories = $emailInfo.Categories
+                                    InternetMessageId = $emailInfo.InternetMessageId
                                     ChangeType = "Modified"
                                     LastModificationTime = $emailInfo.LastModificationTime
                                     DetectedAt = $currentTime.ToString("yyyy-MM-dd HH:mm:ss.fff")
@@ -795,10 +806,13 @@ try {
                                     ReceivedTime = $emailInfo.ReceivedTime
                                     FolderPath = $folderPath
                                     FolderName = $folderName
+                                    StoreId = $folderInfo.StoreId
+                                    StoreName = $folderInfo.StoreName
                                     IsRead = $emailInfo.UnRead -eq $false
                                     Size = $emailInfo.Size
                                     Importance = $emailInfo.Importance
                                     Categories = $emailInfo.Categories
+                                    InternetMessageId = $emailInfo.InternetMessageId
                                     ChangeType = "Added"
                                     DetectedAt = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss.fff")
                                     Changes = @()

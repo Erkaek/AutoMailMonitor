@@ -112,6 +112,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onUpdateNotAvailable: (callback) => ipcRenderer.on('update-not-available', (event, ...args) => callback(...args)),
   onUpdateError: (callback) => ipcRenderer.on('update-error', (event, ...args) => callback(...args)),
   onUpdateDownloadProgress: (callback) => ipcRenderer.on('update-download-progress', (event, ...args) => callback(...args)),
+  onUpdateInstalling: (callback) => ipcRenderer.on('update-installing', (event, ...args) => callback(...args)),
   onUpdatePendingRestart: (callback) => ipcRenderer.on('update-pending-restart', (event, ...args) => callback(...args)),
   
   // Loading events - pour la page de chargement

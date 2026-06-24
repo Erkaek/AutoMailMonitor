@@ -46,8 +46,8 @@ L'application utilise `electron-updater` pour gérer les mises à jour automatiq
 
 ### Comportement
 
-- **Téléchargement automatique** : Activé (`autoDownload: true`)
-- **Installation à la fermeture** : Activée (`autoInstallOnAppQuit: true`)
+- **Téléchargement automatique** : Activé par défaut (`autoDownload: true`)
+- **Installation immédiate après téléchargement** : Activée
 - **Pre-releases** : Supportées (configurable via `ALLOW_PRERELEASE` env)
 - **Cache** : Désactivé (`Cache-Control: no-cache`)
 
@@ -94,13 +94,15 @@ Retour: { success, updateInfo, currentVersion }
 ```
 Mise à jour détectée
   ↓
-Toast: "Version X disponible"
+Bandeau visible: "Mise à jour détectée"
   ↓
 Téléchargement automatique
   ↓
 Notifications de progression (10%, 20%...)
   ↓
 Téléchargement terminé
+  ↓
+Installation automatique
 ```
 
 ### 5. Installation
@@ -108,10 +110,9 @@ Téléchargement terminé
 ```
 update-downloaded
   ↓
-Dialog: "Redémarrer maintenant / Plus tard ?"
+Notification visuelle
   ↓
-Si OUI: quitAndInstall()
-Si NON: Installation au prochain démarrage
+quitAndInstall()
 ```
 
 ## Événements IPC
@@ -125,6 +126,7 @@ Si NON: Installation au prochain démarrage
 | `update-not-available` | `{}` | Aucune mise à jour |
 | `update-error` | `{ error }` | Erreur rencontrée |
 | `update-download-progress` | `{ percent, transferred, total, bytesPerSecond }` | Progression |
+| `update-installing` | `{ version, releaseNotes, releaseUrl }` | Téléchargement terminé, installation en cours |
 | `update-pending-restart` | `{ version }` | Installation reportée |
 
 ### Reçus du Renderer

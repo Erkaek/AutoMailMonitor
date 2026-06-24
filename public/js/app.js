@@ -955,11 +955,25 @@ class MailMonitor {
         toast.remove();
       });
     };
+
+    const updateBanner = document.getElementById('update-banner');
+    const setUpdateBanner = (message, type = 'info') => {
+      if (!updateBanner) return;
+      updateBanner.className = `alert alert-${type} mx-3 mt-3 mb-0`;
+      updateBanner.innerHTML = message;
+      updateBanner.classList.remove('d-none');
+    };
+    const clearUpdateBanner = () => {
+      if (!updateBanner) return;
+      updateBanner.className = 'alert alert-info d-none mx-3 mt-3 mb-0';
+      updateBanner.textContent = '';
+    };
     
     // Vérification en cours
     if (window.electronAPI.onUpdateChecking) {
       window.electronAPI.onUpdateChecking(() => {
         console.log('🔍 Vérification des mises à jour...');
+        setUpdateBanner('<i class="bi bi-arrow-repeat me-2"></i>Vérification des mises à jour en cours…', 'info');
       });
     }
     
@@ -967,6 +981,10 @@ class MailMonitor {
     if (window.electronAPI.onUpdateAvailable) {
       window.electronAPI.onUpdateAvailable((info) => {
         console.log('🎉 Mise à jour disponible:', info);
+        setUpdateBanner(
+          `<i class="bi bi-download me-2"></i>Une mise à jour v${this.escapeHtml(info.version)} a été détectée. Téléchargement automatique en cours…`,
+          'warning'
+        );
         showUpdateToast(
           `<i class="bi bi-download me-2"></i>Mise à jour v${info.version} disponible ! Téléchargement en cours...`,
           'success',
@@ -979,6 +997,7 @@ class MailMonitor {
     if (window.electronAPI.onUpdateNotAvailable) {
       window.electronAPI.onUpdateNotAvailable(() => {
         console.log('✅ Application à jour');
+        clearUpdateBanner();
       });
     }
     
@@ -986,6 +1005,10 @@ class MailMonitor {
     if (window.electronAPI.onUpdateError) {
       window.electronAPI.onUpdateError((data) => {
         console.error('❌ Erreur de mise à jour:', data.error);
+        setUpdateBanner(
+          `<i class="bi bi-exclamation-triangle me-2"></i>Erreur de mise à jour : ${this.escapeHtml(data.error)}`,
+          'danger'
+        );
         showUpdateToast(
           `<i class="bi bi-exclamation-triangle me-2"></i>Erreur de mise à jour : ${data.error}`,
           'danger',
@@ -1000,6 +1023,10 @@ class MailMonitor {
       window.electronAPI.onUpdateDownloadProgress((progress) => {
         const percent = Math.floor(progress.percent);
         console.log(`⬇️ Téléchargement: ${percent}%`);
+        setUpdateBanner(
+          `<i class="bi bi-download me-2"></i>Téléchargement de la mise à jour : ${percent}%`,
+          'info'
+        );
         
         // Mettre à jour le toast existant ou en créer un nouveau
         if (percent % 10 === 0 || percent === 100) { // Tous les 10%
@@ -1022,13 +1049,32 @@ class MailMonitor {
         }
       });
     }
+
+    if (window.electronAPI.onUpdateInstalling) {
+      window.electronAPI.onUpdateInstalling((data) => {
+        console.log('🔄 Installation de la mise à jour en cours:', data);
+        setUpdateBanner(
+          `<i class="bi bi-gear-fill me-2"></i>Téléchargement terminé. Installation automatique en cours…`,
+          'info'
+        );
+        showUpdateToast(
+          `<i class="bi bi-gear-fill me-2"></i>Téléchargement terminé. Installation automatique en cours…`,
+          'info',
+          6000
+        );
+      });
+    }
     
     // Mise à jour en attente de redémarrage
     if (window.electronAPI.onUpdatePendingRestart) {
       window.electronAPI.onUpdatePendingRestart((data) => {
         console.log('🔄 Mise à jour en attente de redémarrage:', data);
+        setUpdateBanner(
+          `<i class="bi bi-info-circle me-2"></i>La mise à jour v${this.escapeHtml(data.version)} sera installée au prochain démarrage`,
+          'info'
+        );
         showUpdateToast(
-          `<i class="bi bi-info-circle me-2"></i>La mise à jour v${data.version} sera installée au prochain démarrage`,
+          `<i class="bi bi-info-circle me-2"></i>La mise à jour v${this.escapeHtml(data.version)} sera installée au prochain démarrage`,
           'info',
           10000
         );

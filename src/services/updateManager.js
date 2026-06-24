@@ -4,7 +4,7 @@
  */
 
 const { autoUpdater } = require('electron-updater');
-const { dialog, app } = require('electron');
+const { app } = require('electron');
 const logService = require('../services/logService');
 
 class UpdateManager {
@@ -47,9 +47,9 @@ class UpdateManager {
    * Configure l'auto-updater
    */
   configure() {
-    // Par défaut en mode “manuel” (certificat interne non approuvé sur les postes)
-    // Opt-in possible via env pour les postes où la chaîne est approuvée.
-    autoUpdater.autoDownload = String(process.env.AUTO_UPDATE_AUTO_DOWNLOAD || 'false').toLowerCase() === 'true';
+    // Téléchargement automatique par défaut pour enchaîner directement vers l'installation.
+    // Opt-out possible via env sur les postes où l'on veut garder un mode manuel.
+    autoUpdater.autoDownload = String(process.env.AUTO_UPDATE_AUTO_DOWNLOAD || 'true').toLowerCase() !== 'false';
     autoUpdater.autoInstallOnAppQuit = true;
     autoUpdater.allowPrerelease = String(process.env.ALLOW_PRERELEASE || 'true').toLowerCase() !== 'false';
     
@@ -212,42 +212,21 @@ class UpdateManager {
    */
   async handleUpdateDownloaded(info) {
     try {
-      // Créer un message détaillé
-      let message = `La version ${info.version} a été téléchargée avec succès.\n\n`;
-      
-      if (info.releaseNotes) {
-        const notes = typeof info.releaseNotes === 'string' 
-          ? info.releaseNotes.substring(0, 200) 
-          : '';
-        if (notes) {
-          message += `Nouveautés:\n${notes}${notes.length >= 200 ? '...' : ''}\n\n`;
-        }
-      }
-      
-      message += 'Voulez-vous redémarrer maintenant pour l\'installer ?';
-      
-      const result = await dialog.showMessageBox({
-        type: 'info',
-        title: 'Mise à jour prête',
-        message,
-        detail: 'L\'application se fermera et la mise à jour sera installée automatiquement.',
-        buttons: ['Redémarrer maintenant', 'Plus tard'],
-        cancelId: 1,
-        defaultId: 0,
-        noLink: true
+      logService.info('INIT', `Téléchargement terminé pour v${info.version}, lancement de l'installation...`);
+      this.notifyWindow('update-installing', {
+        version: info.version,
+        releaseNotes: info.releaseNotes,
+        releaseUrl: this.releaseUrl
       });
-      
-      if (result.response === 0) {
-        logService.info('INIT', 'Installation de la mise à jour...');
-        setImmediate(() => {
+      setTimeout(() => {
+        try {
           autoUpdater.quitAndInstall(false, true);
-        });
-      } else {
-        logService.info('INIT', 'Installation reportée - sera installée au prochain démarrage');
-        this.notifyWindow('update-pending-restart', { version: info.version });
-      }
+        } catch (e) {
+          logService.error('INIT', 'Erreur lancement install MAJ', e?.message || String(e));
+        }
+      }, 1000);
     } catch (e) {
-      logService.error('INIT', 'Erreur dialogue mise à jour', e.message);
+      logService.error('INIT', 'Erreur installation mise à jour', e.message);
     }
   }
 

@@ -1909,34 +1909,21 @@ class OptimizedDatabaseService {
     async processCOMNewEmail(emailData) {
         try {
             const startTime = Date.now();
-            
-            // Vérifier si l'email existe déjà (éviter les doublons)
-            const existingEmail = this.getEmailById(emailData.id);
-            if (existingEmail) {
-                console.log(`⚠️ Email COM déjà existant: ${emailData.id}`);
-                return { processed: false, reason: 'already_exists' };
-            }
-
-            // Préparer les données email
             const emailRecord = {
-                email_id: emailData.id,
-                subject: emailData.subject || '',
+                outlook_id: emailData.id,
+                subject: emailData.subject || '(Sans objet)',
                 sender_email: emailData.sender_email || '',
                 received_time: emailData.receivedTime || new Date().toISOString(),
                 folder_name: emailData.folderPath || '',
                 is_read: emailData.isRead === true ? 1 : 0,
+                is_treated: false,
                 category: emailData.category || 'autres',
-                last_updated: new Date().toISOString()
+                internet_message_id: emailData.internet_message_id || emailData.internetMessageId || emailData.InternetMessageId || null,
+                last_modified_time: emailData.lastModifiedTime || emailData.last_modified_time || emailData.LastModificationTime || null,
+                deleted_at: null
             };
 
-            // Insérer l'email (via prepared SQL classique sur email_id)
-            if (!this.statements.insertEmailByEmailId) {
-                this.statements.insertEmailByEmailId = this.db.prepare(`
-                    INSERT INTO emails (email_id, subject, sender_email, received_time, folder_name, is_read, category, last_updated)
-                    VALUES (@email_id, @subject, @sender_email, @received_time, @folder_name, @is_read, @category, @last_updated)
-                `);
-            }
-            const result = this.statements.insertEmailByEmailId.run(emailRecord);
+            const result = this.saveEmail(emailRecord);
 
             // Invalider le cache pour ce dossier
             this.invalidateFolderCache(emailData.folderPath);
@@ -1944,11 +1931,12 @@ class OptimizedDatabaseService {
             // Mettre à jour les stats
             this.updateQueryStats(Date.now() - startTime);
 
-            console.log(`📧 [DB-COM] Nouvel email inséré: ${emailData.subject} (ID: ${result.lastInsertRowid})`);
+            console.log(`📧 [DB-COM] Nouvel email traité: ${emailData.subject} (outlook_id: ${emailRecord.outlook_id})`);
             
             return { 
-                processed: true, 
-                rowId: result.lastInsertRowid,
+                processed: true,
+                rowId: result?.lastInsertRowid || null,
+                changes: result?.changes || 0,
                 emailId: emailData.id
             };
 
@@ -1964,52 +1952,42 @@ class OptimizedDatabaseService {
     async processCOMEmailChange(emailData) {
         try {
             const startTime = Date.now();
-            
-            // Récupérer l'email existant
-            const existingEmail = this.getEmailById(emailData.id);
+            const internetMessageId = (emailData.internet_message_id || emailData.internetMessageId || emailData.InternetMessageId || '').toString().trim() || null;
+            let existingEmail = this.getEmailByEntryId(emailData.id);
+            if (!existingEmail && internetMessageId) {
+                existingEmail = this.getEmailByInternetMessageId(internetMessageId);
+            }
             if (!existingEmail) {
                 console.log(`⚠️ Email COM non trouvé pour mise à jour: ${emailData.id}`);
                 return { updated: false, reason: 'not_found' };
             }
-
-            // Préparer les données de mise à jour
-            const updateData = {
+            const emailRecord = {
+                outlook_id: emailData.id,
+                subject: emailData.subject || existingEmail?.subject || '(Sans objet)',
+                sender_email: emailData.sender_email || existingEmail?.sender_email || '',
+                received_time: emailData.receivedTime || existingEmail?.received_time || new Date().toISOString(),
+                folder_name: emailData.folderPath || existingEmail?.folder_name || '',
                 is_read: emailData.isRead === true ? 1 : 0,
-                last_updated: new Date().toISOString()
+                is_treated: existingEmail?.is_treated ?? false,
+                category: emailData.category || existingEmail?.category || 'autres',
+                internet_message_id: internetMessageId || existingEmail?.internet_message_id || null,
+                last_modified_time: emailData.lastModifiedTime || emailData.last_modified_time || emailData.LastModificationTime || null,
+                deleted_at: existingEmail?.deleted_at || null
             };
 
-            // Ajouter d'autres champs s'ils sont fournis
-            if (emailData.subject !== undefined) updateData.subject = emailData.subject;
-            if (emailData.category !== undefined) updateData.category = emailData.category;
-
-            // Construire la requête de mise à jour dynamiquement
-            const fields = Object.keys(updateData);
-            const setClause = fields.map(field => `${field} = @${field}`).join(', ');
-            const sql = `UPDATE emails SET ${setClause} WHERE email_id = @email_id`;
-
-            // Préparer et exécuter la mise à jour
-            let stmt = this.statements[`updateEmail_${fields.join('_')}`];
-            if (!stmt) {
-                stmt = this.db.prepare(sql);
-                this.statements[`updateEmail_${fields.join('_')}`] = stmt;
-            }
-
-            const result = stmt.run({
-                ...updateData,
-                email_id: emailData.id
-            });
+            const result = this.saveEmail(emailRecord);
 
             // Invalider le cache
-            this.invalidateFolderCache(existingEmail.folder_name);
+            this.invalidateFolderCache(emailData.folderPath || existingEmail?.folder_name || '');
 
             // Mettre à jour les stats
             this.updateQueryStats(Date.now() - startTime);
 
-            console.log(`🔄 [DB-COM] Email mis à jour: ${emailData.id} (${result.changes} changements)`);
+            console.log(`🔄 [DB-COM] Email mis à jour: ${emailData.id} (${result?.changes || 0} changements)`);
             
             return { 
-                updated: true, 
-                changes: result.changes,
+                updated: true,
+                changes: result?.changes || 0,
                 emailId: emailData.id
             };
 
@@ -2344,6 +2322,7 @@ class OptimizedDatabaseService {
         try {
             console.log(`🔄 [DATABASE] Traitement changement polling: ${emailUpdateData.subject}`);
             console.log(`🔍 [DATABASE] Recherche EntryID: ${emailUpdateData.messageId}`);
+            console.log(`🔍 [DATABASE] Recherche InternetMessageId: ${emailUpdateData.internetMessageId || emailUpdateData.internet_message_id || ''}`);
             console.log(`🔍 [DATABASE] Dans dossier: ${emailUpdateData.folderPath}`);
             console.log(`🔍 [DATABASE] ChangeType: ${emailUpdateData.changeType}`);
             console.log(`🔍 [DATABASE] Changes: ${JSON.stringify(emailUpdateData.changes)}`);
@@ -2360,30 +2339,23 @@ class OptimizedDatabaseService {
                 return { updated: false, reason: 'Événement Added sans changements' };
             }
             
+            const internetMessageId = (emailUpdateData.internetMessageId || emailUpdateData.internet_message_id || '').toString().trim() || null;
+
             // Vérifier d'abord si l'email existe en base
             let existingEmail = this.getEmailByEntryId(emailUpdateData.messageId, emailUpdateData.folderPath);
+            let matchedBy = existingEmail ? 'outlook_id' : null;
+            if (!existingEmail && internetMessageId) {
+                existingEmail = this.getEmailByInternetMessageId(internetMessageId);
+                matchedBy = existingEmail ? 'internet_message_id' : null;
+            }
             
             if (!existingEmail) {
                 console.log(`⚠️ [DATABASE] Email non trouvé en base: ${emailUpdateData.messageId} - ${emailUpdateData.subject}`);
-                
-                // TEMPORAIRE: Désactiver le fallback de recherche par subject pour éviter l'erreur SQL
-                /*
-                const fallbackEmail = this.findEmailBySubjectAndFolder(emailUpdateData.subject, emailUpdateData.folderPath);
-                if (fallbackEmail) {
-                    console.log(`🔍 [DATABASE] Email trouvé par subject: ${fallbackEmail.outlook_id}`);
-                    // Utiliser l'email trouvé comme existingEmail
-                    existingEmail = fallbackEmail;
-                    emailUpdateData.messageId = fallbackEmail.outlook_id; // Corriger l'ID
-                } else {
-                    console.log(`❌ [DATABASE] Email vraiment non trouvé même par subject`);
-                }
-                */
-                console.log(`❌ [DATABASE] Email vraiment non trouvé - fallback désactivé temporairement`);
                 return { updated: false, reason: 'Email non trouvé en base' };
             }
 
-            // Préparer les données de mise à jour
-            let shouldUpdate = false;
+            const rawSubject = (emailUpdateData.subject ?? existingEmail.subject ?? '').toString();
+            const normalizedSubject = rawSubject.trim() !== '' ? rawSubject : '(Sans objet)';
             let newIsRead = existingEmail.is_read;
             
             console.log(`🔍 [DATABASE] Email trouvé - état actuel: is_read=${existingEmail.is_read}, subject="${existingEmail.subject}"`);
@@ -2395,45 +2367,50 @@ class OptimizedDatabaseService {
             // Outlook envoie ces événements seulement quand il y a eu une action utilisateur réelle
             if (emailUpdateData.changes && emailUpdateData.changes.includes('MarkedRead')) {
                 newIsRead = true;
-                // FORCER la mise à jour car Outlook signale un changement utilisateur réel
-                shouldUpdate = true;
-                console.log(`📖 [DATABASE] FORCE Marquage comme lu: ${emailUpdateData.subject} (BDD: ${existingEmail.is_read}/${currentIsReadBool} -> Outlook: ${newIsRead}) - shouldUpdate: ${shouldUpdate}`);
+                console.log(`📖 [DATABASE] FORCE Marquage comme lu: ${emailUpdateData.subject} (BDD: ${existingEmail.is_read}/${currentIsReadBool} -> Outlook: ${newIsRead})`);
             } else if (emailUpdateData.changes && emailUpdateData.changes.includes('MarkedUnread')) {
                 newIsRead = false;
-                // FORCER la mise à jour car Outlook signale un changement utilisateur réel
-                shouldUpdate = true;
-                console.log(`📬 [DATABASE] FORCE Marquage comme non lu: ${emailUpdateData.subject} (BDD: ${existingEmail.is_read}/${currentIsReadBool} -> Outlook: ${newIsRead}) - shouldUpdate: ${shouldUpdate}`);
+                console.log(`📬 [DATABASE] FORCE Marquage comme non lu: ${emailUpdateData.subject} (BDD: ${existingEmail.is_read}/${currentIsReadBool} -> Outlook: ${newIsRead})`);
             } else if (emailUpdateData.isRead !== undefined && emailUpdateData.isRead !== currentIsReadBool) {
                 newIsRead = emailUpdateData.isRead;
-                shouldUpdate = true;
                 console.log(`📝 [DATABASE] Mise à jour statut lecture: ${emailUpdateData.subject} -> ${emailUpdateData.isRead ? 'Lu' : 'Non lu'} (actuel: ${existingEmail.is_read}/${currentIsReadBool} -> nouveau: ${newIsRead})`);
             }
 
-            // Si aucune modification détectée, pas de mise à jour nécessaire
-            if (!shouldUpdate) {
-                console.log(`ℹ️ [DATABASE] Aucune modification à appliquer: ${emailUpdateData.subject} (state déjà: ${existingEmail.is_read})`);
-                return { updated: false, reason: 'Aucune modification détectée' };
-            }
-            
-            console.log(`🚀 [DATABASE] Procédure de mise à jour: ${emailUpdateData.subject} - BDD:${existingEmail.is_read} -> Outlook:${newIsRead}`);
+            const hasMeaningfulChange = newIsRead !== currentIsReadBool ||
+                normalizedSubject !== (existingEmail.subject || '(Sans objet)') ||
+                (emailUpdateData.folderPath && emailUpdateData.folderPath !== existingEmail.folder_name);
 
-            // Effectuer la mise à jour - CORRECTION: utiliser l'outlook_id de l'email trouvé
-            console.log(`🔧 [DATABASE] Appel updateEmailStatus avec outlook_id: ${existingEmail.outlook_id} (au lieu de messageId: ${emailUpdateData.messageId})`);
-            const result = this.updateEmailStatus(existingEmail.outlook_id, newIsRead, emailUpdateData.folderPath);
-            
-            console.log(`📊 [DATABASE] Résultat updateEmailStatus: updated=${result.updated}, changes=${result.changes}`);
-            
-            if (result.updated) {
-                console.log(`✅ [DATABASE] Email mis à jour via polling: ${emailUpdateData.subject} (${result.changes} changements)`);
-                return { 
-                    updated: true, 
-                    changes: result.changes,
-                    emailData: { ...existingEmail, is_read: newIsRead }
-                };
-            } else {
-                console.log(`⚠️ [DATABASE] Aucun changement effectué: ${emailUpdateData.subject}`);
-                return { updated: false, reason: 'Aucun changement en base' };
+            if (!hasMeaningfulChange) {
+                console.log(`ℹ️ [DATABASE] Aucune modification à appliquer: ${emailUpdateData.subject} (state déjà identique)`);
+                return { updated: false, reason: 'Aucune modification détectée', matchedBy };
             }
+
+            const emailRecord = {
+                outlook_id: emailUpdateData.messageId,
+                subject: normalizedSubject,
+                sender_email: existingEmail.sender_email || '',
+                received_time: existingEmail.received_time || new Date().toISOString(),
+                folder_name: emailUpdateData.folderPath || existingEmail.folder_name || '',
+                is_read: newIsRead ? 1 : 0,
+                is_treated: existingEmail.is_treated,
+                category: existingEmail.category || 'autres',
+                internet_message_id: internetMessageId || existingEmail.internet_message_id || null,
+                last_modified_time: emailUpdateData.lastModificationTime || existingEmail.last_modified_time || null,
+                deleted_at: existingEmail.deleted_at || null
+            };
+
+            console.log(`🚀 [DATABASE] Procédure de mise à jour: ${emailUpdateData.subject} - BDD:${existingEmail.is_read} -> Outlook:${newIsRead}`);
+            const result = this.saveEmail(emailRecord);
+
+            console.log(`📊 [DATABASE] Résultat saveEmail: changes=${result?.changes || 0}`);
+            this.invalidateFolderCache(emailUpdateData.folderPath || existingEmail.folder_name || '');
+            console.log(`✅ [DATABASE] Email mis à jour via polling: ${emailUpdateData.subject} (${result?.changes || 0} changements)`);
+            return {
+                updated: true,
+                changes: result?.changes || 0,
+                emailData: { ...existingEmail, is_read: newIsRead },
+                matchedBy
+            };
 
         } catch (error) {
             console.error(`❌ [DATABASE] Erreur traitement changement polling:`, error);

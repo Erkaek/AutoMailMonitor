@@ -809,8 +809,8 @@ class UnifiedMonitoringService extends EventEmitter {
             // Récupérer l'objet folder via COM
             const namespace = await this.comConnector.getNamespace();
             
-            // Naviguer vers le dossier
-            const folder = this.getOutlookFolderByPath(namespace, folderConfig.path);
+            // Naviguer vers le dossier avec priorité aux identifiants stables
+            const folder = this.resolveOutlookFolder(namespace, folderConfig);
             
             if (!folder) {
                 throw new Error(`Dossier non trouvé: ${folderConfig.path}`);
@@ -869,7 +869,7 @@ class UnifiedMonitoringService extends EventEmitter {
                 
                 // Obtenir l'application Outlook via COM - syntaxe correcte
                 const namespace = await this.comConnector.getNamespace();
-                const comFolder = this.getOutlookFolderByPath(namespace, folderConfig.path);
+                const comFolder = this.resolveOutlookFolder(namespace, folderConfig);
                 
                 if (!comFolder) {
                     throw new Error(`Dossier COM introuvable: ${folderConfig.path}`);
@@ -1056,6 +1056,37 @@ class UnifiedMonitoringService extends EventEmitter {
     }
 
     /**
+     * Résout un dossier Outlook en privilégiant les identifiants stables
+     */
+    resolveOutlookFolder(namespace, folderConfig) {
+        try {
+            if (!namespace || !folderConfig) return null;
+
+            const storeId = folderConfig.storeId || folderConfig.store_id || null;
+            const entryId = folderConfig.entryId || folderConfig.entry_id || null;
+
+            if (entryId) {
+                try {
+                    return storeId
+                        ? namespace.GetFolderFromID(entryId, storeId)
+                        : namespace.GetFolderFromID(entryId);
+                } catch (error) {
+                    this.log(`⚠️ Résolution par ID impossible pour ${folderConfig.name || folderConfig.path}: ${error.message}`, 'WARNING');
+                }
+            }
+
+            if (folderConfig.path) {
+                return this.getOutlookFolderByPath(namespace, folderConfig.path);
+            }
+
+            return null;
+        } catch (error) {
+            this.log(`❌ Erreur résolution dossier Outlook: ${error.message}`, 'ERROR');
+            return null;
+        }
+    }
+
+    /**
      * Navigue vers un dossier Outlook par son chemin via COM
      */
     getOutlookFolderByPath(namespace, folderPath) {
@@ -1174,16 +1205,22 @@ class UnifiedMonitoringService extends EventEmitter {
      */
     extractEmailDataFromComObject(comItem) {
         try {
+            const parent = comItem.Parent || null;
+            const parentStore = parent?.Store || comItem.Store || null;
             return {
                 id: comItem.EntryID,
+                internetMessageId: comItem.InternetMessageId || comItem.InternetMessageID || comItem.internetMessageId || '',
                 subject: comItem.Subject || '(Sans objet)',
                 senderName: comItem.SenderName || 'Inconnu',
                 senderEmail: comItem.SenderEmailAddress || '',
                 receivedTime: comItem.ReceivedTime ? new Date(comItem.ReceivedTime) : new Date(),
                 isRead: !comItem.UnRead,
-                hasAttachments: comItem.Attachments.Count > 0,
+                hasAttachments: !!(comItem.Attachments && comItem.Attachments.Count > 0),
                 importance: comItem.Importance,
-                folderName: comItem.Parent ? comItem.Parent.Name : 'Unknown'
+                folderName: parent ? parent.Name : 'Unknown',
+                folderPath: parent?.FolderPath || '',
+                folderStoreId: parentStore?.StoreID || '',
+                folderStoreName: parentStore?.DisplayName || ''
             };
         } catch (error) {
             this.log(`⚠️ Erreur extraction données COM: ${error.message}`, 'WARNING');
@@ -1216,8 +1253,10 @@ class UnifiedMonitoringService extends EventEmitter {
             this.stats.eventsReceived++;
             this.log(`📨 Nouveau mail détecté dans ${folderConfig.name}: ${mailData.subject}`, 'EVENT');
 
-            // Traiter le nouvel email
-            const processedEmail = await this.outlookConnector.processEmailData(mailData);
+            // Traiter le nouvel email, avec fallback direct si le connecteur n'enrichit pas les données
+            const processedEmail = typeof this.outlookConnector.processEmailData === 'function'
+                ? await this.outlookConnector.processEmailData(mailData)
+                : mailData;
             
             // Sauvegarder en base
             const emailRecord = {
@@ -1231,6 +1270,8 @@ class UnifiedMonitoringService extends EventEmitter {
                 folder_type: folderConfig.category || folderConfig.type,
                 // Legacy flag kept false on insert; treated_at is the source of truth
                 is_treated: false,
+                internet_message_id: processedEmail.internetMessageId || processedEmail.internet_message_id || processedEmail.InternetMessageId || '',
+                last_modified_time: processedEmail.lastModifiedTime || processedEmail.last_modified_time || processedEmail.LastModificationTime || null,
                 created_at: new Date().toISOString()
             };
             
@@ -1260,14 +1301,18 @@ class UnifiedMonitoringService extends EventEmitter {
             this.stats.eventsReceived++;
             this.log(`📝 Mail modifié dans ${folderConfig.name}: ${mailData.subject}`, 'EVENT');
 
-            // Traiter l'email modifié
-            const processedEmail = await this.outlookConnector.processEmailData(mailData);
+            // Traiter l'email modifié, avec fallback direct si le connecteur n'enrichit pas les données
+            const processedEmail = typeof this.outlookConnector.processEmailData === 'function'
+                ? await this.outlookConnector.processEmailData(mailData)
+                : mailData;
             
             // Mettre à jour en base
             const updateData = {
                 is_read: processedEmail.isRead,
                 subject: processedEmail.subject,
-                folder_name: folderConfig.path
+                folder_name: folderConfig.path,
+                internet_message_id: processedEmail.internetMessageId || processedEmail.internet_message_id || processedEmail.InternetMessageId || '',
+                last_modified_time: processedEmail.lastModifiedTime || processedEmail.last_modified_time || processedEmail.LastModificationTime || null
             };
             
             const entryId = processedEmail.EntryID || processedEmail.id;
@@ -2556,7 +2601,10 @@ class UnifiedMonitoringService extends EventEmitter {
                 isRead: !eventData.UnRead, // UnRead est inversé
                 lastModificationTime: eventData.LastModificationTime,
                 changeType: eventData.ChangeType,
-                changes: eventData.Changes || []
+                changes: eventData.Changes || [],
+                internetMessageId: eventData.InternetMessageId || eventData.internetMessageId || eventData.internet_message_id || '',
+                storeId: eventData.StoreId || eventData.StoreID || '',
+                storeName: eventData.StoreName || ''
             };
 
             // Mettre à jour l'état de l'email en base

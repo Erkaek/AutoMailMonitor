@@ -2444,6 +2444,53 @@ class OutlookConnector extends EventEmitter {
       const unreadOnly = Boolean(opts.unreadOnly || opts.onlyUnread);
 
       const { resolveResource } = require('./scriptPathResolver');
+      const timeoutMs = Number.isFinite(this.settings?.exchange?.timeoutMs) ? Number(this.settings.exchange.timeoutMs) : 240000;
+      const ewsUrl = (this.settings?.exchange?.ewsUrlOverride || '').trim();
+      const mailboxForEws = opts.storeName || opts.mailbox || '';
+
+      let parsed = null;
+      let lastError = null;
+
+      // Essayer d'abord EWS si configuré
+      if (ewsUrl && mailboxForEws) {
+        try {
+          if (this.config?.enableDetailedLogs) {
+            console.log(`🔄 Tentative EWS pour ${folderPath}...`);
+          }
+
+          const psResEws = resolveResource(['powershell'], 'get-folder-emails-by-id-ews.ps1');
+          const psPathEws = psResEws.path || path.join(__dirname, '../../powershell/get-folder-emails-by-id-ews.ps1');
+
+          const argsEws = ['-EwsUrl', ewsUrl, '-Mailbox', mailboxForEws, '-FolderPath', folderPath, '-MaxItems', String(limit)];
+          if (unreadOnly) { argsEws.push('-UnreadOnly'); }
+          if (allItems) { argsEws.push('-AllItems'); }
+          if (useLastModificationTime) { argsEws.push('-UseLastModificationTime'); }
+
+          const rawEws = await this.execPowerShellFile(psPathEws, argsEws, timeoutMs);
+          parsed = OutlookConnector.parseJsonOutput(rawEws) || {};
+
+          if (parsed.success) {
+            if (this.config?.enableDetailedLogs) {
+              console.log(`✅ [EWS] ${parsed.count || 0} emails récupérés pour ${folderPath}`);
+            }
+            const emails = Array.isArray(parsed.emails) ? parsed.emails : [];
+            const count = emails.length;
+            return Object.assign({ emails, count, source: 'ews' }, parsed);
+          } else {
+            lastError = parsed.error || 'Échec EWS';
+            if (this.config?.enableDetailedLogs) {
+              console.log(`⚠️ EWS a échoué: ${lastError}, tentative COM...`);
+            }
+          }
+        } catch (ewsErr) {
+          lastError = ewsErr.message;
+          if (this.config?.enableDetailedLogs) {
+            console.log(`⚠️ EWS exception: ${lastError}, tentative COM...`);
+          }
+        }
+      }
+
+      // Fallback: utiliser COM
       const psRes = resolveResource(['powershell'], 'get-folder-emails-by-id.ps1');
       const psPath = psRes.path || path.join(__dirname, '../../powershell/get-folder-emails-by-id.ps1');
 
@@ -2466,9 +2513,8 @@ class OutlookConnector extends EventEmitter {
         args.push('-ModifiedBefore', opts.modifiedBefore.trim());
       }
 
-      const timeoutMs = Number.isFinite(this.settings?.exchange?.timeoutMs) ? Number(this.settings.exchange.timeoutMs) : 240000;
       const raw = await this.execPowerShellFile(psPath, args, timeoutMs);
-      const parsed = OutlookConnector.parseJsonOutput(raw) || {};
+      parsed = OutlookConnector.parseJsonOutput(raw) || {};
 
       if (!parsed.success) {
         throw new Error(parsed.error || 'Échec récupération emails');
@@ -2477,9 +2523,9 @@ class OutlookConnector extends EventEmitter {
       const emails = Array.isArray(parsed.emails) ? parsed.emails : (Array.isArray(parsed.Emails) ? parsed.Emails : []);
       const count = emails.length;
       if (this.config?.enableDetailedLogs) {
-        try { console.log(`✅ [OUTLOOK] ${count} emails récupérés pour ${folderPath} (limit=${limit}, hoursBack=${hoursBack}${unreadOnly ? ', unreadOnly' : ''})`); } catch {}
+        try { console.log(`✅ [OUTLOOK] ${count} emails récupérés pour ${folderPath} (limit=${limit}, hoursBack=${hoursBack}${unreadOnly ? ', unreadOnly' : ''}${lastError ? `, EWS échoué: ${lastError}` : ''})`); } catch {}
       }
-      return Object.assign({ emails, count }, parsed);
+      return Object.assign({ emails, count, source: 'com' }, parsed);
 
       } catch (error) {
         console.error(`❌ Erreur récupération emails ${folderPath}:`, error.message);

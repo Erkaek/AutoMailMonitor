@@ -226,6 +226,40 @@
 
             // IPC wiring
             if (window.electronAPI){
+                window.electronAPI.onUpdateChecking?.(()=>{
+                    gotRealEvents = true;
+                    setStatus('Vérification des mises à jour en cours…');
+                });
+
+                window.electronAPI.onUpdateAvailable?.((info)=>{
+                    gotRealEvents = true;
+                    setStatus(`Une mise à jour v${info?.version || ''} a été détectée. Téléchargement automatique en cours…`);
+                });
+
+                window.electronAPI.onUpdateDownloadProgress?.((progress)=>{
+                    gotRealEvents = true;
+                    const percent = Math.min(100, Math.max(0, Math.floor(progress?.percent || 0)));
+                    setStatus(`Téléchargement de la mise à jour : ${percent}%`);
+                });
+
+                window.electronAPI.onUpdateInstalling?.(()=>{
+                    gotRealEvents = true;
+                    setStatus('Téléchargement terminé. Installation automatique en cours…');
+                });
+
+                window.electronAPI.onUpdateError?.((err)=>{
+                    gotRealEvents = true;
+                    setStatus(`Erreur de mise à jour : ${(err && (err.error || err.message)) || 'inconnue'}`);
+                    const btn = qs('retry');
+                    btn.style.display = 'inline-block';
+                    adjustSize();
+                });
+
+                window.electronAPI.onUpdateNotAvailable?.(()=>{
+                    gotRealEvents = true;
+                    setStatus('Aucune mise à jour disponible. Poursuite du démarrage…');
+                });
+
                 window.electronAPI.onLoadingProgress?.((data)=>{
                     gotRealEvents = true; if (fallbackTimer){ clearTimeout(fallbackTimer); fallbackTimer = null; }
                     if (data?.message) setStatus(data.message);
@@ -278,7 +312,7 @@
                 window.electronAPI.onLoadingError?.((err)=>{
                     const btn = qs('retry');
                     if (err && err.kind === 'UPDATE_AVAILABLE') {
-                        setStatus(err.message || `Mise à jour disponible${err.version ? ' v'+err.version : ''}.`);
+                        setStatus(err.message || `Une mise à jour a été détectée${err.version ? ' (v'+err.version+')' : ''}. Téléchargement automatique en cours…`);
                         btn.style.display = 'none';
                         adjustSize();
                         return;

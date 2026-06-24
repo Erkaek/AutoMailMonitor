@@ -464,6 +464,7 @@ function createLoadingWindow() {
 
   loadingWindow.once('ready-to-show', () => {
     loadingWindow.show();
+    updateManager.setMainWindow(loadingWindow);
     // Étape 1: Vérification de mise à jour en tout début de chargement
     runInitialUpdateCheck()
       .then((blocked) => {
@@ -506,6 +507,7 @@ app.on('ready', () => {
 
 // Lancer la vérification initiale de mise à jour et informer la fenêtre de chargement
 async function runInitialUpdateCheck() {
+  let updateDetected = false;
   const parseSemver = (v) => {
     const s = String(v || '').trim().replace(/^v/i, '');
     const parts = s.split('.');
@@ -539,7 +541,7 @@ async function runInitialUpdateCheck() {
     const res = await updateManager.checkForUpdates();
     const info = res?.updateInfo;
 
-    // Si une MAJ est détectée au démarrage: bloquer l'init et ouvrir le téléchargement.
+    // Si une MAJ est détectée au démarrage: bloquer l'init pendant le téléchargement.
     const currentVersion = (() => {
       try { return app.getVersion(); } catch { return null; }
     })();
@@ -558,40 +560,17 @@ async function runInitialUpdateCheck() {
     }
 
     if (remoteVersion) {
-      const { shell } = require('electron');
       const versionRaw = String(remoteVersion);
-      const tag = versionRaw.startsWith('v') ? versionRaw : `v${versionRaw}`;
       const version = versionRaw.replace(/^v/, '');
-      const directUrl = `https://github.com/Erkaek/AutoMailMonitor/releases/download/${tag}/Mail-Monitor-Setup-${version}.exe`;
-      const releasesUrl = 'https://github.com/Erkaek/AutoMailMonitor/releases/latest';
+      updateDetected = true;
 
       if (loadingWindow) {
-        loadingWindow.webContents.send('loading-error', {
-          kind: 'UPDATE_AVAILABLE',
-          version,
-          message: `Mise à jour disponible: v${version}${currentVersion ? ` (actuelle: v${currentVersion})` : ''}. Ouverture du téléchargement…`
+        loadingWindow.webContents.send('loading-progress', {
+          step: 1,
+          progress: 10,
+          message: `Une mise à jour a été détectée${currentVersion ? ` (v${version} disponible, v${currentVersion} installée)` : `: v${version}`}. Téléchargement automatique en cours…`
         });
       }
-
-      try {
-        await shell.openExternal(directUrl);
-      } catch (e) {
-        try { await shell.openExternal(releasesUrl); } catch {}
-      }
-
-      // Fermer l'app: l'utilisateur doit installer la MAJ.
-      try {
-        if (loadingWindow) {
-          loadingWindow.webContents.send('loading-progress', {
-            step: 1,
-            progress: 20,
-            message: 'Mise à jour détectée. Fermeture de l\'application…'
-          });
-        }
-      } catch {}
-      setTimeout(() => {
-        try { app.quit(); } catch {}
-      }, 2500);
       return true;
     }
     
@@ -606,11 +585,13 @@ async function runInitialUpdateCheck() {
     logClean('⚠️ runInitialUpdateCheck: ' + (e?.message || String(e)));
   } finally {
     if (loadingWindow) {
-      loadingWindow.webContents.send('loading-progress', {
-        step: 1,
-        progress: 15,
-        message: 'Vérification des mises à jour terminée'
-      });
+      if (!updateDetected) {
+        loadingWindow.webContents.send('loading-progress', {
+          step: 1,
+          progress: 15,
+          message: 'Vérification des mises à jour terminée'
+        });
+      }
     }
   }
 
