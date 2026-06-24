@@ -14,13 +14,16 @@ class UpdateManager {
       maxRetries: 3,
       retryDelay: 5000, // 5 secondes entre chaque retry
       checkInterval: 2 * 60 * 60 * 1000, // 2 heures
-      minCheckInterval: 5 * 60 * 1000 // 5 minutes minimum entre vérifications
+      minCheckInterval: 5 * 60 * 1000, // 5 minutes minimum entre vérifications
+      downloadTimeout: 300000 // 5 minutes max sans progression avant timeout
     };
     
     this.updateCheckAttempts = 0;
     this.lastUpdateCheck = null;
     this.mainWindow = null;
     this.isSetup = false;
+    this.downloadStartTime = null;
+    this.lastDownloadedBytes = 0;
 
     // Si une MAJ échoue pour signature (Windows), on évite de re-télécharger en boucle.
     this.disableAutoDownloadForSession = false;
@@ -136,6 +139,16 @@ class UpdateManager {
         autoDownload: Boolean(autoUpdater.autoDownload)
       });
       this.updateCheckAttempts = 0;
+      
+      // Force explicit download start if autoDownload is enabled
+      if (autoUpdater.autoDownload) {
+        logService.info('INIT', `Démarrage explicite du téléchargement de v${info.version}...`);
+        try {
+          autoUpdater.downloadUpdate();
+        } catch (e) {
+          logService.error('INIT', 'Erreur démarrage téléchargement explicite', e?.message || String(e));
+        }
+      }
     });
     
     autoUpdater.on('update-not-available', () => {
@@ -151,7 +164,30 @@ class UpdateManager {
       const totalMB = (progressObj.total / 1024 / 1024).toFixed(2);
       const speedMBps = (progressObj.bytesPerSecond / 1024 / 1024).toFixed(2);
       
+      // Track download timing for stuck detection
+      if (!this.downloadStartTime) {
+        this.downloadStartTime = Date.now();
+        this.lastDownloadedBytes = progressObj.transferred;
+        logService.info('INIT', `Téléchargement démarré (taille: ${totalMB} Mo)`);
+      }
+      
+      const elapsed = Date.now() - this.downloadStartTime;
+      const bytesDownloadedSinceCheck = progressObj.transferred - this.lastDownloadedBytes;
+      
+      // Detect stuck download (no progress for more than 30 seconds)
+      if (elapsed > 30000 && bytesDownloadedSinceCheck === 0 && percent < 100) {
+        logService.warn('INIT', `Téléchargement bloqué: ${percent}% sans progression depuis 30s, tentative de relance...`);
+        try {
+          autoUpdater.downloadUpdate();
+        } catch (e) {
+          logService.error('INIT', 'Erreur relance téléchargement', e?.message || String(e));
+        }
+      }
+      
+      this.lastDownloadedBytes = progressObj.transferred;
+      
       logService.info('INIT', `Téléchargement: ${percent}% (${downloadedMB}/${totalMB} Mo, ${speedMBps} Mo/s)`);
+      
       this.notifyWindow('update-download-progress', {
         percent,
         transferred: progressObj.transferred,
@@ -162,6 +198,9 @@ class UpdateManager {
     
     autoUpdater.on('update-downloaded', async (info) => {
       logService.success('INIT', `Mise à jour v${info.version} téléchargée et prête à installer`);
+      // Reset download tracking
+      this.downloadStartTime = null;
+      this.lastDownloadedBytes = 0;
       await this.handleUpdateDownloaded(info);
     });
     
