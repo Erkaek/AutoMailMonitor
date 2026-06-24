@@ -86,8 +86,8 @@
         .title { font-size: 16px; font-weight: 600; letter-spacing: .2px; }
         .subtitle { color: var(--muted); font-size: 12px; margin-bottom: 14px; }
 
-    .status { background: var(--status-bg); border: 1px solid var(--status-border); border-radius: 10px; padding: 10px 12px; margin-bottom: 12px; min-height: 40px; display: flex; align-items: center; }
-    .status span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; width: 100%; }
+    .status { background: var(--status-bg); border: 1px solid var(--status-border); border-radius: 10px; padding: 10px 12px; margin-bottom: 12px; min-height: 40px; display: flex; align-items: center; max-height: 80px; overflow-y: auto; }
+    .status span { word-wrap: break-word; overflow-wrap: break-word; white-space: normal; width: 100%; line-height: 1.4; }
     /* Les éléments interactifs à l'intérieur ne doivent pas être drag pour permettre les clics */
     button, a, input, textarea { -webkit-app-region: no-drag; user-select: text; }
 
@@ -236,7 +236,9 @@
 
                 window.electronAPI.onUpdateAvailable?.((info)=>{
                     gotRealEvents = true;
-                    setStatus(`Une mise à jour v${info?.version || ''} a été détectée. Téléchargement automatique en cours…`);
+                    const version = info?.version || '?';
+                    const current = info?.currentVersion || '?';
+                    setStatus(`📦 MAJ v${version} détectée (installé: v${current})\n⬇️ Téléchargement en cours...`);
                 });
 
                 window.electronAPI.onUpdateDownloadProgress?.((progress)=>{
@@ -245,7 +247,14 @@
                     const speed = progress?.bytesPerSecond ? (progress.bytesPerSecond / 1024 / 1024).toFixed(2) : '?';
                     const transferred = progress?.transferred ? (progress.transferred / 1024 / 1024).toFixed(1) : '?';
                     const total = progress?.total ? (progress.total / 1024 / 1024).toFixed(1) : '?';
-                    setStatus(`Téléchargement: ${percent}% (${transferred}/${total} Mo, ${speed} Mo/s)`);
+                    
+                    // Show speed status: fast, normal, slow, or stalled
+                    let speedStatus = '🟢';
+                    if (speed == '0.00' || speed == '?') speedStatus = '⚠️ BLOQUÉ';
+                    else if (parseFloat(speed) < 0.1) speedStatus = '🔴 TRÈS LENT';
+                    else if (parseFloat(speed) < 0.5) speedStatus = '🟡 LENT';
+                    
+                    setStatus(`⬇️ Téléchargement: ${percent}%\n📊 ${transferred}/${total} Mo @ ${speed} Mo/s ${speedStatus}\n⏱️ Appuyez sur MAJ+F12 pour voir les détails`);
                     
                     // Also update the big percentage
                     setOverallPct(percent);
@@ -260,7 +269,7 @@
                     if (!stuckUpdateCheckInterval && percent > 0) {
                         stuckUpdateCheckInterval = setInterval(() => {
                             if (Date.now() - lastUpdateTime > 30000 && lastUpdateProgress < 100) {
-                                setStatus(`Téléchargement bloqué à ${lastUpdateProgress}%. Tentative de relance...`);
+                                setStatus(`🔴 Téléchargement BLOQUÉ à ${lastUpdateProgress}%\n⚙️ Tentative de relance automatique...\n⏱️ Vérifiez la connexion réseau`);
                                 console.warn('Update stuck detected at ' + lastUpdateProgress + '%');
                                 // Signal parent that we're stuck
                                 if (window.electronAPI?.reportStuckUpdate) {
@@ -273,12 +282,13 @@
 
                 window.electronAPI.onUpdateInstalling?.(()=>{
                     gotRealEvents = true;
-                    setStatus('Téléchargement terminé. Installation automatique en cours…');
+                    setStatus('✅ Téléchargement terminé!\n⚙️ Installation en cours...\n⏳ Cela peut prendre quelques secondes');
                 });
 
                 window.electronAPI.onUpdateError?.((err)=>{
                     gotRealEvents = true;
-                    setStatus(`Erreur de mise à jour : ${(err && (err.error || err.message)) || 'inconnue'}`);
+                    const errorMsg = (err && (err.error || err.message)) || 'inconnue';
+                    setStatus(`❌ Erreur téléchargement:\n${errorMsg}\n\n✅ Conseil: Vérifiez la connexion réseau et réessayez`);
                     const btn = qs('retry');
                     btn.style.display = 'inline-block';
                     adjustSize();
@@ -286,7 +296,7 @@
 
                 window.electronAPI.onUpdateNotAvailable?.(()=>{
                     gotRealEvents = true;
-                    setStatus('Aucune mise à jour disponible. Poursuite du démarrage…');
+                    setStatus('✅ Vous avez la dernière version\n⚡ Démarrage en cours...');
                 });
 
                 window.electronAPI.onLoadingProgress?.((data)=>{
