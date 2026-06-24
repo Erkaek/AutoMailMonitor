@@ -3223,34 +3223,34 @@ ${safeTarget}
         if (!lst.length) {
           try {
             const inline = await this.executePowerShellScript(script, 30000);
-          if (inline && inline.success) {
-            const json2 = OutlookConnector.parseJsonOutput(inline.output) || {};
-            lst = Array.isArray(json2.stores)
-              ? json2.stores.flatMap(s => {
-                  const rootNode = s.Root;
-                  const collect = [];
-                  const walk = (node) => {
-                    if (!node) return;
-                    collect.push({
-                      StoreEntryID: s.StoreId || s.StoreID,
-                      StoreDisplayName: s.Name,
-                      FolderName: node.Name,
-                      FolderEntryID: node.EntryId,
-                      FullPath: node.DisplayPath,
-                      ChildCount: Number(node.ChildCount || (node.Children ? node.Children.length : 0))
-                    });
-                    if (Array.isArray(node.Children)) { node.Children.forEach(ch => walk(ch)); }
-                  };
-                  walk(rootNode);
-                  return collect;
-                })
-              : (Array.isArray(json2.folders) ? json2.folders : []);
-          } else if (inline && inline.output) {
-            console.warn('[COM-REC] Inline PS returned non-success, output head:', String(inline.output).slice(0,200));
+            if (inline && inline.success) {
+              const json2 = OutlookConnector.parseJsonOutput(inline.output) || {};
+              lst = Array.isArray(json2.stores)
+                ? json2.stores.flatMap(s => {
+                    const rootNode = s.Root;
+                    const collect = [];
+                    const walk = (node) => {
+                      if (!node) return;
+                      collect.push({
+                        StoreEntryID: s.StoreId || s.StoreID,
+                        StoreDisplayName: s.Name,
+                        FolderName: node.Name,
+                        FolderEntryID: node.EntryId,
+                        FullPath: node.DisplayPath,
+                        ChildCount: Number(node.ChildCount || (node.Children ? node.Children.length : 0))
+                      });
+                      if (Array.isArray(node.Children)) { node.Children.forEach(ch => walk(ch)); }
+                    };
+                    walk(rootNode);
+                    return collect;
+                  })
+                : (Array.isArray(json2.folders) ? json2.folders : []);
+            } else if (inline && inline.output) {
+              console.warn('[COM-REC] Inline PS returned non-success, output head:', String(inline.output).slice(0,200));
+            }
+          } catch (epsInline) {
+            console.warn('[COM-REC] Inline PS fallback failed:', epsInline.message);
           }
-        } catch (epsInline) {
-          console.warn('[COM-REC] Inline PS fallback failed:', epsInline.message);
-        }
         }  // Close if (!lst.length) condition
 
         let flat = lst.map(f => ({
